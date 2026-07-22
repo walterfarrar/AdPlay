@@ -1,128 +1,107 @@
 import Foundation
+import FirebaseAuth
+import FirebaseFunctions
 
 enum APIError: LocalizedError {
     case message(String)
-    case http(Int, String)
+    case decode
 
     var errorDescription: String? {
         switch self {
         case .message(let s): return s
-        case .http(let code, let s): return "\(code): \(s)"
+        case .decode: return "Bad server response"
         }
     }
 }
 
 final class APIClient {
-    /// Change for device/simulator: simulator can use localhost; device needs your Mac LAN IP.
-    static var baseURL = URL(string: ProcessInfo.processInfo.environment["ADPLAY_API_URL"] ?? "http://127.0.0.1:8787")!
+    private let functions = Functions.functions(region: "us-central1")
 
-    private var token: String?
-
-    func setToken(_ token: String?) {
-        self.token = token
-    }
-
-    func createSession(deviceId: String) async throws -> (token: String, userId: String) {
-        struct Body: Encodable { let deviceId: String }
-        struct Res: Decodable { let token: String; let userId: String }
-        let res: Res = try await post("/auth/session", body: Body(deviceId: deviceId), auth: false)
-        return (res.token, res.userId)
-    }
-
-    func createSession(appleSub: String, displayName: String?) async throws -> (token: String, userId: String) {
-        struct Body: Encodable {
-            let appleSub: String
-            let displayName: String?
+    func ensureSignedIn() async throws {
+        if Auth.auth().currentUser == nil {
+            _ = try await Auth.auth().signInAnonymously()
         }
-        struct Res: Decodable { let token: String; let userId: String }
-        let res: Res = try await post("/auth/session", body: Body(appleSub: appleSub, displayName: displayName), auth: false)
-        return (res.token, res.userId)
     }
 
     func fetchState() async throws -> (GameState, Tunables?) {
-        struct Res: Decodable {
-            let state: GameState
-            let tunables: Tunables?
-        }
-        let res: Res = try await get("/game/state")
-        return (res.state, res.tunables)
+        try await ensureSignedIn()
+        let data = try await call("getState")
+        let envelope: StateEnvelope = try decode(data)
+        return (envelope.state, envelope.tunables)
     }
 
     func tap() async throws -> GameState {
-        struct Res: Decodable { let state: GameState }
-        let res: Res = try await post("/game/tap", body: Empty())
-        return res.state
+        try await ensureSignedIn()
+        let data = try await call("gameTap")
+        let envelope: StateOnly = try decode(data)
+        return envelope.state
     }
 
     func mockComplete(boostType: BoostType) async throws -> GameState {
-        struct Body: Encodable { let boostType: String }
-        struct Res: Decodable { let state: GameState }
-        let res: Res = try await post("/ads/mock/complete", body: Body(boostType: boostType.rawValue))
-        return res.state
+        try await ensureSignedIn()
+        let data = try await call(
+            "mockCompleteBoost",
+            data: ["boostType": boostType.rawValue],
+        )
+        let envelope: StateOnly = try decode(data)
+        return envelope.state
     }
 
     func requestWithdrawal(amountSats: Int, bolt11: String) async throws -> GameState {
-        struct Body: Encodable {
-            let amountSats: Int
-            let bolt11: String
-        }
-        struct Res: Decodable { let state: GameState }
-        let res: Res = try await post("/withdrawals", body: Body(amountSats: amountSats, bolt11: bolt11))
-        return res.state
+        try await ensureSignedIn()
+        let data = try await call(
+            "requestWithdrawal",
+            data: [
+                "amountSats": amountSats,
+                "bolt11": bolt11,
+            ],
+        )
+        let envelope: StateOnly = try decode(data)
+        return envelope.state
     }
 
     func debugReset() async throws -> GameState {
-        struct Res: Decodable { let state: GameState }
-        let res: Res = try await post("/game/debug/reset", body: Empty())
-        return res.state
+        try await ensureSignedIn()
+        let data = try await call("debugReset")
+        let envelope: StateOnly = try decode(data)
+        return envelope.state
     }
 
     func myWithdrawals() async throws -> [Withdrawal] {
-        struct Res: Decodable { let withdrawals: [Withdrawal] }
-        let res: Res = try await get("/withdrawals/mine")
-        return res.withdrawals
+        try await ensureSignedIn()
+        let data = try await call("myWithdrawals")
+        let envelope: WithdrawalsEnvelope = try decode(data)
+        return envelope.withdrawals
     }
 
-    private struct Empty: Encodable {}
-
-    private func url(_ path: String) -> URL {
-        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        return APIClient.baseURL.appendingPathComponent(trimmed)
-    }
-
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        var req = URLRequest(url: url(path))
-        req.httpMethod = "GET"
-        applyAuth(&req)
-        return try await send(req)
-    }
-
-    private func post<T: Decodable, B: Encodable>(_ path: String, body: B, auth: Bool = true) async throws -> T {
-        var req = URLRequest(url: url(path))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONEncoder().encode(body)
-        if auth { applyAuth(&req) }
-        return try await send(req)
-    }
-
-    private func applyAuth(_ req: inout URLRequest) {
-        if let token {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    private func call(_ name: String, data: [String: Any]? = nil) async throws -> Any {
+        do {
+            let result = try await functions.httpsCallable(name).call(data)
+            return result.data
+        } catch {
+            let ns = error as NSError
+            let message =
+                (ns.userInfo[NSLocalizedDescriptionKey] as? String)
+                ?? ns.localizedDescription
+            throw APIError.message(message)
         }
     }
 
-    private func send<T: Decodable>(_ req: URLRequest) async throws -> T {
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if !(200..<300).contains(code) {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw APIError.http(code, err)
-            }
-            throw APIError.http(code, String(data: data, encoding: .utf8) ?? "Error")
-        }
-        let decoder = JSONDecoder()
-        return try decoder.decode(T.self, from: data)
+    private func decode<T: Decodable>(_ data: Any) throws -> T {
+        let json = try JSONSerialization.data(withJSONObject: data, options: [])
+        return try JSONDecoder().decode(T.self, from: json)
     }
+}
+
+private struct StateEnvelope: Decodable {
+    let state: GameState
+    let tunables: Tunables?
+}
+
+private struct StateOnly: Decodable {
+    let state: GameState
+}
+
+private struct WithdrawalsEnvelope: Decodable {
+    let withdrawals: [Withdrawal]
 }

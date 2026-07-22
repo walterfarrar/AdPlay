@@ -4,7 +4,7 @@ Idle progress bar → earn sats → redeem via Lightning invoice (manual payout)
 
 **Primary local test target:** Android on **LDPlayer** (see [docs/LDPLAYER.md](docs/LDPLAYER.md)).  
 iOS builds without a Mac: **Codemagic** + [docs/CODEMAGIC.md](docs/CODEMAGIC.md).  
-iOS SwiftUI sources live under `ios/` (XcodeGen).
+iOS uses the same **Firebase Auth + Cloud Functions** backend as Android (`ios/` via XcodeGen).
 
 ## Quick start
 

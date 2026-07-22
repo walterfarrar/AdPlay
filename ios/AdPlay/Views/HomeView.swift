@@ -34,6 +34,16 @@ struct HomeView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 12)
 
+                Text(
+                    "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
+                        "they can improve as more players join and ad revenue grows."
+                )
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .foregroundStyle(Color("BrandMuted"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+
                 Spacer(minLength: 24)
 
                 VStack(spacing: 10) {

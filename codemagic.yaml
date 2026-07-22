@@ -1,7 +1,7 @@
 workflows:
   ios-testflight:
     name: iOS TestFlight Build
-    max_build_duration: 60
+    max_build_duration: 90
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: Codemagic
@@ -22,6 +22,10 @@ workflows:
         script: |
           cd "$CM_BUILD_DIR/ios"
           xcodegen generate
+      - name: Resolve Swift packages
+        script: |
+          cd "$CM_BUILD_DIR/ios"
+          xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
       - name: Set build number
         script: |
           cd "$CM_BUILD_DIR/ios"

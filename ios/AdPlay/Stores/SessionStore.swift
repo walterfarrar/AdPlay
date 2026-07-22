@@ -12,32 +12,31 @@ final class SessionStore: ObservableObject {
     let api = APIClient()
     private var adService: AdServing?
     private var pollTask: Task<Void, Never>?
-    private let deviceKey = "adplay.deviceId"
-    private let tokenKey = "adplay.token"
+    private var lastUpdatedAt: String?
 
     func start() async {
         isLoading = true
+        errorMessage = nil
         defer { isLoading = false }
         do {
-            if let saved = UserDefaults.standard.string(forKey: tokenKey) {
-                api.setToken(saved)
-            } else {
-                let deviceId = Self.deviceId(key: deviceKey)
-                let session = try await api.createSession(deviceId: deviceId)
-                api.setToken(session.token)
-                UserDefaults.standard.set(session.token, forKey: tokenKey)
-            }
-            try await refresh()
-            adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "mock")
+            try await refresh(force: true)
+            adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "adsbitvex")
             isReady = true
             startPolling()
         } catch {
+            isReady = false
             errorMessage = error.localizedDescription
         }
     }
 
-    func refresh() async throws {
+    func refresh(force: Bool = false) async throws {
         let (s, t) = try await api.fetchState()
+        if !force, let incoming = s.updatedAt, let last = lastUpdatedAt, incoming < last {
+            return
+        }
+        if let u = s.updatedAt {
+            lastUpdatedAt = u
+        }
         state = s
         tunables = t
         if let provider = t?.adProvider {
@@ -48,9 +47,10 @@ final class SessionStore: ObservableObject {
     func tap() async {
         guard state.tapsRemaining > 0 else { return }
         do {
-            state = try await api.tap()
+            let next = try await api.tap()
+            apply(next, force: true)
         } catch {
-            // Out of taps / transient — stay quiet
+            // Out of taps / transient
         }
     }
 
@@ -62,17 +62,17 @@ final class SessionStore: ObservableObject {
             guard let adService else {
                 throw APIError.message("Ad service not ready")
             }
-            state = try await adService.showBoostAd(type: boost)
+            apply(try await adService.showBoostAd(type: boost), force: true)
         } catch {
             errorMessage = error.localizedDescription
-            try? await refresh()
+            try? await refresh(force: true)
         }
     }
 
     func withdraw(amountSats: Int, bolt11: String) async -> Bool {
         errorMessage = nil
         do {
-            state = try await api.requestWithdrawal(amountSats: amountSats, bolt11: bolt11)
+            apply(try await api.requestWithdrawal(amountSats: amountSats, bolt11: bolt11), force: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -85,10 +85,20 @@ final class SessionStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            state = try await api.debugReset()
+            apply(try await api.debugReset(), force: true)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func apply(_ next: GameState, force: Bool) {
+        if !force, let incoming = next.updatedAt, let last = lastUpdatedAt, incoming < last {
+            return
+        }
+        if let u = next.updatedAt {
+            lastUpdatedAt = u
+        }
+        state = next
     }
 
     private func startPolling() {
@@ -101,14 +111,5 @@ final class SessionStore: ObservableObject {
                 try? await refresh()
             }
         }
-    }
-
-    private static func deviceId(key: String) -> String {
-        if let existing = UserDefaults.standard.string(forKey: key) {
-            return existing
-        }
-        let id = UUID().uuidString
-        UserDefaults.standard.set(id, forKey: key)
-        return id
     }
 }
