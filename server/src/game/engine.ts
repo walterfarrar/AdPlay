@@ -1,0 +1,420 @@
+import { nanoid } from "nanoid";
+import { getDb } from "../db/index.js";
+import { gameConfig, type BoostType } from "../config/game.js";
+import { nowIso, parseIso, utcDayKey, extendIsoBySeconds } from "../lib/time.js";
+
+export type PublicGameState = {
+  progress: number;
+  unitsPerSat: number;
+  satsBalance: number;
+  tapsRemaining: number;
+  adsRemainingToday: number;
+  satsEarnedToday: number;
+  dailySatsEarnCap: number;
+  autoFillActive: boolean;
+  autoFillUntil: string | null;
+  fillRate: number;
+  speedBoostActive: boolean;
+  speedBoostUntil: string | null;
+  tapStrengthActive: boolean;
+  tapStrengthUntil: string | null;
+  tapPower: number;
+  adCooldownSecondsLeft: number;
+  /** Most recent boost; used so the other type can be watched during cooldown. */
+  lastBoostType: BoostType | null;
+  minWithdrawSats: number;
+  resetHourUtc: number;
+};
+
+type GameRow = {
+  user_id: string;
+  progress: number;
+  fill_rate: number;
+  auto_fill_until: string | null;
+  speed_boost_until: string | null;
+  speed_boost_amount: number;
+  tap_strength_boost_until: string | null;
+  tap_strength_boost_amount: number;
+  taps_remaining: number;
+  tap_day: string;
+  ads_used_today: number;
+  ads_day: string;
+  sats_earned_today: number;
+  sats_day: string;
+  last_ad_at: string | null;
+  last_tick_at: string;
+};
+
+function getBalance(userId: string): number {
+  const row = getDb()
+    .prepare(
+      "SELECT COALESCE(SUM(delta_sats), 0) AS balance FROM ledger_entries WHERE user_id = ?",
+    )
+    .get(userId) as { balance: number };
+  return Number(row.balance);
+}
+
+function creditSat(userId: string, count: number, meta?: Record<string, unknown>): void {
+  if (count <= 0) return;
+  const db = getDb();
+  const insert = db.prepare(
+    "INSERT INTO ledger_entries (id, user_id, delta_sats, reason, meta) VALUES (?, ?, 1, 'bar_complete', ?)",
+  );
+  for (let i = 0; i < count; i++) {
+    insert.run(nanoid(), userId, meta ? JSON.stringify(meta) : null);
+  }
+}
+
+function loadRow(userId: string): GameRow {
+  const row = getDb()
+    .prepare("SELECT * FROM game_state WHERE user_id = ?")
+    .get(userId) as GameRow | undefined;
+  if (!row) throw new Error("game_state missing");
+  return row;
+}
+
+function saveRow(row: GameRow): void {
+  getDb()
+    .prepare(
+      `UPDATE game_state SET
+        progress = ?, fill_rate = ?, auto_fill_until = ?, speed_boost_until = ?,
+        speed_boost_amount = ?, tap_strength_boost_until = ?, tap_strength_boost_amount = ?,
+        taps_remaining = ?, tap_day = ?,
+        ads_used_today = ?, ads_day = ?, sats_earned_today = ?, sats_day = ?,
+        last_ad_at = ?, last_tick_at = ?, updated_at = ?
+      WHERE user_id = ?`,
+    )
+    .run(
+      row.progress,
+      row.fill_rate,
+      row.auto_fill_until,
+      row.speed_boost_until,
+      row.speed_boost_amount,
+      row.tap_strength_boost_until,
+      row.tap_strength_boost_amount,
+      row.taps_remaining,
+      row.tap_day,
+      row.ads_used_today,
+      row.ads_day,
+      row.sats_earned_today,
+      row.sats_day,
+      row.last_ad_at,
+      row.last_tick_at,
+      nowIso(),
+      row.user_id,
+    );
+}
+
+function resetDailyCounters(row: GameRow, now: Date): void {
+  const day = utcDayKey(now);
+  if (row.tap_day !== day) {
+    row.tap_day = day;
+    row.taps_remaining = gameConfig.dailyTapCap;
+  }
+  // Ads are not UTC-daily — see refreshAdCycleIfIdle
+  if (row.sats_day !== day) {
+    row.sats_day = day;
+    row.sats_earned_today = 0;
+  }
+}
+
+/** When auto and tap-strength windows are both gone, clear boosts and refill ads. */
+function refreshAdCycleIfIdle(row: GameRow, now: Date): void {
+  const autoUntil = parseIso(row.auto_fill_until);
+  const tapUntil = parseIso(row.tap_strength_boost_until);
+  if ((autoUntil && autoUntil > now) || (tapUntil && tapUntil > now)) return;
+
+  row.auto_fill_until = null;
+  row.speed_boost_until = null;
+  row.speed_boost_amount = 0;
+  row.tap_strength_boost_until = null;
+  row.tap_strength_boost_amount = 0;
+  row.ads_used_today = 0;
+}
+
+function autoFillRate(row: GameRow): number {
+  if (row.speed_boost_amount > 0) return gameConfig.baseFillRate + row.speed_boost_amount;
+  return gameConfig.baseFillRate;
+}
+
+function effectiveFillRate(row: GameRow, now: Date): number {
+  const autoUntil = parseIso(row.auto_fill_until);
+  if (!autoUntil || autoUntil <= now) return 0;
+  return autoFillRate(row);
+}
+
+function effectiveTapPower(row: GameRow, now: Date): number {
+  let power = gameConfig.tapUnits;
+  const until = parseIso(row.tap_strength_boost_until);
+  if (until && until > now && row.tap_strength_boost_amount > 0) {
+    power += row.tap_strength_boost_amount;
+  }
+  return power;
+}
+
+/** Advance progress from last_tick_at → now; credit sats for full bars. */
+export function tickUser(userId: string, at = new Date()): PublicGameState {
+  const row = loadRow(userId);
+  resetDailyCounters(row, at);
+
+  const last = parseIso(row.last_tick_at) ?? at;
+  const autoUntil = parseIso(row.auto_fill_until);
+  // Offline catch-up only until shared auto timer — never past auto_fill_until
+  if (autoUntil && autoUntil > last) {
+    const earnUntil = autoUntil < at ? autoUntil : at;
+    const earnSec = Math.max(0, (earnUntil.getTime() - last.getTime()) / 1000);
+    const rate = autoFillRate(row);
+    if (earnSec > 0 && rate > 0) {
+      let units = rate * earnSec;
+      let progress = row.progress + units;
+      let earned = 0;
+
+      while (progress >= gameConfig.unitsPerSat) {
+        if (row.sats_earned_today + earned >= gameConfig.dailySatsEarnCap) {
+          progress = gameConfig.unitsPerSat - 0.0001;
+          break;
+        }
+        progress -= gameConfig.unitsPerSat;
+        earned += 1;
+      }
+
+      if (earned > 0) {
+        creditSat(userId, earned);
+        row.sats_earned_today += earned;
+      }
+      row.progress = progress;
+    }
+  }
+
+  // Clear expired boosts / refill ad cycle when auto and tap strength are both done
+  const tapUntil = parseIso(row.tap_strength_boost_until);
+  const autoAlive = !!(autoUntil && autoUntil > at);
+  const tapAlive = !!(tapUntil && tapUntil > at);
+  if (!autoAlive && !tapAlive) {
+    refreshAdCycleIfIdle(row, at);
+  } else if (!autoAlive) {
+    row.auto_fill_until = null;
+    row.speed_boost_until = null;
+    row.speed_boost_amount = 0;
+  }
+  if (!tapAlive) {
+    row.tap_strength_boost_until = null;
+    row.tap_strength_boost_amount = 0;
+  }
+
+  row.fill_rate = effectiveFillRate(row, at);
+  row.last_tick_at = nowIso(at);
+  saveRow(row);
+  return toPublic(userId, row, at);
+}
+
+function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
+  const autoUntil = parseIso(row.auto_fill_until);
+  const tapUntil = parseIso(row.tap_strength_boost_until);
+  let cooldownLeft = 0;
+  const lastAd = parseIso(row.last_ad_at);
+  if (lastAd) {
+    const elapsed = (now.getTime() - lastAd.getTime()) / 1000;
+    cooldownLeft = Math.max(0, Math.ceil(gameConfig.adCooldownSeconds - elapsed));
+  }
+
+  const lastBoost = getDb()
+    .prepare(
+      `SELECT boost_type FROM ad_events WHERE user_id = ? ORDER BY applied_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(userId) as { boost_type: string } | undefined;
+
+  const autoActive = !!(autoUntil && autoUntil > now);
+  const tapActive = !!(tapUntil && tapUntil > now && row.tap_strength_boost_amount > 0);
+  const speedActive = autoActive && row.speed_boost_amount > 0;
+
+  return {
+    progress: Math.min(row.progress, gameConfig.unitsPerSat),
+    unitsPerSat: gameConfig.unitsPerSat,
+    satsBalance: getBalance(userId),
+    tapsRemaining: row.taps_remaining,
+    adsRemainingToday: Math.max(0, gameConfig.adsPerCycle - row.ads_used_today),
+    satsEarnedToday: row.sats_earned_today,
+    dailySatsEarnCap: gameConfig.dailySatsEarnCap,
+    autoFillActive: autoActive,
+    autoFillUntil: row.auto_fill_until,
+    fillRate: effectiveFillRate(row, now),
+    speedBoostActive: speedActive,
+    speedBoostUntil: autoActive ? row.auto_fill_until : null,
+    tapStrengthActive: tapActive,
+    tapStrengthUntil: row.tap_strength_boost_until,
+    tapPower: effectiveTapPower(row, now),
+    adCooldownSecondsLeft: cooldownLeft,
+    lastBoostType:
+      lastBoost?.boost_type === "duration" ||
+      lastBoost?.boost_type === "speed" ||
+      lastBoost?.boost_type === "tap_strength"
+        ? lastBoost.boost_type
+        : null,
+    minWithdrawSats: gameConfig.minWithdrawSats,
+    resetHourUtc: gameConfig.resetHourUtc,
+  };
+}
+
+export function tap(userId: string): PublicGameState {
+  const now = new Date();
+  tickUser(userId, now);
+  const row = loadRow(userId);
+  resetDailyCounters(row, now);
+
+  if (row.taps_remaining <= 0) {
+    saveRow(row);
+    throw Object.assign(new Error("No taps remaining today"), { statusCode: 429 });
+  }
+
+  row.taps_remaining -= 1;
+  let progress = row.progress + effectiveTapPower(row, now);
+  let earned = 0;
+
+  while (progress >= gameConfig.unitsPerSat) {
+    if (row.sats_earned_today + earned >= gameConfig.dailySatsEarnCap) {
+      progress = gameConfig.unitsPerSat - 0.0001;
+      break;
+    }
+    progress -= gameConfig.unitsPerSat;
+    earned += 1;
+  }
+  if (earned > 0) {
+    creditSat(userId, earned, { source: "tap" });
+    row.sats_earned_today += earned;
+  }
+  row.progress = progress;
+  row.last_tick_at = nowIso(now);
+  row.fill_rate = effectiveFillRate(row, now);
+  saveRow(row);
+  return toPublic(userId, row, now);
+}
+
+export function applyBoost(
+  userId: string,
+  boostType: BoostType,
+  eventId: string,
+): PublicGameState {
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT id FROM ad_events WHERE event_id = ?")
+    .get(eventId) as { id: string } | undefined;
+  if (existing) {
+    return tickUser(userId);
+  }
+
+  const now = new Date();
+  tickUser(userId, now);
+  const row = loadRow(userId);
+  resetDailyCounters(row, now);
+
+  if (row.ads_used_today >= gameConfig.adsPerCycle) {
+    throw Object.assign(
+      new Error("Ad limit reached — wait for auto time to run out"),
+      { statusCode: 429 },
+    );
+  }
+
+  const lastAd = parseIso(row.last_ad_at);
+  if (lastAd) {
+    const elapsed = (now.getTime() - lastAd.getTime()) / 1000;
+    if (elapsed < gameConfig.adCooldownSeconds) {
+      throw Object.assign(new Error("Ad cooldown active"), { statusCode: 429 });
+    }
+  }
+
+  const autoUntil = parseIso(row.auto_fill_until);
+  const idle = !autoUntil || autoUntil <= now;
+
+  if (boostType === "tap_strength") {
+    row.tap_strength_boost_amount =
+      (row.tap_strength_boost_amount || 0) + gameConfig.tapStrengthBoostAmount;
+    row.tap_strength_boost_until = extendIsoBySeconds(
+      row.tap_strength_boost_until,
+      gameConfig.tapStrengthBoostSeconds,
+      now,
+    );
+  } else if (idle) {
+    // First Longer/Faster: shared auto window + base Faster rate
+    row.auto_fill_until = extendIsoBySeconds(
+      null,
+      gameConfig.durationBoostSeconds,
+      now,
+    );
+    row.speed_boost_amount = gameConfig.speedBoostAmount;
+    row.speed_boost_until = null;
+  } else if (boostType === "duration") {
+    row.auto_fill_until = extendIsoBySeconds(
+      row.auto_fill_until,
+      gameConfig.durationBoostSeconds,
+      now,
+    );
+  } else {
+    // Faster: rate only — does not change the shared auto timer
+    row.speed_boost_amount = row.speed_boost_amount + gameConfig.speedBoostAmount;
+  }
+
+  row.ads_used_today += 1;
+  row.last_ad_at = nowIso(now);
+  row.fill_rate = effectiveFillRate(row, now);
+  row.last_tick_at = nowIso(now);
+  saveRow(row);
+
+  db.prepare(
+    "INSERT INTO ad_events (id, user_id, event_id, boost_type, applied_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(nanoid(), userId, eventId, boostType, nowIso(now));
+
+  return toPublic(userId, row, now);
+}
+
+export function getState(userId: string): PublicGameState {
+  return tickUser(userId);
+}
+
+/** Dev helper: wipe progress, boosts, ledger, ads, withdrawals for this user. */
+export function resetEverything(userId: string): PublicGameState {
+  const db = getDb();
+  const day = utcDayKey();
+  const now = nowIso();
+
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM ledger_entries WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM ad_events WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM withdrawals WHERE user_id = ?").run(userId);
+    db.prepare(
+      `UPDATE game_state SET
+        progress = 0,
+        fill_rate = 0,
+        auto_fill_until = NULL,
+        speed_boost_until = NULL,
+        speed_boost_amount = 0,
+        tap_strength_boost_until = NULL,
+        tap_strength_boost_amount = 0,
+        taps_remaining = ?,
+        tap_day = ?,
+        ads_used_today = 0,
+        ads_day = ?,
+        sats_earned_today = 0,
+        sats_day = ?,
+        last_ad_at = NULL,
+        last_tick_at = ?,
+        updated_at = ?
+      WHERE user_id = ?`,
+    ).run(
+      gameConfig.dailyTapCap,
+      day,
+      day,
+      day,
+      now,
+      now,
+      userId,
+    );
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+
+  return getState(userId);
+}

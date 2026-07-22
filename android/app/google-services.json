@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "114161299929",
+    "project_id": "adplay-sats",
+    "storage_bucket": "adplay-sats.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:114161299929:android:cbb590bdf2682f5c5229c8",
+        "android_client_info": {
+          "package_name": "com.adplay.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCXXM2wGr0a4c0j5YKvMJWUTi_ANCClm6g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
