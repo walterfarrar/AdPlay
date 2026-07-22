@@ -38,9 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
 
-private val Panel = Color(0xFFF7F4EE)
-private val PanelBorder = Color(0xFFD9D2C6)
-private val FieldBg = Color(0xFFFFFFFF)
+private val Panel = Color(0xFF171826)
+private val PanelBorder = Color(0xFF2B2D3D)
+private val FieldBg = Color(0xFF0B0C14)
 
 @Composable
 fun RedeemScreen(
@@ -170,8 +170,8 @@ fun RedeemScreen(
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = BrandAccent,
-                        contentColor = BrandInk,
-                        disabledContainerColor = BrandInk.copy(alpha = 0.12f),
+                        contentColor = BrandOnAccent,
+                        disabledContainerColor = BrandInk.copy(alpha = 0.10f),
                         disabledContentColor = BrandMuted,
                     ),
                     shape = RoundedCornerShape(12.dp),
@@ -181,7 +181,7 @@ fun RedeemScreen(
 
                 (localError ?: ui.error)?.let {
                     Spacer(Modifier.height(10.dp))
-                    Text(it, color = Color(0xFFB00020), fontSize = 13.sp)
+                    Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp)
                 }
 
                 if (submitted) {

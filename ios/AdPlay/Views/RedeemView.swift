@@ -9,11 +9,12 @@ struct RedeemView: View {
     @State private var history: [Withdrawal] = []
     @State private var didSubmit = false
 
-    private let pageBg = Color(red: 0.98, green: 0.96, blue: 0.92)
-    private let panelBg = Color(red: 0.97, green: 0.96, blue: 0.93)
-    private let panelBorder = Color(red: 0.78, green: 0.74, blue: 0.68)
-    private let fieldBg = Color.white
-    private let fieldBorder = Color(red: 0.72, green: 0.68, blue: 0.62)
+    private let pageBg = Color(red: 0.055, green: 0.059, blue: 0.102) // #0E0F1A
+    private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149) // #171826
+    private let panelBorder = Color(red: 0.169, green: 0.176, blue: 0.239) // #2B2D3D
+    private let fieldBg = Color(red: 0.043, green: 0.047, blue: 0.078) // #0B0C14
+    private let fieldBorder = Color(red: 0.196, green: 0.204, blue: 0.278) // #323548
+    private let onAccent = Color(red: 0.043, green: 0.047, blue: 0.078) // dark text on orange
 
     var body: some View {
         NavigationStack {
@@ -25,23 +26,12 @@ struct RedeemView: View {
                 }
                 .padding(20)
             }
-            .background(
-                LinearGradient(
-                    colors: [
-                        pageBg,
-                        Color(red: 0.93, green: 0.95, blue: 0.97),
-                        Color(red: 0.90, green: 0.93, blue: 0.90),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
+            .background(AtmosphereBackground())
             .navigationTitle("Redeem")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(pageBg, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.light, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .tint(Color("BrandInk"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -51,7 +41,7 @@ struct RedeemView: View {
             }
             .task { await loadHistory() }
         }
-        .preferredColorScheme(.light)
+        .preferredColorScheme(.dark)
     }
 
     private var balancePanel: some View {
@@ -116,12 +106,19 @@ struct RedeemView: View {
                 }
             } label: {
                 Text("Submit withdrawal")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundStyle(Color("BrandInk"))
-                    .background(Color("BrandAccent"))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.vertical, 15)
+                    .foregroundStyle(onAccent)
+                    .background(
+                        LinearGradient(
+                            colors: [Color("BrandAccent"), Color("BrandAccentHot")],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: Color("BrandAccent").opacity(0.35), radius: 14, y: 5)
             }
             .disabled(amountText.isEmpty || invoice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 

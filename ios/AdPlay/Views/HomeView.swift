@@ -27,8 +27,16 @@ struct HomeView: View {
                         showRedeem = true
                     } label: {
                         Text("Redeem")
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color("BrandAccent"))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule().fill(Color("BrandAccent").opacity(0.14))
+                            )
+                            .overlay(
+                                Capsule().stroke(Color("BrandAccent").opacity(0.55), lineWidth: 1)
+                            )
                     }
                 }
                 .padding(.horizontal, 24)
@@ -46,14 +54,16 @@ struct HomeView: View {
 
                 Spacer(minLength: 24)
 
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     Text("\(state.satsBalance)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
+                        .font(.system(size: 66, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color("BrandInk"))
                         .contentTransition(.numericText())
-                    Text("sats")
-                        .font(.system(size: 18, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color("BrandMuted"))
+                        .shadow(color: Color("BrandAccent").opacity(0.35), radius: 22, y: 6)
+                    Text("SATS")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .tracking(3)
+                        .foregroundStyle(Color("BrandAccent"))
                 }
 
                 Spacer(minLength: 28)
@@ -207,7 +217,10 @@ struct ProgressBarView: View {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule()
-                            .fill(Color("BrandInk").opacity(0.08))
+                            .fill(Color("BrandInk").opacity(0.06))
+                            .overlay(
+                                Capsule().stroke(Color("BrandInk").opacity(0.10), lineWidth: 1)
+                            )
                         Capsule()
                             .fill(
                                 LinearGradient(
@@ -216,14 +229,25 @@ struct ProgressBarView: View {
                                     endPoint: .trailing
                                 )
                             )
-                            .frame(width: max(18, geo.size.width * fraction))
+                            .overlay(
+                                Capsule()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color.white.opacity(0.35), Color.clear],
+                                            startPoint: .top,
+                                            endPoint: .center
+                                        )
+                                    )
+                            )
+                            .frame(width: max(20, geo.size.width * fraction))
+                            .shadow(color: Color("BrandAccent").opacity(0.55), radius: 10, y: 0)
                     }
                     .contentShape(Capsule())
                     .onTapGesture {
                         Task { await session.tap() }
                     }
                 }
-                .frame(height: 28)
+                .frame(height: 30)
             }
         }
         .onChange(of: progress) { _, newValue in
@@ -296,11 +320,12 @@ struct BoostButton: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal, 4)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(fillGradient(visual))
+                        .shadow(color: shadowColor(visual), radius: 12, y: 4)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(borderColor(visual), lineWidth: borderWidth(visual))
                 )
             }
@@ -344,17 +369,25 @@ struct BoostButton: View {
         }
     }
 
+    private func shadowColor(_ visual: Visual) -> Color {
+        switch visual {
+        case .ready: return Color("BrandAccent").opacity(0.28)
+        case .runningReady: return Color("BrandAccentHot").opacity(0.45)
+        case .runningLocked, .locked: return Color.black.opacity(0.25)
+        }
+    }
+
     private func fillGradient(_ visual: Visual) -> LinearGradient {
         switch visual {
         case .ready:
             return LinearGradient(
-                colors: [Color.white.opacity(0.92), Color("BrandAccent").opacity(0.12)],
+                colors: [Color("BrandInk").opacity(0.08), Color("BrandAccent").opacity(0.16)],
                 startPoint: .top,
                 endPoint: .bottom
             )
         case .runningReady:
             return LinearGradient(
-                colors: [Color("BrandAccent").opacity(0.58), Color("BrandAccentHot").opacity(0.48)],
+                colors: [Color("BrandAccent").opacity(0.85), Color("BrandAccentHot").opacity(0.70)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -408,9 +441,9 @@ struct AtmosphereBackground: View {
     var body: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.98, green: 0.96, blue: 0.92),
-                Color(red: 0.93, green: 0.95, blue: 0.98),
-                Color(red: 0.90, green: 0.93, blue: 0.90),
+                Color(red: 0.071, green: 0.075, blue: 0.122), // #12131F
+                Color(red: 0.055, green: 0.059, blue: 0.102), // #0E0F1A
+                Color(red: 0.039, green: 0.043, blue: 0.071), // #0A0B12
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -418,15 +451,16 @@ struct AtmosphereBackground: View {
         .ignoresSafeArea()
         .overlay {
             Circle()
-                .fill(Color("BrandAccent").opacity(0.12))
-                .frame(width: 280, height: 280)
-                .blur(radius: 40)
-                .offset(x: -120, y: -220)
+                .fill(Color("BrandAccent").opacity(0.22))
+                .frame(width: 340, height: 340)
+                .blur(radius: 80)
+                .offset(x: -120, y: -240)
             Circle()
-                .fill(Color(red: 0.45, green: 0.62, blue: 0.55).opacity(0.14))
-                .frame(width: 320, height: 320)
-                .blur(radius: 50)
-                .offset(x: 140, y: 260)
+                .fill(Color(red: 0.42, green: 0.36, blue: 0.95).opacity(0.16)) // indigo glow
+                .frame(width: 360, height: 360)
+                .blur(radius: 90)
+                .offset(x: 150, y: 280)
         }
+        .ignoresSafeArea()
     }
 }

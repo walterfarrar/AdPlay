@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -31,8 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -74,18 +78,23 @@ fun HomeScreen(
     ) {
         Box(
             Modifier
-                .size(280.dp)
+                .size(360.dp)
                 .align(Alignment.TopStart)
-                .padding(start = 0.dp, top = 0.dp)
-                .clip(CircleShape)
-                .background(BrandAccent.copy(alpha = 0.12f)),
+                .offset(x = (-120).dp, y = (-150).dp)
+                .background(
+                    Brush.radialGradient(listOf(BrandAccent.copy(alpha = 0.22f), Color.Transparent)),
+                    CircleShape,
+                ),
         )
         Box(
             Modifier
-                .size(320.dp)
+                .size(400.dp)
                 .align(Alignment.BottomEnd)
-                .clip(CircleShape)
-                .background(Color(0xFF739E8C).copy(alpha = 0.14f)),
+                .offset(x = 130.dp, y = 160.dp)
+                .background(
+                    Brush.radialGradient(listOf(Color(0xFF6B5CF5).copy(alpha = 0.18f), Color.Transparent)),
+                    CircleShape,
+                ),
         )
 
         when {
@@ -113,7 +122,7 @@ fun HomeScreen(
                 ) {
                     Text("AdPlay", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = BrandInk)
                     Spacer(Modifier.height(12.dp))
-                    Text(ui.error ?: "Not connected", color = Color(0xFFB00020), textAlign = TextAlign.Center)
+                    Text(ui.error ?: "Not connected", color = Color(0xFFFF6B6B), textAlign = TextAlign.Center)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "${ui.apiBaseUrl}\nEnable Blaze + deploy functions (docs/LDPLAYER.md).",
@@ -149,8 +158,15 @@ fun HomeScreen(
                                     Text("Reset", color = BrandMuted, fontWeight = FontWeight.SemiBold)
                                 }
                             }
-                            TextButton(onClick = onRedeem) {
-                                Text("Redeem", color = BrandAccent, fontWeight = FontWeight.SemiBold)
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(BrandAccent.copy(alpha = 0.14f))
+                                    .border(1.dp, BrandAccent.copy(alpha = 0.55f), RoundedCornerShape(50))
+                                    .clickable(onClick = onRedeem)
+                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                            ) {
+                                Text("Redeem", color = BrandAccent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             }
                         }
                     }
@@ -170,11 +186,25 @@ fun HomeScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             "${state.satsBalance}",
-                            fontSize = 64.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 66.sp,
+                            fontWeight = FontWeight.Black,
                             color = BrandInk,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = BrandAccent.copy(alpha = 0.5f),
+                                    offset = Offset(0f, 6f),
+                                    blurRadius = 34f,
+                                ),
+                            ),
                         )
-                        Text("sats", fontSize = 18.sp, fontWeight = FontWeight.Medium, color = BrandMuted)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "SATS",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = BrandAccent,
+                            letterSpacing = 3.sp,
+                        )
                     }
 
                     Spacer(Modifier.weight(0.6f))
@@ -244,7 +274,7 @@ fun HomeScreen(
                     Spacer(Modifier.height(16.dp))
 
                     ui.error?.let {
-                        Text(it, color = Color(0xFFB00020), fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                        Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                         Spacer(Modifier.height(8.dp))
                     }
 
@@ -375,17 +405,19 @@ private fun ProgressBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(28.dp)
+                .height(30.dp)
                 .clip(RoundedCornerShape(50))
-                .background(BrandInk.copy(alpha = 0.08f))
+                .background(BrandInk.copy(alpha = 0.06f))
+                .border(1.dp, BrandInk.copy(alpha = 0.10f), RoundedCornerShape(50))
                 .clickable(onClick = onTap),
         ) {
             Box(
                 Modifier
                     .fillMaxWidth(fraction.coerceAtLeast(0.04f))
-                    .height(28.dp)
+                    .height(30.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(Brush.horizontalGradient(listOf(BrandAccent, BrandAccentHot))),
+                    .background(Brush.horizontalGradient(listOf(BrandAccent, BrandAccentHot)))
+                    .border(1.dp, BrandAccentHot.copy(alpha = 0.5f), RoundedCornerShape(50)),
             )
         }
     }
@@ -422,7 +454,7 @@ private fun BoostButton(
 
     val line2 = if (active) formatCountdown(left) else idleSubtitle
     val line3 = if (active) activeMetric.orEmpty() else ""
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(18.dp)
 
     val titleColor = when (visual) {
         BoostVisual.Ready, BoostVisual.RunningReady -> BrandInk
@@ -437,10 +469,10 @@ private fun BoostButton(
     }
     val bg = when (visual) {
         BoostVisual.Ready -> Brush.verticalGradient(
-            listOf(Color.White.copy(alpha = 0.92f), BrandAccent.copy(alpha = 0.12f)),
+            listOf(BrandInk.copy(alpha = 0.06f), BrandAccent.copy(alpha = 0.16f)),
         )
         BoostVisual.RunningReady -> Brush.verticalGradient(
-            listOf(BrandAccent.copy(alpha = 0.58f), BrandAccentHot.copy(alpha = 0.48f)),
+            listOf(BrandAccent.copy(alpha = 0.85f), BrandAccentHot.copy(alpha = 0.70f)),
         )
         // Same timer content, but washed out — clearly not pressable
         BoostVisual.RunningLocked -> Brush.verticalGradient(

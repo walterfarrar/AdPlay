@@ -1,24 +1,30 @@
 package com.adplay.app.ui
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val BrandInk = Color(0xFF1A1A25)
-val BrandMuted = Color(0xFF595F66)
+// Dark, premium palette — near-white ink, warm Bitcoin-orange accents.
+val BrandInk = Color(0xFFF4F5FA)
+val BrandMuted = Color(0xFF969CB0)
 val BrandAccent = Color(0xFFF7931A)
-val BrandAccentHot = Color(0xFFEB6B2E)
-val BrandBgTop = Color(0xFFFAF5EB)
-val BrandBgMid = Color(0xFFEDF2F8)
-val BrandBgBottom = Color(0xFFE6EDE6)
+val BrandAccentHot = Color(0xFFFF6B2C)
+val BrandBgTop = Color(0xFF12131F)
+val BrandBgMid = Color(0xFF0E0F1A)
+val BrandBgBottom = Color(0xFF0A0B12)
 
-private val colors = lightColorScheme(
+// Elevated surfaces / glass cards on the dark backdrop.
+val BrandCard = Color(0xFF171826)
+val BrandCardBorder = Color(0xFF2B2D3D)
+val BrandOnAccent = Color(0xFF0B0C14)
+
+private val colors = darkColorScheme(
     primary = BrandAccent,
-    onPrimary = BrandInk,
-    background = BrandBgTop,
+    onPrimary = BrandOnAccent,
+    background = BrandBgMid,
     onBackground = BrandInk,
-    surface = Color.White.copy(alpha = 0.55f),
+    surface = BrandCard,
     onSurface = BrandInk,
 )
 

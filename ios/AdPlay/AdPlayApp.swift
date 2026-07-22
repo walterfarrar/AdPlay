@@ -13,6 +13,7 @@ struct AdPlayApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .preferredColorScheme(.dark)
         }
     }
 }
