@@ -9,6 +9,12 @@ struct RedeemView: View {
     @State private var history: [Withdrawal] = []
     @State private var didSubmit = false
 
+    private let pageBg = Color(red: 0.98, green: 0.96, blue: 0.92)
+    private let panelBg = Color(red: 0.97, green: 0.96, blue: 0.93)
+    private let panelBorder = Color(red: 0.78, green: 0.74, blue: 0.68)
+    private let fieldBg = Color.white
+    private let fieldBorder = Color(red: 0.72, green: 0.68, blue: 0.62)
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -22,7 +28,7 @@ struct RedeemView: View {
             .background(
                 LinearGradient(
                     colors: [
-                        Color(red: 0.98, green: 0.96, blue: 0.92),
+                        pageBg,
                         Color(red: 0.93, green: 0.95, blue: 0.97),
                         Color(red: 0.90, green: 0.93, blue: 0.90),
                     ],
@@ -32,13 +38,20 @@ struct RedeemView: View {
                 .ignoresSafeArea()
             )
             .navigationTitle("Redeem")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(pageBg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
+            .tint(Color("BrandInk"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(Color("BrandInk"))
                 }
             }
             .task { await loadHistory() }
         }
+        .preferredColorScheme(.light)
     }
 
     private var balancePanel: some View {
@@ -58,10 +71,10 @@ struct RedeemView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color(red: 0.97, green: 0.96, blue: 0.93))
+        .background(panelBg)
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(red: 0.85, green: 0.82, blue: 0.78), lineWidth: 1)
+                .stroke(panelBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
@@ -71,18 +84,23 @@ struct RedeemView: View {
             Text("Request")
                 .font(.headline)
                 .foregroundStyle(Color("BrandInk"))
-            TextField("Amount (sats)", text: $amountText)
-                .keyboardType(.numberPad)
-                .padding(12)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            TextField("BOLT11 invoice", text: $invoice, axis: .vertical)
-                .lineLimit(3...6)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .padding(12)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            labeledField(title: "Amount (sats)") {
+                TextField("e.g. 1000", text: $amountText)
+                    .keyboardType(.numberPad)
+                    .foregroundStyle(Color("BrandInk"))
+                    .tint(Color("BrandAccent"))
+            }
+
+            labeledField(title: "BOLT11 invoice") {
+                TextField("lnbc…", text: $invoice, axis: .vertical)
+                    .lineLimit(3...6)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(Color("BrandInk"))
+                    .tint(Color("BrandAccent"))
+            }
+
             Button {
                 Task {
                     guard let amount = Int(amountText) else {
@@ -117,10 +135,10 @@ struct RedeemView: View {
             }
         }
         .padding(16)
-        .background(Color(red: 0.97, green: 0.96, blue: 0.93))
+        .background(panelBg)
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(red: 0.85, green: 0.82, blue: 0.78), lineWidth: 1)
+                .stroke(panelBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
@@ -139,7 +157,7 @@ struct RedeemView: View {
                         Text("\(w.sats) sats · \(w.status)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color("BrandInk"))
-                        if let created = w.created_at {
+                        if let created = w.createdAt ?? w.created_at {
                             Text(created)
                                 .font(.caption)
                                 .foregroundStyle(Color("BrandMuted"))
@@ -147,18 +165,41 @@ struct RedeemView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Color.white)
+                    .background(fieldBg)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(fieldBorder, lineWidth: 1)
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
         }
         .padding(16)
-        .background(Color(red: 0.97, green: 0.96, blue: 0.93))
+        .background(panelBg)
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(red: 0.85, green: 0.82, blue: 0.78), lineWidth: 1)
+                .stroke(panelBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func labeledField<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content,
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color("BrandMuted"))
+            content()
+                .padding(12)
+                .background(fieldBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(fieldBorder, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
     }
 
     private func loadHistory() async {
