@@ -28,3 +28,4 @@ targets:
       properties:
         CFBundleDisplayName: AdPlay
         UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
