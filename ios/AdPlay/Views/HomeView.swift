@@ -246,7 +246,7 @@ struct BoostButton: View {
     let action: () -> Void
 
     private enum Visual {
-        ready, runningReady, runningLocked, locked
+        case ready, runningReady, runningLocked, locked
     }
 
     var body: some View {
