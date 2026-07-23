@@ -54,17 +54,13 @@ struct HomeView: View {
 
                 Spacer(minLength: 24)
 
-                VStack(spacing: 8) {
-                    Text("\(state.satsBalance)")
-                        .font(.system(size: 66, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color("BrandInk"))
-                        .contentTransition(.numericText())
-                        .shadow(color: Color("BrandAccent").opacity(0.35), radius: 22, y: 6)
-                    Text("SATS")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .tracking(3)
-                        .foregroundStyle(Color("BrandAccent"))
-                }
+                BtcBalanceView(
+                    satsBalance: state.satsBalance,
+                    progress: state.progress,
+                    total: state.unitsPerSat,
+                    fillRate: state.fillRate,
+                    autoActive: state.autoFillActive
+                )
 
                 Spacer(minLength: 28)
 
@@ -183,6 +179,80 @@ struct AdsFooterView: View {
     }
 }
 
+/// Live progress toward the next sat, matching the bar’s local auto-fill interpolation.
+private func displayedBarProgress(
+    progress: Double,
+    total: Int,
+    fillRate: Double,
+    autoActive: Bool,
+    anchorProgress: Double,
+    anchorDate: Date,
+    now: Date
+) -> Double {
+    guard autoActive, fillRate > 0, total > 0 else { return progress }
+    let elapsed = now.timeIntervalSince(anchorDate)
+    return min(Double(total), anchorProgress + fillRate * elapsed)
+}
+
+/// BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat).
+func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) -> String {
+    let fraction = unitsPerSat > 0 ? min(1, max(0, barProgress / Double(unitsPerSat))) : 0
+    let btc = (Double(satsBalance) + fraction) * 1e-8
+    // 11 dp: 1 sat = 1e-8 BTC; with ~1000 units/sat each unit is visible as 1e-11.
+    return String(format: "%.11f", btc)
+}
+
+struct BtcBalanceView: View {
+    let satsBalance: Int
+    let progress: Double
+    let total: Int
+    let fillRate: Double
+    let autoActive: Bool
+
+    @State private var anchorProgress: Double = 0
+    @State private var anchorDate: Date = .now
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.05)) { context in
+            let display = displayedBarProgress(
+                progress: progress,
+                total: total,
+                fillRate: fillRate,
+                autoActive: autoActive,
+                anchorProgress: anchorProgress,
+                anchorDate: anchorDate,
+                now: context.date
+            )
+            VStack(spacing: 8) {
+                Text(formatBtcAmount(satsBalance: satsBalance, barProgress: display, unitsPerSat: total))
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color("BrandInk"))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.45)
+                    .lineLimit(1)
+                    .shadow(color: Color("BrandAccent").opacity(0.35), radius: 22, y: 6)
+                Text("BTC")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .tracking(3)
+                    .foregroundStyle(Color("BrandAccent"))
+            }
+            .padding(.horizontal, 16)
+        }
+        .onChange(of: progress) { _, newValue in
+            anchorProgress = newValue
+            anchorDate = .now
+        }
+        .onChange(of: fillRate) { _, _ in
+            anchorProgress = progress
+            anchorDate = .now
+        }
+        .onAppear {
+            anchorProgress = progress
+            anchorDate = .now
+        }
+    }
+}
+
 struct ProgressBarView: View {
     let progress: Double
     let total: Int
@@ -195,7 +265,15 @@ struct ProgressBarView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { context in
-            let display = displayedProgress(at: context.date)
+            let display = displayedBarProgress(
+                progress: progress,
+                total: total,
+                fillRate: fillRate,
+                autoActive: autoActive,
+                anchorProgress: anchorProgress,
+                anchorDate: anchorDate,
+                now: context.date
+            )
             let fraction = total > 0 ? min(1, display / Double(total)) : 0
             let status = autoActive
                 ? String(format: "%.2f taps/s", fillRate)
@@ -262,12 +340,6 @@ struct ProgressBarView: View {
             anchorProgress = progress
             anchorDate = .now
         }
-    }
-
-    private func displayedProgress(at now: Date) -> Double {
-        guard autoActive, fillRate > 0, total > 0 else { return progress }
-        let elapsed = now.timeIntervalSince(anchorDate)
-        return min(Double(total), anchorProgress + fillRate * elapsed)
     }
 }
 
