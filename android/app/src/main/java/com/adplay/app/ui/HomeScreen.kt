@@ -140,6 +140,30 @@ fun HomeScreen(
                 val canWatch = !ui.loading &&
                     state.adsRemainingToday > 0 &&
                     state.adCooldownSecondsLeft == 0
+                var displayProgress by remember { mutableDoubleStateOf(state.progress) }
+
+                // Smooth local fill between server polls — shared by BTC balance + progress bar.
+                LaunchedEffect(state.progress, state.fillRate, state.autoFillActive, state.unitsPerSat) {
+                    if (state.progress + 5.0 < displayProgress) {
+                        // Bar completed (progress wrapped) or debug reset
+                        displayProgress = state.progress
+                    } else if (state.progress > displayProgress) {
+                        displayProgress = state.progress
+                    }
+                    if (!state.autoFillActive || state.fillRate <= 0.0 || state.unitsPerSat <= 0) {
+                        return@LaunchedEffect
+                    }
+                    val start = displayProgress
+                    val startMs = System.currentTimeMillis()
+                    while (true) {
+                        delay(50)
+                        val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
+                        val next = start + state.fillRate * elapsed
+                        // Hold server progress as a floor so a late animation restart can't erase a tap
+                        displayProgress = maxOf(state.progress, next).coerceIn(0.0, state.unitsPerSat.toDouble())
+                        if (next >= state.unitsPerSat) break
+                    }
+                }
 
                 Column(
                     Modifier
@@ -185,10 +209,15 @@ fun HomeScreen(
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            "${state.satsBalance}",
-                            fontSize = 66.sp,
+                            formatBtcAmount(
+                                satsBalance = state.satsBalance,
+                                barProgress = displayProgress,
+                                unitsPerSat = state.unitsPerSat,
+                            ),
+                            fontSize = 42.sp,
                             fontWeight = FontWeight.Black,
                             color = BrandInk,
+                            maxLines = 1,
                             style = TextStyle(
                                 shadow = Shadow(
                                     color = BrandAccent.copy(alpha = 0.5f),
@@ -199,7 +228,7 @@ fun HomeScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            "SATS",
+                            "BTC",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = BrandAccent,
@@ -210,7 +239,7 @@ fun HomeScreen(
                     Spacer(Modifier.weight(0.6f))
 
                     ProgressBar(
-                        progress = state.progress,
+                        displayProgress = displayProgress,
                         total = state.unitsPerSat,
                         autoActive = state.autoFillActive,
                         fillRate = state.fillRate,
@@ -346,37 +375,26 @@ private fun AdsFooter(
     )
 }
 
+/** BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat). */
+internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int): String {
+    val fraction = if (unitsPerSat > 0) {
+        (barProgress / unitsPerSat).coerceIn(0.0, 1.0)
+    } else {
+        0.0
+    }
+    val btc = (satsBalance + fraction) * 1e-8
+    // 11 dp: 1 sat = 1e-8 BTC; with ~1000 units/sat each unit is visible as 1e-11.
+    return String.format("%.11f", btc)
+}
+
 @Composable
 private fun ProgressBar(
-    progress: Double,
+    displayProgress: Double,
     total: Int,
     autoActive: Boolean,
     fillRate: Double,
     onTap: () -> Unit,
 ) {
-    var displayProgress by remember { mutableDoubleStateOf(progress) }
-
-    // Smooth local fill between server polls — never snap backward except on bar wrap/reset.
-    LaunchedEffect(progress, fillRate, autoActive, total) {
-        if (progress + 5.0 < displayProgress) {
-            // Bar completed (progress wrapped) or debug reset
-            displayProgress = progress
-        } else if (progress > displayProgress) {
-            displayProgress = progress
-        }
-        if (!autoActive || fillRate <= 0.0 || total <= 0) return@LaunchedEffect
-        val start = displayProgress
-        val startMs = System.currentTimeMillis()
-        while (true) {
-            delay(50)
-            val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
-            val next = start + fillRate * elapsed
-            // Hold server progress as a floor so a late animation restart can't erase a tap
-            displayProgress = maxOf(progress, next).coerceIn(0.0, total.toDouble())
-            if (next >= total) break
-        }
-    }
-
     val fraction by animateFloatAsState(
         targetValue = if (total > 0) (displayProgress / total).toFloat().coerceIn(0f, 1f) else 0f,
         label = "bar",
