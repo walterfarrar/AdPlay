@@ -56,6 +56,7 @@ export function freshGame(t: Tunables, now = new Date()): import("./types").Game
     tapsRemaining: t.dailyTapCap,
     tapDay: day,
     adsUsed: 0,
+    skipAdsUsed: 0,
     satsEarnedToday: 0,
     satsDay: day,
     lastAdAt: null,

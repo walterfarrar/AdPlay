@@ -145,8 +145,16 @@ export const gameTap = onCall(async (request) => {
 export const mockCompleteBoost = onCall(async (request) => {
   const uid = requireAuth(request.auth?.uid);
   const boostType = request.data?.boostType as BoostType;
-  if (boostType !== "duration" && boostType !== "speed" && boostType !== "tap_strength") {
-    throw new HttpsError("invalid-argument", "boostType must be duration|speed|tap_strength");
+  if (
+    boostType !== "duration" &&
+    boostType !== "speed" &&
+    boostType !== "tap_strength" &&
+    boostType !== "skip_time"
+  ) {
+    throw new HttpsError(
+      "invalid-argument",
+      "boostType must be duration|speed|tap_strength|skip_time",
+    );
   }
   const eventId = `mock_${db.collection("_").doc().id}`;
   try {

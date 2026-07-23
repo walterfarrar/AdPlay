@@ -75,6 +75,7 @@ struct HomeView: View {
                     progress: state.progress,
                     total: state.unitsPerSat,
                     fillRate: state.fillRate,
+                    tapPower: state.effectiveTapPower,
                     autoActive: state.autoFillActive
                 )
                 .padding(.horizontal, 24)
@@ -93,38 +94,41 @@ struct HomeView: View {
                 HStack(spacing: 10) {
                     BoostButton(
                         title: "Longer",
-                        idleSubtitle: "Extend auto",
-                        activeUntil: state.autoFillActive ? state.autoFillUntil : nil,
+                        actionLabel: formatLongerAction(session.tunables),
+                        theme: Color("BrandTime"),
+                        running: state.autoFillActive,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .duration) }
                     }
                     BoostButton(
                         title: "Faster",
-                        idleSubtitle: "Raise speed",
-                        activeUntil: state.autoFillActive ? state.autoFillUntil : nil,
-                        activeMetric: (state.autoFillActive && state.fillRate > 0)
-                            ? String(format: "%.2f/s", state.fillRate)
-                            : nil,
+                        actionLabel: formatFasterAction(session.tunables),
+                        theme: Color("BrandAccent"),
+                        running: state.autoFillActive && state.fillRate > 0,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .speed) }
                     }
                     BoostButton(
                         title: "Stronger",
-                        idleSubtitle: "Boost tap power",
-                        activeUntil: (state.tapStrengthActive ?? false) ? state.tapStrengthUntil : nil,
-                        activeMetric: (state.tapStrengthActive ?? false)
-                            ? "\(state.effectiveTapPower)/tap"
-                            : nil,
+                        actionLabel: formatStrongerAction(session.tunables),
+                        theme: Color("BrandPower"),
+                        running: state.tapStrengthActive ?? false,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .tapStrength) }
                     }
                 }
-                .frame(height: 96)
+                .frame(height: 88)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 28)
+
+                SharedAutoTimerView(
+                    autoFillUntil: state.autoFillUntil,
+                    autoActive: state.autoFillActive
+                )
+                .padding(.top, 10)
+                .padding(.bottom, 10)
 
                 if let err = session.errorMessage {
                     Text(err)
@@ -141,6 +145,33 @@ struct HomeView: View {
                     autoFillUntil: state.autoFillUntil,
                     autoActive: state.autoFillActive
                 )
+
+                // Reserved height so layout never jumps when Skip appears.
+                let skipRemaining = state.effectiveSkipAdsRemaining
+                let skipVisible = state.adsRemainingToday <= 0
+                    && state.autoFillActive
+                    && (skipRemaining < 0 || skipRemaining > 0)
+                let canSkip = !session.isLoading
+                    && skipVisible
+                    && state.adCooldownSecondsLeft == 0
+
+                ZStack {
+                    if skipVisible {
+                        SkipTimeButton(
+                            actionLabel: formatSkipTimeAction(session.tunables),
+                            remainingLabel: formatSkipButtonStatus(
+                                skipAdsRemaining: skipRemaining,
+                                cooldownLeft: state.adCooldownSecondsLeft
+                            ),
+                            disabled: !canSkip
+                        ) {
+                            Task { await session.watch(boost: .skipTime) }
+                        }
+                    }
+                }
+                .frame(height: 52)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
         }
         .sheet(isPresented: $showRedeem) {
@@ -153,6 +184,22 @@ struct HomeView: View {
         !session.isLoading
             && session.state.adsRemainingToday > 0
             && session.state.adCooldownSecondsLeft == 0
+    }
+}
+
+struct SharedAutoTimerView: View {
+    let autoFillUntil: String?
+    let autoActive: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let left = autoActive ? remainingSeconds(untilIso: autoFillUntil, now: context.date) : 0
+            Text(left > 0 ? "Auto \(formatCountdown(left))" : " ")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(left > 0 ? Color("BrandTime") : .clear)
+                .frame(maxWidth: .infinity)
+                .monospacedDigit()
+        }
     }
 }
 
@@ -173,9 +220,8 @@ struct AdsFooterView: View {
 
     private func footerText(at now: Date) -> String {
         if adsRemaining <= 0 {
-            let left = remainingSeconds(untilIso: autoFillUntil, now: now)
-            if left > 0 {
-                return "More ads in \(formatCountdown(left))"
+            if autoActive {
+                return "Ads refill when auto ends"
             }
             return "More ads soon…"
         }
@@ -264,6 +310,7 @@ struct ProgressBarView: View {
     let progress: Double
     let total: Int
     let fillRate: Double
+    let tapPower: Double
     let autoActive: Bool
 
     @EnvironmentObject private var session: SessionStore
@@ -282,9 +329,6 @@ struct ProgressBarView: View {
                 now: context.date
             )
             let fraction = total > 0 ? min(1, display / Double(total)) : 0
-            let status = autoActive
-                ? String(format: "%.2f taps/s", fillRate)
-                : "Idle"
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -293,10 +337,11 @@ struct ProgressBarView: View {
                         .foregroundStyle(Color("BrandInk"))
                         .monospacedDigit()
                     Spacer()
-                    Text(status)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(autoActive ? Color("BrandAccent") : Color("BrandMuted"))
-                        .monospacedDigit()
+                    BarRateStatusView(
+                        autoActive: autoActive,
+                        fillRate: fillRate,
+                        tapPower: tapPower
+                    )
                 }
 
                 GeometryReader { geo in
@@ -309,7 +354,7 @@ struct ProgressBarView: View {
                         Capsule()
                             .fill(
                                 LinearGradient(
-                                    colors: [Color("BrandAccent"), Color("BrandAccentHot")],
+                                    colors: [Color("BrandFill"), Color("BrandFillHot")],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -325,7 +370,7 @@ struct ProgressBarView: View {
                                     )
                             )
                             .frame(width: max(20, geo.size.width * fraction))
-                            .shadow(color: Color("BrandAccent").opacity(0.55), radius: 10, y: 0)
+                            .shadow(color: Color("BrandFill").opacity(0.55), radius: 10, y: 0)
                     }
                     .contentShape(Capsule())
                     .onTapGesture {
@@ -343,6 +388,10 @@ struct ProgressBarView: View {
             anchorProgress = progress
             anchorDate = .now
         }
+        .onChange(of: tapPower) { _, _ in
+            anchorProgress = progress
+            anchorDate = .now
+        }
         .onAppear {
             anchorProgress = progress
             anchorDate = .now
@@ -350,11 +399,136 @@ struct ProgressBarView: View {
     }
 }
 
+/// Status above the bar: taps/s · power · fill/s — colored by Speed / Power.
+struct BarRateStatusView: View {
+    let autoActive: Bool
+    let fillRate: Double
+    let tapPower: Double
+
+    var body: some View {
+        let power = tapPower > 0 ? tapPower : 1
+        Group {
+            if !autoActive || fillRate <= 0 {
+                HStack(spacing: 0) {
+                    Text("Idle").foregroundStyle(Color("BrandMuted"))
+                    if power > 1.000000001 {
+                        Text(" · ").foregroundStyle(Color("BrandMuted"))
+                        Text(String(format: "%.2f power", power))
+                            .foregroundStyle(Color("BrandPower"))
+                    }
+                }
+            } else {
+                let tapsPerSec = fillRate / power
+                HStack(spacing: 0) {
+                    Text(String(format: "%.2f taps/s", tapsPerSec))
+                        .foregroundStyle(Color("BrandAccent"))
+                    Text(" × ").foregroundStyle(Color("BrandMuted"))
+                    Text(String(format: "%.2f power", power))
+                        .foregroundStyle(Color("BrandPower"))
+                    Text(" = ").foregroundStyle(Color("BrandMuted"))
+                    Text(String(format: "%.2f/s", fillRate))
+                        .foregroundStyle(Color("BrandFill"))
+                }
+            }
+        }
+        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+}
+
+func formatLongerAction(_ t: Tunables?) -> String {
+    let seconds = t?.durationBoostSeconds ?? 1800
+    let minutes = seconds / 60
+    if minutes % 60 == 0 && minutes >= 60 {
+        return "Add \(minutes / 60)h"
+    }
+    return "Add \(minutes) min"
+}
+
+func formatFasterAction(_ t: Tunables?) -> String {
+    String(format: "+%.2f taps/s", t?.speedBoostAmount ?? 0.5)
+}
+
+func formatStrongerAction(_ t: Tunables?) -> String {
+    String(format: "+%.2f power/tap", t?.tapStrengthBoostAmount ?? 0.25)
+}
+
+func formatSkipTimeAction(_ t: Tunables?) -> String {
+    let seconds = t?.skipTimeSeconds ?? 60
+    let minutes = seconds / 60
+    if minutes >= 1 && seconds % 60 == 0 {
+        return "Skip \(minutes) min"
+    }
+    return "Skip \(seconds)s"
+}
+
+func formatSkipRemaining(_ skipAdsRemaining: Int) -> String {
+    if skipAdsRemaining < 0 { return "Unlimited" }
+    return "\(skipAdsRemaining) left"
+}
+
+func formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int) -> String {
+    if cooldownLeft > 0 { return "Next in \(cooldownLeft)s" }
+    return formatSkipRemaining(skipAdsRemaining)
+}
+
+/// Raw auto tap rate (excludes Stronger). fillRate from server is total units/s.
+func tapsPerSecond(fillRate: Double, tapPower: Double) -> Double {
+    let power = tapPower > 0 ? tapPower : 1
+    return fillRate / power
+}
+
+struct SkipTimeButton: View {
+    let actionLabel: String
+    let remainingLabel: String
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let theme = Color("BrandTime")
+        Button(action: action) {
+            HStack {
+                Text(actionLabel)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(disabled ? Color("BrandMuted").opacity(0.55) : Color("BrandInk"))
+                Spacer()
+                Text(remainingLabel)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(disabled ? Color("BrandMuted").opacity(0.45) : theme)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(
+                LinearGradient(
+                    colors: disabled
+                        ? [Color("BrandInk").opacity(0.03), Color("BrandInk").opacity(0.05)]
+                        : [Color("BrandInk").opacity(0.06), theme.opacity(0.20)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        disabled ? Color("BrandInk").opacity(0.08) : theme.opacity(0.85),
+                        lineWidth: 1.5
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+}
+
 struct BoostButton: View {
     let title: String
-    let idleSubtitle: String
-    var activeUntil: String? = nil
-    var activeMetric: String? = nil
+    let actionLabel: String
+    let theme: Color
+    var running: Bool = false
     let disabled: Bool
     let action: () -> Void
 
@@ -363,54 +537,40 @@ struct BoostButton: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            let left = remainingSeconds(untilIso: activeUntil, now: context.date)
-            let active = left > 0
-            let visual: Visual = {
-                if active && !disabled { return .runningReady }
-                if active && disabled { return .runningLocked }
-                if !disabled { return .ready }
-                return .locked
-            }()
-            let line2 = active ? formatCountdown(left) : idleSubtitle
-            let line3 = active ? (activeMetric ?? "") : ""
+        let visual: Visual = {
+            if running && !disabled { return .runningReady }
+            if running && disabled { return .runningLocked }
+            if !disabled { return .ready }
+            return .locked
+        }()
 
-            Button(action: action) {
-                VStack(spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                        .foregroundStyle(titleColor(visual))
-                        .lineLimit(1)
-                    Text(line2)
-                        .font(.system(
-                            size: 11,
-                            weight: (visual == .runningReady || visual == .runningLocked) ? .bold : .medium,
-                            design: .rounded
-                        ))
-                        .foregroundStyle(detailColor(visual))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    Text(line3.isEmpty ? " " : line3)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(line3.isEmpty ? .clear : detailColor(visual))
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(fillGradient(visual))
-                        .shadow(color: shadowColor(visual), radius: 12, y: 4)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(borderColor(visual), lineWidth: borderWidth(visual))
-                )
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(titleColor(visual))
+                    .lineLimit(1)
+                Text(actionLabel)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(detailColor(visual))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
-            .disabled(disabled)
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(fillGradient(visual))
+                    .shadow(color: theme.opacity(running ? 0.40 : 0.22), radius: 12, y: 4)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(borderColor(visual), lineWidth: borderWidth(visual))
+            )
         }
+        .disabled(disabled)
+        .buttonStyle(.plain)
     }
 
     private func titleColor(_ visual: Visual) -> Color {
@@ -423,18 +583,18 @@ struct BoostButton: View {
 
     private func detailColor(_ visual: Visual) -> Color {
         switch visual {
-        case .ready: return Color("BrandMuted")
-        case .runningReady: return Color(red: 0.48, green: 0.23, blue: 0.07)
-        case .runningLocked: return Color("BrandMuted").opacity(0.75)
+        case .ready: return theme
+        case .runningReady: return Color(red: 0.043, green: 0.047, blue: 0.078)
+        case .runningLocked: return theme.opacity(0.55)
         case .locked: return Color("BrandMuted").opacity(0.45)
         }
     }
 
     private func borderColor(_ visual: Visual) -> Color {
         switch visual {
-        case .ready: return Color("BrandAccent").opacity(0.85)
-        case .runningReady: return Color("BrandAccentHot")
-        case .runningLocked: return Color("BrandMuted").opacity(0.35)
+        case .ready: return theme.opacity(0.85)
+        case .runningReady: return theme
+        case .runningLocked: return theme.opacity(0.35)
         case .locked: return Color("BrandInk").opacity(0.08)
         }
     }
@@ -448,31 +608,23 @@ struct BoostButton: View {
         }
     }
 
-    private func shadowColor(_ visual: Visual) -> Color {
-        switch visual {
-        case .ready: return Color("BrandAccent").opacity(0.28)
-        case .runningReady: return Color("BrandAccentHot").opacity(0.45)
-        case .runningLocked, .locked: return Color.black.opacity(0.25)
-        }
-    }
-
     private func fillGradient(_ visual: Visual) -> LinearGradient {
         switch visual {
         case .ready:
             return LinearGradient(
-                colors: [Color("BrandInk").opacity(0.08), Color("BrandAccent").opacity(0.16)],
+                colors: [Color("BrandInk").opacity(0.08), theme.opacity(0.18)],
                 startPoint: .top,
                 endPoint: .bottom
             )
         case .runningReady:
             return LinearGradient(
-                colors: [Color("BrandAccent").opacity(0.85), Color("BrandAccentHot").opacity(0.70)],
+                colors: [theme.opacity(0.95), theme.opacity(0.70)],
                 startPoint: .top,
                 endPoint: .bottom
             )
         case .runningLocked:
             return LinearGradient(
-                colors: [Color("BrandInk").opacity(0.05), Color("BrandInk").opacity(0.08)],
+                colors: [Color("BrandInk").opacity(0.05), theme.opacity(0.10)],
                 startPoint: .top,
                 endPoint: .bottom
             )

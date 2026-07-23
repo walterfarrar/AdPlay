@@ -6,6 +6,8 @@ struct GameState: Codable, Equatable {
     var satsBalance: Int
     var tapsRemaining: Int
     var adsRemainingToday: Int
+    /** -1 means unlimited skip ads this run. */
+    var skipAdsRemaining: Int?
     var satsEarnedToday: Int
     var dailySatsEarnCap: Int
     var autoFillActive: Bool
@@ -15,7 +17,7 @@ struct GameState: Codable, Equatable {
     var speedBoostUntil: String?
     var tapStrengthActive: Bool?
     var tapStrengthUntil: String?
-    var tapPower: Int?
+    var tapPower: Double?
     var adCooldownSecondsLeft: Int
     var lastBoostType: String?
     var minWithdrawSats: Int
@@ -27,7 +29,9 @@ struct GameState: Codable, Equatable {
         return min(1, max(0, progress / Double(unitsPerSat)))
     }
 
-    var effectiveTapPower: Int { tapPower ?? 1 }
+    var effectiveTapPower: Double { tapPower ?? 1 }
+
+    var effectiveSkipAdsRemaining: Int { skipAdsRemaining ?? 0 }
 
     static let empty = GameState(
         progress: 0,
@@ -35,6 +39,7 @@ struct GameState: Codable, Equatable {
         satsBalance: 0,
         tapsRemaining: 0,
         adsRemainingToday: 0,
+        skipAdsRemaining: 0,
         satsEarnedToday: 0,
         dailySatsEarnCap: 400,
         autoFillActive: false,
@@ -60,11 +65,14 @@ struct Tunables: Codable, Equatable {
     var durationBoostSeconds: Int
     var speedBoostAmount: Double
     var speedBoostSeconds: Int
-    var tapStrengthBoostAmount: Int?
+    var tapStrengthBoostAmount: Double?
     var tapStrengthBoostSeconds: Int?
     var adCooldownSeconds: Int
     var dailyAdCap: Int?
     var adsPerCycle: Int?
+    var skipTimeSeconds: Int?
+    /** 0 = unlimited skip ads after regular ads are out. */
+    var skipAdsPerCycle: Int?
     var dailySatsEarnCap: Int
     var minWithdrawSats: Int
     var resetHourUtc: Int
@@ -76,6 +84,7 @@ enum BoostType: String, Codable {
     case duration
     case speed
     case tapStrength = "tap_strength"
+    case skipTime = "skip_time"
 }
 
 struct Withdrawal: Codable, Identifiable, Equatable {

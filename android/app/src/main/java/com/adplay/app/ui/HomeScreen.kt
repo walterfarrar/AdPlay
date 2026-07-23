@@ -36,12 +36,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
+import com.adplay.app.data.Tunables
 import java.time.Instant
 import java.time.format.DateTimeParseException
 import kotlin.math.floor
@@ -65,6 +69,7 @@ fun HomeScreen(
     onLonger: () -> Unit,
     onFaster: () -> Unit,
     onStronger: () -> Unit,
+    onSkipTime: () -> Unit,
     onRedeem: () -> Unit,
     onDebugReset: () -> Unit,
     onToggleBypassAds: () -> Unit,
@@ -253,6 +258,7 @@ fun HomeScreen(
                         total = state.unitsPerSat,
                         autoActive = state.autoFillActive,
                         fillRate = state.fillRate,
+                        tapPower = state.tapPower,
                         onTap = onTap,
                     )
 
@@ -271,46 +277,49 @@ fun HomeScreen(
 
                     Spacer(Modifier.weight(0.8f))
 
+                    val t = ui.tunables
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(96.dp),
+                            .height(88.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         BoostButton(
                             title = "Longer",
-                            idleSubtitle = "Extend auto",
-                            activeUntil = state.autoFillUntil.takeIf { state.autoFillActive },
+                            actionLabel = formatLongerAction(t),
+                            theme = BrandTime,
+                            running = state.autoFillActive,
                             enabled = canWatch,
                             onClick = onLonger,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                         BoostButton(
                             title = "Faster",
-                            idleSubtitle = "Raise speed",
-                            // Same shared auto timer as Longer
-                            activeUntil = state.autoFillUntil.takeIf { state.autoFillActive },
-                            activeMetric = if (state.autoFillActive && state.fillRate > 0) {
-                                String.format("%.2f/s", state.fillRate)
-                            } else {
-                                null
-                            },
+                            actionLabel = formatFasterAction(t),
+                            theme = BrandSpeed,
+                            running = state.autoFillActive && state.fillRate > 0,
                             enabled = canWatch,
                             onClick = onFaster,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                         BoostButton(
                             title = "Stronger",
-                            idleSubtitle = "Boost tap power",
-                            activeUntil = state.tapStrengthUntil.takeIf { state.tapStrengthActive },
-                            activeMetric = if (state.tapStrengthActive) "${state.tapPower}/tap" else null,
+                            actionLabel = formatStrongerAction(t),
+                            theme = BrandPower,
+                            running = state.tapStrengthActive,
                             enabled = canWatch,
                             onClick = onStronger,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
 
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
+                    SharedAutoTimer(
+                        autoFillUntil = state.autoFillUntil,
+                        autoActive = state.autoFillActive,
+                    )
+
+                    Spacer(Modifier.height(10.dp))
 
                     ui.error?.let {
                         Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
@@ -322,9 +331,34 @@ fun HomeScreen(
                         cooldownLeft = state.adCooldownSecondsLeft,
                         autoFillUntil = state.autoFillUntil,
                         autoActive = state.autoFillActive,
-                        tapStrengthUntil = state.tapStrengthUntil,
-                        tapStrengthActive = state.tapStrengthActive,
                     )
+
+                    // Reserved height so layout never jumps when Skip appears.
+                    Spacer(Modifier.height(8.dp))
+                    val skipVisible = state.adsRemainingToday <= 0 &&
+                        state.autoFillActive &&
+                        (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0)
+                    val canSkip = !ui.loading &&
+                        skipVisible &&
+                        state.adCooldownSecondsLeft == 0
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (skipVisible) {
+                            SkipTimeButton(
+                                actionLabel = formatSkipTimeAction(t),
+                                remainingLabel = formatSkipButtonStatus(
+                                    skipAdsRemaining = state.skipAdsRemaining,
+                                    cooldownLeft = state.adCooldownSecondsLeft,
+                                ),
+                                enabled = canSkip,
+                                onClick = onSkipTime,
+                            )
+                        }
+                    }
                 }
 
                 if (ui.loading) {
@@ -338,19 +372,39 @@ fun HomeScreen(
 }
 
 @Composable
+private fun SharedAutoTimer(
+    autoFillUntil: String?,
+    autoActive: Boolean,
+) {
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val left = remainingSeconds(autoFillUntil.takeIf { autoActive }, nowMs)
+    LaunchedEffect(autoFillUntil, autoActive) {
+        if (!autoActive || autoFillUntil.isNullOrBlank()) return@LaunchedEffect
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            if (remainingSeconds(autoFillUntil, nowMs) <= 0L) break
+            delay(250)
+        }
+    }
+    Text(
+        if (left > 0L) "Auto ${formatCountdown(left)}" else " ",
+        color = if (left > 0L) BrandTime else Color.Transparent,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
 private fun AdsFooter(
     adsRemaining: Int,
     cooldownLeft: Int,
     autoFillUntil: String?,
     autoActive: Boolean,
-    tapStrengthUntil: String?,
-    tapStrengthActive: Boolean,
 ) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val refillUntil = listOfNotNull(
-        autoFillUntil.takeIf { autoActive },
-        tapStrengthUntil.takeIf { tapStrengthActive },
-    ).maxByOrNull { remainingSeconds(it, nowMs) }
+    val refillUntil = autoFillUntil.takeIf { autoActive && adsRemaining <= 0 }
     val needTick = adsRemaining <= 0 && refillUntil != null
     LaunchedEffect(needTick, refillUntil) {
         if (!needTick) return@LaunchedEffect
@@ -363,9 +417,8 @@ private fun AdsFooter(
 
     val footer = when {
         adsRemaining <= 0 -> {
-            val left = remainingSeconds(refillUntil, nowMs)
-            if (left > 0L) {
-                "More ads in ${formatCountdown(left)}"
+            if (autoActive) {
+                "Ads refill when auto ends"
             } else {
                 "More ads soon…"
             }
@@ -397,23 +450,109 @@ internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat:
     return String.format("%.11f", btc)
 }
 
+/** Status above the bar: taps/s · power · fill/s — colored by Speed / Power. */
+@Composable
+private fun BarRateStatus(
+    autoActive: Boolean,
+    fillRate: Double,
+    tapPower: Double,
+) {
+    val power = if (tapPower > 0.0) tapPower else 1.0
+    val annotated = remember(autoActive, fillRate, power) {
+        buildAnnotatedString {
+            if (!autoActive || fillRate <= 0.0) {
+                withStyle(SpanStyle(color = BrandMuted)) { append("Idle") }
+                if (power > 1.0 + 1e-9) {
+                    withStyle(SpanStyle(color = BrandMuted)) { append(" · ") }
+                    withStyle(SpanStyle(color = BrandPower)) {
+                        append(String.format("%.2f power", power))
+                    }
+                }
+            } else {
+                val tapsPerSec = fillRate / power
+                withStyle(SpanStyle(color = BrandSpeed)) {
+                    append(String.format("%.2f taps/s", tapsPerSec))
+                }
+                withStyle(SpanStyle(color = BrandMuted)) { append(" × ") }
+                withStyle(SpanStyle(color = BrandPower)) {
+                    append(String.format("%.2f power", power))
+                }
+                withStyle(SpanStyle(color = BrandMuted)) { append(" = ") }
+                withStyle(SpanStyle(color = BrandFill)) {
+                    append(String.format("%.2f/s", fillRate))
+                }
+            }
+        }
+    }
+    Text(
+        annotated,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp,
+        maxLines = 1,
+    )
+}
+
+internal fun formatLongerAction(t: Tunables?): String {
+    val seconds = t?.durationBoostSeconds ?: 1800
+    val minutes = seconds / 60
+    return if (minutes % 60 == 0 && minutes >= 60) {
+        "Add ${minutes / 60}h"
+    } else {
+        "Add $minutes min"
+    }
+}
+
+internal fun formatFasterAction(t: Tunables?): String {
+    val amount = t?.speedBoostAmount ?: 0.5
+    return String.format("+%.2f taps/s", amount)
+}
+
+internal fun formatStrongerAction(t: Tunables?): String {
+    val amount = t?.tapStrengthBoostAmount ?: 0.25
+    return String.format("+%.2f power/tap", amount)
+}
+
+internal fun formatSkipTimeAction(t: Tunables?): String {
+    val seconds = t?.skipTimeSeconds ?: 60
+    val minutes = seconds / 60
+    return if (minutes >= 1 && seconds % 60 == 0) {
+        "Skip $minutes min"
+    } else {
+        "Skip ${seconds}s"
+    }
+}
+
+internal fun formatSkipRemaining(skipAdsRemaining: Int): String {
+    return when {
+        skipAdsRemaining < 0 -> "Unlimited"
+        else -> "$skipAdsRemaining left"
+    }
+}
+
+internal fun formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int): String {
+    if (cooldownLeft > 0) return "Next in ${cooldownLeft}s"
+    return formatSkipRemaining(skipAdsRemaining)
+}
+
+/** Raw auto tap rate (excludes Stronger). fillRate from server is total units/s. */
+internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
+    val power = if (tapPower > 0.0) tapPower else 1.0
+    return fillRate / power
+}
+
 @Composable
 private fun ProgressBar(
     displayProgress: Double,
     total: Int,
     autoActive: Boolean,
     fillRate: Double,
+    tapPower: Double,
     onTap: () -> Unit,
 ) {
     val fraction by animateFloatAsState(
         targetValue = if (total > 0) (displayProgress / total).toFloat().coerceIn(0f, 1f) else 0f,
         label = "bar",
     )
-    val status = if (!autoActive) {
-        "Idle"
-    } else {
-        String.format("%.2f taps/s", fillRate)
-    }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
@@ -422,12 +561,7 @@ private fun ProgressBar(
                 color = BrandInk,
                 fontSize = 15.sp,
             )
-            Text(
-                status,
-                color = if (autoActive) BrandAccent else BrandMuted,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp,
-            )
+            BarRateStatus(autoActive = autoActive, fillRate = fillRate, tapPower = tapPower)
         }
         Spacer(Modifier.height(10.dp))
         Box(
@@ -444,76 +578,109 @@ private fun ProgressBar(
                     .fillMaxWidth(fraction.coerceAtLeast(0.04f))
                     .height(30.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(Brush.horizontalGradient(listOf(BrandAccent, BrandAccentHot)))
-                    .border(1.dp, BrandAccentHot.copy(alpha = 0.5f), RoundedCornerShape(50)),
+                    .background(Brush.horizontalGradient(listOf(BrandFill, BrandFillHot)))
+                    .border(1.dp, BrandFillHot.copy(alpha = 0.5f), RoundedCornerShape(50)),
             )
         }
     }
 }
 
 @Composable
+private fun SkipTimeButton(
+    actionLabel: String,
+    remainingLabel: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    val theme = BrandTime
+    val titleColor = if (enabled) BrandInk else BrandMuted.copy(alpha = 0.55f)
+    val detailColor = if (enabled) theme else BrandMuted.copy(alpha = 0.45f)
+    val bg = if (enabled) {
+        Brush.horizontalGradient(
+            listOf(BrandInk.copy(alpha = 0.06f), theme.copy(alpha = 0.20f)),
+        )
+    } else {
+        Brush.horizontalGradient(
+            listOf(BrandInk.copy(alpha = 0.03f), BrandInk.copy(alpha = 0.05f)),
+        )
+    }
+    val borderColor = if (enabled) theme.copy(alpha = 0.85f) else BrandInk.copy(alpha = 0.08f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .clip(shape)
+            .background(bg)
+            .border(1.5.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            actionLabel,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = titleColor,
+        )
+        Text(
+            remainingLabel,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = detailColor,
+        )
+    }
+}
+
+@Composable
 private fun BoostButton(
     title: String,
-    idleSubtitle: String,
+    actionLabel: String,
+    theme: Color,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    activeUntil: String? = null,
-    activeMetric: String? = null,
+    running: Boolean = false,
 ) {
-    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val left = remainingSeconds(activeUntil, nowMs)
-    val active = left > 0L
     val visual = when {
-        active && enabled -> BoostVisual.RunningReady
-        active && !enabled -> BoostVisual.RunningLocked
+        running && enabled -> BoostVisual.RunningReady
+        running && !enabled -> BoostVisual.RunningLocked
         enabled -> BoostVisual.Ready
         else -> BoostVisual.Locked
     }
 
-    LaunchedEffect(activeUntil) {
-        if (activeUntil.isNullOrBlank()) return@LaunchedEffect
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            if (remainingSeconds(activeUntil, nowMs) <= 0L) break
-            delay(250)
-        }
-    }
-
-    val line2 = if (active) formatCountdown(left) else idleSubtitle
-    val line3 = if (active) activeMetric.orEmpty() else ""
     val shape = RoundedCornerShape(18.dp)
-
     val titleColor = when (visual) {
         BoostVisual.Ready, BoostVisual.RunningReady -> BrandInk
         BoostVisual.RunningLocked -> BrandInk.copy(alpha = 0.55f)
         BoostVisual.Locked -> BrandMuted.copy(alpha = 0.55f)
     }
     val detailColor = when (visual) {
-        BoostVisual.Ready -> BrandMuted
-        BoostVisual.RunningReady -> Color(0xFF7A3A12)
-        BoostVisual.RunningLocked -> BrandMuted.copy(alpha = 0.75f)
+        BoostVisual.Ready -> theme
+        BoostVisual.RunningReady -> BrandOnAccent
+        BoostVisual.RunningLocked -> theme.copy(alpha = 0.55f)
         BoostVisual.Locked -> BrandMuted.copy(alpha = 0.45f)
     }
     val bg = when (visual) {
         BoostVisual.Ready -> Brush.verticalGradient(
-            listOf(BrandInk.copy(alpha = 0.06f), BrandAccent.copy(alpha = 0.16f)),
+            listOf(BrandInk.copy(alpha = 0.06f), theme.copy(alpha = 0.18f)),
         )
         BoostVisual.RunningReady -> Brush.verticalGradient(
-            listOf(BrandAccent.copy(alpha = 0.85f), BrandAccentHot.copy(alpha = 0.70f)),
+            listOf(theme.copy(alpha = 0.95f), theme.copy(alpha = 0.70f)),
         )
-        // Same timer content, but washed out — clearly not pressable
         BoostVisual.RunningLocked -> Brush.verticalGradient(
-            listOf(BrandInk.copy(alpha = 0.05f), BrandInk.copy(alpha = 0.08f)),
+            listOf(BrandInk.copy(alpha = 0.05f), theme.copy(alpha = 0.10f)),
         )
         BoostVisual.Locked -> Brush.verticalGradient(
             listOf(BrandInk.copy(alpha = 0.03f), BrandInk.copy(alpha = 0.05f)),
         )
     }
     val borderColor = when (visual) {
-        BoostVisual.Ready -> BrandAccent.copy(alpha = 0.85f)
-        BoostVisual.RunningReady -> BrandAccentHot
-        BoostVisual.RunningLocked -> BrandMuted.copy(alpha = 0.35f)
+        BoostVisual.Ready -> theme.copy(alpha = 0.85f)
+        BoostVisual.RunningReady -> theme
+        BoostVisual.RunningLocked -> theme.copy(alpha = 0.35f)
         BoostVisual.Locked -> BrandInk.copy(alpha = 0.08f)
     }
     val borderWidth = when (visual) {
@@ -541,22 +708,10 @@ private fun BoostButton(
             maxLines = 1,
         )
         Text(
-            line2,
+            actionLabel,
             fontSize = 11.sp,
             color = detailColor,
-            fontWeight = if (visual == BoostVisual.RunningReady || visual == BoostVisual.RunningLocked) {
-                FontWeight.Bold
-            } else {
-                FontWeight.Medium
-            },
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-        )
-        Text(
-            line3.ifEmpty { " " },
-            fontSize = 11.sp,
-            color = if (line3.isEmpty()) Color.Transparent else detailColor,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             maxLines = 1,
         )

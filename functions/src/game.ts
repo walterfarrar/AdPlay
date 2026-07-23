@@ -31,6 +31,7 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
   const g = raw as GameStateDoc;
   if (g.tapStrengthBoostUntil === undefined) g.tapStrengthBoostUntil = null;
   if (g.tapStrengthBoostAmount === undefined) g.tapStrengthBoostAmount = 0;
+  if (g.skipAdsUsed === undefined) g.skipAdsUsed = 0;
   return g;
 }
 
@@ -43,13 +44,15 @@ function autoFillRate(g: GameStateDoc, t: Tunables): number {
 function effectiveFillRate(g: GameStateDoc, t: Tunables, now: Date): number {
   const autoUntil = parseIso(g.autoFillUntil);
   if (!autoUntil || autoUntil <= now) return 0;
-  return autoFillRate(g, t);
+  // Stronger scales auto the same way it scales manual taps (taps/sec × tapPower).
+  return autoFillRate(g, t) * effectiveTapPower(g, t, now);
 }
 
 function effectiveTapPower(g: GameStateDoc, t: Tunables, now: Date): number {
   let power = t.tapUnits;
-  const until = parseIso(g.tapStrengthBoostUntil);
-  if (until && until > now && g.tapStrengthBoostAmount > 0) {
+  // Stronger lasts for the shared auto window (same clock as Longer/Faster).
+  const autoUntil = parseIso(g.autoFillUntil);
+  if (autoUntil && autoUntil > now && g.tapStrengthBoostAmount > 0) {
     power += g.tapStrengthBoostAmount;
   }
   return power;
@@ -69,19 +72,18 @@ function resetDaily(g: GameStateDoc, t: Tunables, now: Date): void {
 
 function refreshAdCycleIfIdle(g: GameStateDoc, now: Date): void {
   const autoUntil = parseIso(g.autoFillUntil);
-  const tapUntil = parseIso(g.tapStrengthBoostUntil);
-  if ((autoUntil && autoUntil > now) || (tapUntil && tapUntil > now)) return;
+  if (autoUntil && autoUntil > now) return;
   g.autoFillUntil = null;
   g.speedBoostUntil = null;
   g.speedBoostAmount = 0;
   g.tapStrengthBoostUntil = null;
   g.tapStrengthBoostAmount = 0;
   g.adsUsed = 0;
+  g.skipAdsUsed = 0;
 }
 
 function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
   const autoUntil = parseIso(g.autoFillUntil);
-  const tapUntil = parseIso(g.tapStrengthBoostUntil);
   let cooldownLeft = 0;
   const lastAd = parseIso(g.lastAdAt);
   if (lastAd) {
@@ -89,24 +91,28 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     cooldownLeft = Math.max(0, Math.ceil(t.adCooldownSeconds - elapsed));
   }
   const autoActive = !!(autoUntil && autoUntil > now);
-  const tapActive = !!(tapUntil && tapUntil > now && g.tapStrengthBoostAmount > 0);
+  const tapActive = autoActive && g.tapStrengthBoostAmount > 0;
   const speedActive = autoActive && g.speedBoostAmount > 0;
+  const skipUsed = g.skipAdsUsed || 0;
+  const skipRemaining =
+    t.skipAdsPerCycle === 0 ? -1 : Math.max(0, t.skipAdsPerCycle - skipUsed);
   return {
     progress: Math.min(g.progress, t.unitsPerSat),
     unitsPerSat: t.unitsPerSat,
     satsBalance: g.satsBalance,
     tapsRemaining: g.tapsRemaining,
     adsRemainingToday: Math.max(0, t.adsPerCycle - g.adsUsed),
+    skipAdsRemaining: skipRemaining,
     satsEarnedToday: g.satsEarnedToday,
     dailySatsEarnCap: t.dailySatsEarnCap,
     autoFillActive: autoActive,
     autoFillUntil: g.autoFillUntil,
     fillRate: effectiveFillRate(g, t, now),
     speedBoostActive: speedActive,
-    // Same shared auto timer — Faster has no separate clock
+    // Same shared auto timer — Faster/Stronger have no separate clock
     speedBoostUntil: autoActive ? g.autoFillUntil : null,
     tapStrengthActive: tapActive,
-    tapStrengthUntil: g.tapStrengthBoostUntil,
+    tapStrengthUntil: tapActive ? g.autoFillUntil : null,
     tapPower: effectiveTapPower(g, t, now),
     adCooldownSecondsLeft: cooldownLeft,
     lastBoostType: g.lastBoostType,
@@ -118,6 +124,29 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
 
 type LedgerCredit = { id: string; reason: string };
 
+/** Apply progress units with bar completions (mutates g; returns credits + earned count). */
+function applyProgressUnits(
+  g: GameStateDoc,
+  t: Tunables,
+  units: number,
+): { earned: number; credits: LedgerCredit[] } {
+  const credits: LedgerCredit[] = [];
+  let earned = 0;
+  if (units <= 0) return { earned, credits };
+  let progress = g.progress + units;
+  while (progress >= t.unitsPerSat) {
+    if (g.satsEarnedToday + earned >= t.dailySatsEarnCap) {
+      progress = t.unitsPerSat - 0.0001;
+      break;
+    }
+    progress -= t.unitsPerSat;
+    earned += 1;
+    credits.push({ id: db().collection("_").doc().id, reason: "bar_complete" });
+  }
+  g.progress = progress;
+  return { earned, credits };
+}
+
 /** Advance auto-fill in memory only (no writes). */
 function advanceInMemory(
   g: GameStateDoc,
@@ -125,7 +154,7 @@ function advanceInMemory(
   at: Date,
 ): { earned: number; credits: LedgerCredit[] } {
   resetDaily(g, t, at);
-  const credits: LedgerCredit[] = [];
+  let credits: LedgerCredit[] = [];
   let earned = 0;
 
   const last = parseIso(g.lastTickAt) ?? at;
@@ -134,37 +163,23 @@ function advanceInMemory(
   if (autoUntil && autoUntil > last) {
     const earnUntil = autoUntil < at ? autoUntil : at;
     const earnSec = Math.max(0, (earnUntil.getTime() - last.getTime()) / 1000);
-    const rate = autoFillRate(g, t);
+    // Use tap power at earnUntil so Stronger applies to offline auto catch-up too.
+    const rate = autoFillRate(g, t) * effectiveTapPower(g, t, earnUntil);
     if (earnSec > 0 && rate > 0) {
-      let units = rate * earnSec;
-      let progress = g.progress + units;
-      while (progress >= t.unitsPerSat) {
-        if (g.satsEarnedToday + earned >= t.dailySatsEarnCap) {
-          progress = t.unitsPerSat - 0.0001;
-          break;
-        }
-        progress -= t.unitsPerSat;
-        earned += 1;
-        credits.push({ id: db().collection("_").doc().id, reason: "bar_complete" });
-      }
-      g.progress = progress;
+      const applied = applyProgressUnits(g, t, rate * earnSec);
+      earned = applied.earned;
+      credits = applied.credits;
     }
   }
 
-  const tapUntil = parseIso(g.tapStrengthBoostUntil);
   const autoAlive = !!(autoUntil && autoUntil > at);
-  const tapAlive = !!(tapUntil && tapUntil > at);
 
-  if (!autoAlive && !tapAlive) {
+  if (!autoAlive) {
+    // Shared auto ended — clear Faster + Stronger with it
     refreshAdCycleIfIdle(g, at);
-  } else if (!autoAlive) {
-    g.autoFillUntil = null;
-    g.speedBoostUntil = null;
-    g.speedBoostAmount = 0;
-  }
-  if (!tapAlive) {
-    g.tapStrengthBoostUntil = null;
-    g.tapStrengthBoostAmount = 0;
+  } else if (g.tapStrengthBoostAmount > 0) {
+    // Keep legacy field mirrored to the shared auto clock
+    g.tapStrengthBoostUntil = g.autoFillUntil;
   }
 
   g.satsEarnedToday += earned;
@@ -185,24 +200,62 @@ function applyManualTapInMemory(
   }
 
   g.tapsRemaining -= 1;
-  const credits: LedgerCredit[] = [];
-  let earned = 0;
-  let progress = g.progress + effectiveTapPower(g, t, at);
-  while (progress >= t.unitsPerSat) {
-    if (g.satsEarnedToday + earned >= t.dailySatsEarnCap) {
-      progress = t.unitsPerSat - 0.0001;
-      break;
-    }
-    progress -= t.unitsPerSat;
-    earned += 1;
-    credits.push({ id: db().collection("_").doc().id, reason: "bar_complete" });
-  }
-  g.progress = progress;
-  g.satsEarnedToday += earned;
-  g.satsBalance += earned;
+  const applied = applyProgressUnits(g, t, effectiveTapPower(g, t, at));
+  g.satsEarnedToday += applied.earned;
+  g.satsBalance += applied.earned;
   g.fillRate = effectiveFillRate(g, t, at);
   g.lastTickAt = nowIso(at);
-  return credits;
+  return applied.credits;
+}
+
+/**
+ * Skip Time: shorten auto by skipSec and credit fillRate × skipSec progress.
+ * Mutates g; returns ledger credits for any completed bars.
+ */
+function applySkipTimeInMemory(
+  g: GameStateDoc,
+  t: Tunables,
+  at: Date,
+): LedgerCredit[] {
+  const autoUntil = parseIso(g.autoFillUntil);
+  if (!autoUntil || autoUntil <= at) {
+    throw Object.assign(new Error("Auto is not running"), { code: "failed-precondition" });
+  }
+  if (g.adsUsed < t.adsPerCycle) {
+    throw Object.assign(new Error("Skip available only after ads are used up"), {
+      code: "failed-precondition",
+    });
+  }
+  if (t.skipAdsPerCycle > 0 && (g.skipAdsUsed || 0) >= t.skipAdsPerCycle) {
+    throw Object.assign(new Error("Skip ad limit reached"), { code: "resource-exhausted" });
+  }
+
+  const remainingSec = Math.max(0, (autoUntil.getTime() - at.getTime()) / 1000);
+  const skipSec = Math.min(t.skipTimeSeconds, remainingSec);
+  if (skipSec <= 0) {
+    throw Object.assign(new Error("No auto time left to skip"), { code: "failed-precondition" });
+  }
+
+  const rate = effectiveFillRate(g, t, at);
+  const applied = applyProgressUnits(g, t, rate * skipSec);
+  g.satsEarnedToday += applied.earned;
+  g.satsBalance += applied.earned;
+
+  const newUntil = new Date(autoUntil.getTime() - skipSec * 1000);
+  g.autoFillUntil = nowIso(newUntil);
+  if (g.tapStrengthBoostAmount > 0) {
+    g.tapStrengthBoostUntil = g.autoFillUntil;
+  }
+
+  g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
+
+  if (newUntil <= at) {
+    refreshAdCycleIfIdle(g, at);
+  }
+
+  g.fillRate = effectiveFillRate(g, t, at);
+  g.lastTickAt = nowIso(at);
+  return applied.credits;
 }
 
 function writeCredits(
@@ -300,11 +353,6 @@ export async function applyBoost(
     const tickCredits = advanceInMemory(g, t, now);
     resetDaily(g, t, now);
 
-    if (g.adsUsed >= t.adsPerCycle) {
-      throw Object.assign(new Error("Ad limit reached — wait for boosts to run out"), {
-        code: "resource-exhausted",
-      });
-    }
     const lastAd = parseIso(g.lastAdAt);
     if (lastAd) {
       const elapsed = (now.getTime() - lastAd.getTime()) / 1000;
@@ -313,16 +361,37 @@ export async function applyBoost(
       }
     }
 
+    let skipCredits: LedgerCredit[] = [];
+
+    if (boostType === "skip_time") {
+      skipCredits = applySkipTimeInMemory(g, t, now);
+      g.lastAdAt = nowIso(now);
+      g.lastBoostType = boostType;
+      writeCredits(tx, uid, [...tickCredits.credits, ...skipCredits]);
+      tx.set(eventRef, { boostType, appliedAt: nowIso(now) });
+      tx.set(ref, g);
+      return toPublic(g, t, now);
+    }
+
+    if (g.adsUsed >= t.adsPerCycle) {
+      throw Object.assign(new Error("Ad limit reached — wait for boosts to run out"), {
+        code: "resource-exhausted",
+      });
+    }
+
     const autoUntil = parseIso(g.autoFillUntil);
     const idle = !autoUntil || autoUntil <= now;
 
     if (boostType === "tap_strength") {
+      // Like Faster: if auto is empty, start the shared window + base rate
+      if (idle) {
+        g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
+        g.speedBoostAmount = t.speedBoostAmount;
+        g.speedBoostUntil = null;
+      }
       g.tapStrengthBoostAmount = (g.tapStrengthBoostAmount || 0) + t.tapStrengthBoostAmount;
-      g.tapStrengthBoostUntil = extendIsoBySeconds(
-        g.tapStrengthBoostUntil,
-        t.tapStrengthBoostSeconds,
-        now,
-      );
+      // Stronger uses the shared auto clock (no separate timer)
+      g.tapStrengthBoostUntil = g.autoFillUntil;
     } else if (idle) {
       // First Longer/Faster: start shared auto window + base Faster rate
       g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
@@ -331,6 +400,9 @@ export async function applyBoost(
     } else if (boostType === "duration") {
       // Longer: extend the shared auto timer only
       g.autoFillUntil = extendIsoBySeconds(g.autoFillUntil, t.durationBoostSeconds, now);
+      if (g.tapStrengthBoostAmount > 0) {
+        g.tapStrengthBoostUntil = g.autoFillUntil;
+      }
     } else {
       // Faster: raise rate for the remaining shared auto window (no timer change)
       g.speedBoostAmount = g.speedBoostAmount + t.speedBoostAmount;

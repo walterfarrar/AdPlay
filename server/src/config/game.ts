@@ -33,8 +33,8 @@ export const gameConfig = {
   /** @deprecated Unused — Faster no longer has its own timer; kept for config compat */
   speedBoostSeconds: 20 * 60,
 
-  /** Stronger ad: additive units per manual tap; stacks like Faster */
-  tapStrengthBoostAmount: 1,
+  /** Stronger ad: additive tap power (manual + auto); stacks like Faster. Fractional OK. */
+  tapStrengthBoostAmount: 0.25,
 
   /** How long each Stronger extends the tap-strength window */
   tapStrengthBoostSeconds: 20 * 60,

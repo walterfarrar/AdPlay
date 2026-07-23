@@ -118,11 +118,10 @@ function resetDailyCounters(row: GameRow, now: Date): void {
   }
 }
 
-/** When auto and tap-strength windows are both gone, clear boosts and refill ads. */
+/** When the shared auto window is gone, clear boosts and refill ads. */
 function refreshAdCycleIfIdle(row: GameRow, now: Date): void {
   const autoUntil = parseIso(row.auto_fill_until);
-  const tapUntil = parseIso(row.tap_strength_boost_until);
-  if ((autoUntil && autoUntil > now) || (tapUntil && tapUntil > now)) return;
+  if (autoUntil && autoUntil > now) return;
 
   row.auto_fill_until = null;
   row.speed_boost_until = null;
@@ -140,13 +139,13 @@ function autoFillRate(row: GameRow): number {
 function effectiveFillRate(row: GameRow, now: Date): number {
   const autoUntil = parseIso(row.auto_fill_until);
   if (!autoUntil || autoUntil <= now) return 0;
-  return autoFillRate(row);
+  return autoFillRate(row) * effectiveTapPower(row, now);
 }
 
 function effectiveTapPower(row: GameRow, now: Date): number {
   let power = gameConfig.tapUnits;
-  const until = parseIso(row.tap_strength_boost_until);
-  if (until && until > now && row.tap_strength_boost_amount > 0) {
+  const autoUntil = parseIso(row.auto_fill_until);
+  if (autoUntil && autoUntil > now && row.tap_strength_boost_amount > 0) {
     power += row.tap_strength_boost_amount;
   }
   return power;
@@ -163,7 +162,7 @@ export function tickUser(userId: string, at = new Date()): PublicGameState {
   if (autoUntil && autoUntil > last) {
     const earnUntil = autoUntil < at ? autoUntil : at;
     const earnSec = Math.max(0, (earnUntil.getTime() - last.getTime()) / 1000);
-    const rate = autoFillRate(row);
+    const rate = autoFillRate(row) * effectiveTapPower(row, earnUntil);
     if (earnSec > 0 && rate > 0) {
       let units = rate * earnSec;
       let progress = row.progress + units;
@@ -186,20 +185,12 @@ export function tickUser(userId: string, at = new Date()): PublicGameState {
     }
   }
 
-  // Clear expired boosts / refill ad cycle when auto and tap strength are both done
-  const tapUntil = parseIso(row.tap_strength_boost_until);
+  // Clear expired boosts / refill ad cycle when shared auto is done
   const autoAlive = !!(autoUntil && autoUntil > at);
-  const tapAlive = !!(tapUntil && tapUntil > at);
-  if (!autoAlive && !tapAlive) {
+  if (!autoAlive) {
     refreshAdCycleIfIdle(row, at);
-  } else if (!autoAlive) {
-    row.auto_fill_until = null;
-    row.speed_boost_until = null;
-    row.speed_boost_amount = 0;
-  }
-  if (!tapAlive) {
-    row.tap_strength_boost_until = null;
-    row.tap_strength_boost_amount = 0;
+  } else if (row.tap_strength_boost_amount > 0) {
+    row.tap_strength_boost_until = row.auto_fill_until;
   }
 
   row.fill_rate = effectiveFillRate(row, at);
@@ -210,7 +201,6 @@ export function tickUser(userId: string, at = new Date()): PublicGameState {
 
 function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
   const autoUntil = parseIso(row.auto_fill_until);
-  const tapUntil = parseIso(row.tap_strength_boost_until);
   let cooldownLeft = 0;
   const lastAd = parseIso(row.last_ad_at);
   if (lastAd) {
@@ -225,7 +215,7 @@ function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
     .get(userId) as { boost_type: string } | undefined;
 
   const autoActive = !!(autoUntil && autoUntil > now);
-  const tapActive = !!(tapUntil && tapUntil > now && row.tap_strength_boost_amount > 0);
+  const tapActive = autoActive && row.tap_strength_boost_amount > 0;
   const speedActive = autoActive && row.speed_boost_amount > 0;
 
   return {
@@ -242,7 +232,7 @@ function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
     speedBoostActive: speedActive,
     speedBoostUntil: autoActive ? row.auto_fill_until : null,
     tapStrengthActive: tapActive,
-    tapStrengthUntil: row.tap_strength_boost_until,
+    tapStrengthUntil: tapActive ? row.auto_fill_until : null,
     tapPower: effectiveTapPower(row, now),
     adCooldownSecondsLeft: cooldownLeft,
     lastBoostType:
@@ -327,13 +317,19 @@ export function applyBoost(
   const idle = !autoUntil || autoUntil <= now;
 
   if (boostType === "tap_strength") {
+    // Like Faster: if auto is empty, start the shared window + base rate
+    if (idle) {
+      row.auto_fill_until = extendIsoBySeconds(
+        null,
+        gameConfig.durationBoostSeconds,
+        now,
+      );
+      row.speed_boost_amount = gameConfig.speedBoostAmount;
+      row.speed_boost_until = null;
+    }
     row.tap_strength_boost_amount =
       (row.tap_strength_boost_amount || 0) + gameConfig.tapStrengthBoostAmount;
-    row.tap_strength_boost_until = extendIsoBySeconds(
-      row.tap_strength_boost_until,
-      gameConfig.tapStrengthBoostSeconds,
-      now,
-    );
+    row.tap_strength_boost_until = row.auto_fill_until;
   } else if (idle) {
     // First Longer/Faster: shared auto window + base Faster rate
     row.auto_fill_until = extendIsoBySeconds(
@@ -349,6 +345,9 @@ export function applyBoost(
       gameConfig.durationBoostSeconds,
       now,
     );
+    if (row.tap_strength_boost_amount > 0) {
+      row.tap_strength_boost_until = row.auto_fill_until;
+    }
   } else {
     // Faster: rate only — does not change the shared auto timer
     row.speed_boost_amount = row.speed_boost_amount + gameConfig.speedBoostAmount;

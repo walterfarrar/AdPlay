@@ -10,6 +10,15 @@ val BrandInk = Color(0xFFF4F5FA)
 val BrandMuted = Color(0xFF969CB0)
 val BrandAccent = Color(0xFFF7931A)
 val BrandAccentHot = Color(0xFFFF6B2C)
+/** Longer / shared auto timer */
+val BrandTime = Color(0xFF5BB8FF)
+/** Faster / taps per second */
+val BrandSpeed = BrandAccent
+/** Stronger / tap power */
+val BrandPower = Color(0xFFFF5E7A)
+/** Bar fill + total progress/s */
+val BrandFill = Color(0xFF3DDC97)
+val BrandFillHot = Color(0xFF2EC4B6)
 val BrandBgTop = Color(0xFF12131F)
 val BrandBgMid = Color(0xFF0E0F1A)
 val BrandBgBottom = Color(0xFF0A0B12)

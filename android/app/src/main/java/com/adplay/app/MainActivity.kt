@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                         onLonger = { vm.watch(BoostType.DURATION) },
                         onFaster = { vm.watch(BoostType.SPEED) },
                         onStronger = { vm.watch(BoostType.TAP_STRENGTH) },
+                        onSkipTime = { vm.watch(BoostType.SKIP_TIME) },
                         onRedeem = {
                             vm.clearError()
                             showRedeem = true
