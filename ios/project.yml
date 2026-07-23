@@ -37,7 +37,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: KGT8E4849W
       configs:
-        # Flip off to test real AdsBitvex in Debug. Release never defines this.
+        # Optional local override; UI gate is tunables.debugReset (works in TestFlight too).
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG_BYPASS_ADS
     info:

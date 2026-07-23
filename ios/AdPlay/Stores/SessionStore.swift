@@ -10,11 +10,15 @@ final class SessionStore: ObservableObject {
     @Published var isReady = false
     @Published var bypassAds: Bool = DebugAdBypass.isEnabled
 
-    let bypassAdsAvailable = DebugAdBypass.available
     let api = APIClient()
     private var adService: AdServing?
     private var pollTask: Task<Void, Never>?
     private var lastUpdatedAt: String?
+
+    /// Same gate as Reset — server `debugReset` (TestFlight/Release included).
+    var bypassAdsAvailable: Bool {
+        tunables?.debugReset != false
+    }
 
     func start() async {
         isLoading = true
@@ -83,7 +87,7 @@ final class SessionStore: ObservableObject {
     }
 
     func setBypassAds(_ enabled: Bool) {
-        guard DebugAdBypass.available else { return }
+        guard bypassAdsAvailable else { return }
         DebugAdBypass.isEnabled = enabled
         bypassAds = enabled
     }
