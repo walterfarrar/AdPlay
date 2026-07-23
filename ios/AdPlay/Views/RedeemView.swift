@@ -22,7 +22,7 @@ struct RedeemView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     balancePanel
-                    requestPanel
+                    requestForm
                     historyPanel
                 }
                 .padding(20)
