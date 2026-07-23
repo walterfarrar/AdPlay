@@ -33,6 +33,7 @@ final class SessionStore: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         do {
+            GameReminderScheduler.requestPermissionIfNeeded()
             try await refresh(force: true)
             adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "adsbitvex")
             isReady = true
@@ -138,6 +139,7 @@ final class SessionStore: ObservableObject {
         anchorDate = Date()
         windowEndHandled = false
         state = project(next, now: anchorDate)
+        GameReminderScheduler.sync(next)
         ensureTicker()
     }
 
