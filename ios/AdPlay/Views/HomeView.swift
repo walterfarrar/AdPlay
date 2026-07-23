@@ -659,7 +659,7 @@ func remainingSeconds(untilIso: String?, now: Date = Date()) -> Int {
     return max(0, Int(until.timeIntervalSince(now)))
 }
 
-private func parseIso8601(_ value: String) -> Date? {
+func parseIso8601(_ value: String) -> Date? {
     let withFractional = ISO8601DateFormatter()
     withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let date = withFractional.date(from: value) { return date }

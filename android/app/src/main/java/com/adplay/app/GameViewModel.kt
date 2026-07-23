@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Instant
+import kotlin.math.ceil
+import kotlin.math.floor
 
 data class UiState(
     val ready: Boolean = false,
@@ -37,10 +40,20 @@ data class UiState(
 class GameViewModel(app: Application) : AndroidViewModel(app) {
     private val api = ApiClient()
     private var ads: AdServing? = null
-    private var pollJob: Job? = null
-    /** Drop poll results older than the last applied mutation/poll. */
+    private var tickerJob: Job? = null
+    /** Drop stale responses that lost a race with a newer mutation. */
     private var lastUpdatedAt: String? = null
     private val appContext = app.applicationContext
+
+    /**
+     * Last authoritative snapshot from the server and the wall-clock instant it was
+     * received. Everything shown while an auto window runs is projected locally from
+     * this anchor, so we only hit Firebase on real changes — not on a timer.
+     */
+    private var serverState: GameState = GameState()
+    private var anchorMs: Long = System.currentTimeMillis()
+    private var windowEndHandled = false
+    private var foreground = false
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -69,7 +82,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 api.ensureSignedIn()
                 refresh(force = true)
                 _ui.update { it.copy(ready = true, loading = false) }
-                startPolling()
+                foreground = true
+                ensureTicker()
             } catch (e: Exception) {
                 _ui.update {
                     it.copy(
@@ -79,6 +93,20 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /** App came to the foreground: re-sync once with the server, then animate locally. */
+    fun onForeground() {
+        foreground = true
+        if (!_ui.value.ready) return
+        viewModelScope.launch { runCatching { refresh(force = true) } }
+        ensureTicker()
+    }
+
+    /** App backgrounded: stop the local animation loop (no network was running anyway). */
+    fun onBackground() {
+        foreground = false
+        tickerJob?.cancel()
     }
 
     fun clearError() {
@@ -152,26 +180,84 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(tunables = tunables, error = null) }
     }
 
+    /**
+     * Apply an authoritative server snapshot: it always wins over any locally
+     * projected values, so a tampered client can never keep fake progress/balance.
+     */
     private fun applyState(state: GameState, force: Boolean) {
         val incoming = state.updatedAt
         val prev = lastUpdatedAt
         if (!force && incoming != null && prev != null && incoming < prev) {
-            return // stale poll lost a race with a newer tap/boost
+            return // stale response lost a race with a newer tap/boost
         }
         if (incoming != null) lastUpdatedAt = incoming
+        serverState = state
+        anchorMs = System.currentTimeMillis()
+        windowEndHandled = false
         _ui.update { it.copy(state = state) }
         GameReminderScheduler.sync(appContext, state)
+        ensureTicker()
     }
 
-    private fun startPolling() {
-        pollJob?.cancel()
-        pollJob = viewModelScope.launch {
-            while (isActive) {
-                val s = _ui.value.state
-                val busy = s.autoFillActive || s.adCooldownSecondsLeft > 0 || s.tapStrengthActive
-                delay(if (busy) 400 else 2_000)
-                runCatching { refresh(force = false) }
+    /**
+     * Local, network-free animation loop. While an auto window is running everything
+     * is deterministic (progress = fillRate x elapsed, cooldown counts down), so we
+     * project from the last server snapshot instead of polling. When the window ends
+     * we hit the server exactly once to pull the authoritative reset (ads refilled).
+     */
+    private fun ensureTicker() {
+        if (!foreground) return
+        if (tickerJob?.isActive == true) return
+        tickerJob = viewModelScope.launch {
+            while (isActive && foreground) {
+                val now = System.currentTimeMillis()
+                val projected = project(serverState, now)
+                _ui.update { it.copy(state = projected) }
+
+                if (serverState.autoFillActive && !windowEndHandled) {
+                    val untilMs = parseMs(serverState.autoFillUntil)
+                    if (untilMs != null && now >= untilMs) {
+                        windowEndHandled = true
+                        runCatching { refresh(force = true) }
+                    }
+                }
+
+                val shown = _ui.value.state
+                if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0) break
+                delay(1_000)
             }
         }
     }
+
+    /** Project a server snapshot forward by wall-clock elapsed time (display only). */
+    private fun project(s: GameState, nowMs: Long): GameState {
+        val elapsedSec = (nowMs - anchorMs).coerceAtLeast(0L) / 1000.0
+        val cooldown = ceil(s.adCooldownSecondsLeft - elapsedSec).toInt().coerceAtLeast(0)
+        val untilMs = parseMs(s.autoFillUntil)
+        val autoActive = s.autoFillActive && untilMs != null && untilMs > nowMs
+
+        if (!s.autoFillActive || s.fillRate <= 0.0 || s.unitsPerSat <= 0 || untilMs == null) {
+            return s.copy(adCooldownSecondsLeft = cooldown, autoFillActive = autoActive)
+        }
+
+        val earnUntil = minOf(nowMs, untilMs)
+        val earnSec = (earnUntil - anchorMs).coerceAtLeast(0L) / 1000.0
+        val total = s.progress + s.fillRate * earnSec
+        var bars = floor(total / s.unitsPerSat).toInt().coerceAtLeast(0)
+        val maxBars = (s.dailySatsEarnCap - s.satsEarnedToday).coerceAtLeast(0)
+        if (bars > maxBars) bars = maxBars
+        val newProgress = (total - bars.toDouble() * s.unitsPerSat)
+            .coerceIn(0.0, s.unitsPerSat.toDouble())
+
+        return s.copy(
+            progress = newProgress,
+            satsBalance = s.satsBalance + bars,
+            satsEarnedToday = s.satsEarnedToday + bars,
+            adCooldownSecondsLeft = cooldown,
+            autoFillActive = autoActive,
+        )
+    }
+
+    private fun parseMs(iso: String?): Long? =
+        iso?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
 }
