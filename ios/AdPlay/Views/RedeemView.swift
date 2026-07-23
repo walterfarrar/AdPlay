@@ -8,6 +8,7 @@ struct RedeemView: View {
     @State private var invoice = ""
     @State private var history: [Withdrawal] = []
     @State private var didSubmit = false
+    @State private var localError: String?
 
     private let pageBg = Color(red: 0.055, green: 0.059, blue: 0.102) // #0E0F1A
     private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149) // #171826
@@ -46,15 +47,23 @@ struct RedeemView: View {
 
     private var balancePanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(session.state.satsBalance) sats")
+            Text(formatSatsAsBtc(session.state.satsBalance))
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(Color("BrandInk"))
-            Text("Available balance")
+                .monospacedDigit()
+            Text("BTC available to redeem")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
-            Text("Minimum withdrawal: \(session.state.minWithdrawSats) sats")
+            Text(
+                "This balance only increases when a progress bar fills completely. " +
+                    "Watching ads speeds up earning on the home screen — partial fills don’t count here yet."
+            )
+            .font(.footnote)
+            .foregroundStyle(Color("BrandMuted"))
+            Text("Minimum withdrawal: \(formatSatsAsBtc(session.state.minWithdrawSats)) BTC")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Color("BrandInk"))
+                .monospacedDigit()
             Text("Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
@@ -69,17 +78,22 @@ struct RedeemView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    private var requestPanel: some View {
+    private var requestForm: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Request")
                 .font(.headline)
                 .foregroundStyle(Color("BrandInk"))
 
-            labeledField(title: "Amount (sats)") {
-                TextField("e.g. 1000", text: $amountText)
-                    .keyboardType(.numberPad)
+            labeledField(title: "Amount (BTC)") {
+                TextField("e.g. 0.00001000", text: $amountText)
+                    .keyboardType(.decimalPad)
                     .foregroundStyle(Color("BrandInk"))
                     .tint(Color("BrandAccent"))
+                    .monospacedDigit()
+                    .onChange(of: amountText) { _, newValue in
+                        let filtered = filterBtcInput(newValue)
+                        if filtered != newValue { amountText = filtered }
+                    }
             }
 
             labeledField(title: "BOLT11 invoice") {
@@ -93,8 +107,10 @@ struct RedeemView: View {
 
             Button {
                 Task {
-                    guard let amount = Int(amountText) else {
-                        session.errorMessage = "Enter a valid amount"
+                    localError = nil
+                    session.errorMessage = nil
+                    guard let amount = parseBtcToSats(amountText) else {
+                        localError = "Enter a valid BTC amount"
                         return
                     }
                     didSubmit = await session.withdraw(amountSats: amount, bolt11: invoice)
@@ -122,7 +138,7 @@ struct RedeemView: View {
             }
             .disabled(amountText.isEmpty || invoice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-            if let err = session.errorMessage {
+            if let err = localError ?? session.errorMessage {
                 Text(err).foregroundStyle(.red).font(.footnote)
             }
             if didSubmit {
@@ -151,9 +167,10 @@ struct RedeemView: View {
             } else {
                 ForEach(history) { w in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(w.sats) sats · \(w.status)")
+                        Text("\(formatSatsAsBtc(w.sats)) BTC · \(w.status)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color("BrandInk"))
+                            .monospacedDigit()
                         if let created = w.createdAt ?? w.created_at {
                             Text(created)
                                 .font(.caption)
@@ -202,4 +219,42 @@ struct RedeemView: View {
     private func loadHistory() async {
         history = (try? await session.api.myWithdrawals()) ?? []
     }
+}
+
+/// Whole-sat balances as BTC (8 dp — 1 sat = 0.00000001).
+func formatSatsAsBtc(_ sats: Int) -> String {
+    String(format: "%.8f", Double(sats) * 1e-8)
+}
+
+/// Parse a BTC string into whole sats (nearest sat).
+func parseBtcToSats(_ text: String) -> Int? {
+    guard let btc = Double(text.trimmingCharacters(in: .whitespacesAndNewlines)), btc > 0 else {
+        return nil
+    }
+    let sats = (btc * 1e8).rounded()
+    guard sats > 0, sats <= Double(Int.max) else { return nil }
+    return Int(sats)
+}
+
+private let btcInputDecimals = 8
+
+func filterBtcInput(_ raw: String) -> String {
+    var result = ""
+    var sawDot = false
+    for ch in raw {
+        if ch.isNumber {
+            result.append(ch)
+        } else if ch == ".", !sawDot {
+            sawDot = true
+            result.append(ch)
+        }
+    }
+    if let dot = result.firstIndex(of: ".") {
+        let decimals = result.distance(from: result.index(after: dot), to: result.endIndex)
+        if decimals > btcInputDecimals {
+            let end = result.index(result.index(after: dot), offsetBy: btcInputDecimals)
+            result = String(result[..<end])
+        }
+    }
+    return result
 }

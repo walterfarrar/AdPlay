@@ -30,6 +30,9 @@ class AdsBitvexAdService(
     private val appContext: Context,
 ) : AdServing {
     override suspend fun showBoostAd(type: BoostType): GameState {
+        if (DebugAdBypass.isEnabled(appContext)) {
+            return MockAdService(api).showBoostAd(type)
+        }
         val deferred = CompletableDeferred<Boolean>()
         AdsBitvexAdActivity.pendingResult?.cancel()
         AdsBitvexAdActivity.pendingResult = deferred

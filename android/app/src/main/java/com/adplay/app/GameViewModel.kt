@@ -7,6 +7,7 @@ import com.adplay.app.data.AdServiceFactory
 import com.adplay.app.data.AdServing
 import com.adplay.app.data.ApiClient
 import com.adplay.app.data.BoostType
+import com.adplay.app.data.DebugAdBypass
 import com.adplay.app.data.GameState
 import com.adplay.app.data.Tunables
 import com.adplay.app.data.Withdrawal
@@ -28,6 +29,9 @@ data class UiState(
     val error: String? = null,
     val withdrawals: List<Withdrawal> = emptyList(),
     val apiBaseUrl: String = "Firebase (adplay-sats)",
+    /** Debug builds only — skip AdsBitvex and auto-credit boosts. */
+    val bypassAdsAvailable: Boolean = DebugAdBypass.available,
+    val bypassAds: Boolean = false,
 )
 
 class GameViewModel(app: Application) : AndroidViewModel(app) {
@@ -43,7 +47,19 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         GameReminderScheduler.ensureChannel(appContext)
+        _ui.update {
+            it.copy(
+                bypassAdsAvailable = DebugAdBypass.available,
+                bypassAds = DebugAdBypass.isEnabled(appContext),
+            )
+        }
         start()
+    }
+
+    fun setBypassAds(enabled: Boolean) {
+        if (!DebugAdBypass.available) return
+        DebugAdBypass.setEnabled(appContext, enabled)
+        _ui.update { it.copy(bypassAds = enabled) }
     }
 
     fun start() {

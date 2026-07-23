@@ -37,10 +37,47 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
+import kotlin.math.roundToLong
 
 private val Panel = Color(0xFF171826)
 private val PanelBorder = Color(0xFF2B2D3D)
 private val FieldBg = Color(0xFF0B0C14)
+
+/** Whole-sat balances as BTC (8 dp — 1 sat = 0.00000001). */
+internal fun formatSatsAsBtc(sats: Int): String =
+    String.format("%.8f", sats * 1e-8)
+
+/** Parse a BTC string into whole sats (nearest sat). */
+internal fun parseBtcToSats(text: String): Int? {
+    val btc = text.trim().toDoubleOrNull() ?: return null
+    if (btc <= 0.0) return null
+    val sats = (btc * 1e8).roundToLong()
+    if (sats <= 0L || sats > Int.MAX_VALUE) return null
+    return sats.toInt()
+}
+
+private const val BTC_INPUT_DECIMALS = 8
+
+private fun filterBtcInput(raw: String): String {
+    val filtered = buildString {
+        var sawDot = false
+        for (ch in raw) {
+            when {
+                ch.isDigit() -> append(ch)
+                ch == '.' && !sawDot -> {
+                    sawDot = true
+                    append(ch)
+                }
+            }
+        }
+    }
+    val dot = filtered.indexOf('.')
+    return if (dot >= 0 && filtered.length - dot - 1 > BTC_INPUT_DECIMALS) {
+        filtered.take(dot + 1 + BTC_INPUT_DECIMALS)
+    } else {
+        filtered
+    }
+}
 
 @Composable
 fun RedeemScreen(
@@ -93,19 +130,27 @@ fun RedeemScreen(
                     .padding(16.dp),
             ) {
                 Text(
-                    "${ui.state.satsBalance} sats",
+                    formatSatsAsBtc(ui.state.satsBalance),
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
                     color = BrandInk,
                 )
                 Text(
-                    "Available balance",
+                    "BTC available to redeem",
                     color = BrandMuted,
                     fontSize = 13.sp,
                 )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "This balance only increases when a progress bar fills completely. " +
+                        "Watching ads speeds up earning on the home screen — partial fills don’t count here yet.",
+                    color = BrandMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Minimum withdrawal: ${ui.state.minWithdrawSats} sats",
+                    "Minimum withdrawal: ${formatSatsAsBtc(ui.state.minWithdrawSats)} BTC",
                     color = BrandInk,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -134,8 +179,8 @@ fun RedeemScreen(
 
                 OutlinedTextField(
                     value = amountText,
-                    onValueChange = { amountText = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Amount (sats)") },
+                    onValueChange = { amountText = filterBtcInput(it) },
+                    label = { Text("Amount (BTC)") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = redeemFieldColors(),
@@ -153,9 +198,9 @@ fun RedeemScreen(
                 Button(
                     onClick = {
                         localError = null
-                        val amount = amountText.toIntOrNull()
+                        val amount = parseBtcToSats(amountText)
                         if (amount == null) {
-                            localError = "Enter a valid amount"
+                            localError = "Enter a valid BTC amount"
                             return@Button
                         }
                         onSubmit(amount, invoice.trim()) { ok ->
@@ -220,7 +265,7 @@ fun RedeemScreen(
                                 .padding(12.dp),
                         ) {
                             Text(
-                                "${w.sats} sats · ${w.status}",
+                                "${formatSatsAsBtc(w.sats)} BTC · ${w.status}",
                                 fontWeight = FontWeight.SemiBold,
                                 color = BrandInk,
                             )

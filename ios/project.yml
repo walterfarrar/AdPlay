@@ -36,6 +36,10 @@ targets:
         MARKETING_VERSION: "1.0.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: KGT8E4849W
+      configs:
+        # Flip off to test real AdsBitvex in Debug. Release never defines this.
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG_BYPASS_ADS
     info:
       path: AdPlay/Info.plist
       properties:

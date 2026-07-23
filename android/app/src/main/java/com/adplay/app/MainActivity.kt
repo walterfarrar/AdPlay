@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                             showRedeem = true
                         },
                         onDebugReset = { vm.debugReset() },
+                        onToggleBypassAds = { vm.setBypassAds(!ui.bypassAds) },
                         onRetry = { vm.start() },
                     )
 
@@ -99,4 +100,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
+

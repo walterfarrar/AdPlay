@@ -8,7 +8,9 @@ final class SessionStore: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isReady = false
+    @Published var bypassAds: Bool = DebugAdBypass.isEnabled
 
+    let bypassAdsAvailable = DebugAdBypass.available
     let api = APIClient()
     private var adService: AdServing?
     private var pollTask: Task<Void, Never>?
@@ -78,6 +80,12 @@ final class SessionStore: ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func setBypassAds(_ enabled: Bool) {
+        guard DebugAdBypass.available else { return }
+        DebugAdBypass.isEnabled = enabled
+        bypassAds = enabled
     }
 
     func debugReset() async {

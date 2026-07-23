@@ -29,6 +29,9 @@ final class AdsBitvexAdService: AdServing {
     }
 
     func showBoostAd(type: BoostType) async throws -> GameState {
+        if DebugAdBypass.isEnabled {
+            return try await MockAdService(api: api).showBoostAd(type: type)
+        }
         let ok = await AdsBitvexPresenter.shared.present()
         guard ok else {
             throw APIError.message("Ad not completed")

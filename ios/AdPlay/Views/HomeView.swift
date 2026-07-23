@@ -16,6 +16,13 @@ struct HomeView: View {
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                         .foregroundStyle(Color("BrandInk"))
                     Spacer()
+                    if session.bypassAdsAvailable {
+                        Button(session.bypassAds ? "Skip ads" : "Real ads") {
+                            session.setBypassAds(!session.bypassAds)
+                        }
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(session.bypassAds ? Color("BrandAccent") : Color("BrandMuted"))
+                    }
                     if session.tunables?.debugReset != false {
                         Button("Reset") {
                             Task { await session.debugReset() }

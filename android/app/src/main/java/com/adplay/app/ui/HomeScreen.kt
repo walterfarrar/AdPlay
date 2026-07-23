@@ -67,6 +67,7 @@ fun HomeScreen(
     onStronger: () -> Unit,
     onRedeem: () -> Unit,
     onDebugReset: () -> Unit,
+    onToggleBypassAds: () -> Unit,
     onRetry: () -> Unit,
 ) {
     Box(
@@ -177,6 +178,15 @@ fun HomeScreen(
                     ) {
                         Text("AdPlay", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (ui.bypassAdsAvailable) {
+                                TextButton(onClick = onToggleBypassAds) {
+                                    Text(
+                                        if (ui.bypassAds) "Skip ads" else "Real ads",
+                                        color = if (ui.bypassAds) BrandAccent else BrandMuted,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
                             if (ui.tunables?.debugReset != false) {
                                 TextButton(onClick = onDebugReset) {
                                     Text("Reset", color = BrandMuted, fontWeight = FontWeight.SemiBold)

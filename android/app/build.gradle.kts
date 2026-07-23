@@ -34,9 +34,19 @@ android {
 
         buildConfigField("String", "ADSBITVEX_APP_ID", "\"000241\"")
 
+        // Override per buildType. Flip debug → false to test real AdsBitvex locally.
+        buildConfigField("boolean", "DEBUG_BYPASS_ADS", "false")
+
     }
 
-
+    buildTypes {
+        debug {
+            buildConfigField("boolean", "DEBUG_BYPASS_ADS", "true")
+        }
+        release {
+            buildConfigField("boolean", "DEBUG_BYPASS_ADS", "false")
+        }
+    }
 
     buildFeatures {
 
