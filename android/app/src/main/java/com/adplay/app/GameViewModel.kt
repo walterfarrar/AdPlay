@@ -237,7 +237,16 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val autoActive = s.autoFillActive && untilMs != null && untilMs > nowMs
 
         if (!s.autoFillActive || s.fillRate <= 0.0 || s.unitsPerSat <= 0 || untilMs == null) {
-            return s.copy(adCooldownSecondsLeft = cooldown, autoFillActive = autoActive)
+            return s.copy(
+                adCooldownSecondsLeft = cooldown,
+                autoFillActive = autoActive,
+                durationBoostActive = if (autoActive) s.durationBoostActive else false,
+                speedBoostActive = if (autoActive) s.speedBoostActive else false,
+                tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
+                durationBoostCount = if (autoActive) s.durationBoostCount else 0,
+                speedBoostCount = if (autoActive) s.speedBoostCount else 0,
+                tapStrengthBoostCount = if (autoActive) s.tapStrengthBoostCount else 0,
+            )
         }
 
         val earnUntil = minOf(nowMs, untilMs)
@@ -255,6 +264,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             satsEarnedToday = s.satsEarnedToday + bars,
             adCooldownSecondsLeft = cooldown,
             autoFillActive = autoActive,
+            durationBoostActive = if (autoActive) s.durationBoostActive else false,
+            speedBoostActive = if (autoActive) s.speedBoostActive else false,
+            tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
+            durationBoostCount = if (autoActive) s.durationBoostCount else 0,
+            speedBoostCount = if (autoActive) s.speedBoostCount else 0,
+            tapStrengthBoostCount = if (autoActive) s.tapStrengthBoostCount else 0,
         )
     }
 

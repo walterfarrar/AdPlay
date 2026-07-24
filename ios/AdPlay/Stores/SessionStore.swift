@@ -180,6 +180,14 @@ final class SessionStore: ObservableObject {
             var c = s
             c.adCooldownSecondsLeft = cooldown
             c.autoFillActive = autoActive
+            if !autoActive {
+                c.durationBoostActive = false
+                c.speedBoostActive = false
+                c.tapStrengthActive = false
+                c.durationBoostCount = 0
+                c.speedBoostCount = 0
+                c.tapStrengthBoostCount = 0
+            }
             return c
         }
 
@@ -197,6 +205,14 @@ final class SessionStore: ObservableObject {
         c.satsEarnedToday = s.satsEarnedToday + bars
         c.adCooldownSecondsLeft = cooldown
         c.autoFillActive = autoActive
+        if !autoActive {
+            c.durationBoostActive = false
+            c.speedBoostActive = false
+            c.tapStrengthActive = false
+            c.durationBoostCount = 0
+            c.speedBoostCount = 0
+            c.tapStrengthBoostCount = 0
+        }
         return c
     }
 }

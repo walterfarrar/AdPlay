@@ -15,6 +15,10 @@ struct GameState: Codable, Equatable {
     var fillRate: Double
     var speedBoostActive: Bool
     var speedBoostUntil: String?
+    var durationBoostActive: Bool?
+    var durationBoostCount: Int?
+    var speedBoostCount: Int?
+    var tapStrengthBoostCount: Int?
     var tapStrengthActive: Bool?
     var tapStrengthUntil: String?
     var tapPower: Double?
@@ -33,6 +37,12 @@ struct GameState: Codable, Equatable {
 
     var effectiveSkipAdsRemaining: Int { skipAdsRemaining ?? 0 }
 
+    var longerBoostActive: Bool { durationBoostActive ?? false }
+
+    var longerBoostCount: Int { durationBoostCount ?? 0 }
+    var fasterBoostCount: Int { speedBoostCount ?? 0 }
+    var strongerBoostCount: Int { tapStrengthBoostCount ?? 0 }
+
     static let empty = GameState(
         progress: 0,
         unitsPerSat: 1000,
@@ -47,6 +57,10 @@ struct GameState: Codable, Equatable {
         fillRate: 0,
         speedBoostActive: false,
         speedBoostUntil: nil,
+        durationBoostActive: false,
+        durationBoostCount: 0,
+        speedBoostCount: 0,
+        tapStrengthBoostCount: 0,
         tapStrengthActive: false,
         tapStrengthUntil: nil,
         tapPower: 1,

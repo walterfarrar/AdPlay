@@ -288,7 +288,8 @@ fun HomeScreen(
                             title = "Longer",
                             actionLabel = formatLongerAction(t),
                             theme = BrandTime,
-                            running = state.autoFillActive,
+                            running = state.durationBoostActive,
+                            applyCount = state.durationBoostCount,
                             enabled = canWatch,
                             onClick = onLonger,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -297,7 +298,8 @@ fun HomeScreen(
                             title = "Faster",
                             actionLabel = formatFasterAction(t),
                             theme = BrandSpeed,
-                            running = state.autoFillActive && state.fillRate > 0,
+                            running = state.speedBoostActive,
+                            applyCount = state.speedBoostCount,
                             enabled = canWatch,
                             onClick = onFaster,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -307,6 +309,7 @@ fun HomeScreen(
                             actionLabel = formatStrongerAction(t),
                             theme = BrandPower,
                             running = state.tapStrengthActive,
+                            applyCount = state.tapStrengthBoostCount,
                             enabled = canWatch,
                             onClick = onStronger,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -643,6 +646,7 @@ private fun BoostButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     running: Boolean = false,
+    applyCount: Int = 0,
 ) {
     val visual = when {
         running && enabled -> BoostVisual.RunningReady
@@ -662,6 +666,12 @@ private fun BoostButton(
         BoostVisual.RunningReady -> BrandOnAccent
         BoostVisual.RunningLocked -> theme.copy(alpha = 0.55f)
         BoostVisual.Locked -> BrandMuted.copy(alpha = 0.45f)
+    }
+    val countColor = when (visual) {
+        BoostVisual.Ready -> BrandInk.copy(alpha = 0.45f)
+        BoostVisual.RunningReady -> BrandOnAccent.copy(alpha = 0.75f)
+        BoostVisual.RunningLocked -> theme.copy(alpha = 0.40f)
+        BoostVisual.Locked -> BrandMuted.copy(alpha = 0.35f)
     }
     val bg = when (visual) {
         BoostVisual.Ready -> Brush.verticalGradient(
@@ -696,7 +706,7 @@ private fun BoostButton(
             .background(bg)
             .border(borderWidth, borderColor, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 12.dp),
+            .padding(horizontal = 4.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -712,6 +722,14 @@ private fun BoostButton(
             fontSize = 11.sp,
             color = detailColor,
             fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
+        Text(
+            "($applyCount)",
+            fontSize = 11.sp,
+            color = countColor,
+            fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
             maxLines = 1,
         )

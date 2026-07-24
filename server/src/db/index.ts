@@ -21,6 +21,7 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
 
+  const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
   db.exec(schema);
 
   // Additive migrations for existing DBs
@@ -34,6 +35,31 @@ export function getDb(): DatabaseSync {
   if (!names.has("tap_strength_boost_amount")) {
     db.exec(
       "ALTER TABLE game_state ADD COLUMN tap_strength_boost_amount REAL NOT NULL DEFAULT 0",
+    );
+  }
+  if (!names.has("duration_boost_count")) {
+    db.exec(
+      "ALTER TABLE game_state ADD COLUMN duration_boost_count INTEGER NOT NULL DEFAULT 0",
+    );
+    if (names.has("duration_boost_applied")) {
+      db.exec(
+        "UPDATE game_state SET duration_boost_count = CASE WHEN duration_boost_applied != 0 THEN 1 ELSE 0 END",
+      );
+    }
+  }
+  if (!names.has("speed_boost_count")) {
+    db.exec(
+      "ALTER TABLE game_state ADD COLUMN speed_boost_count INTEGER NOT NULL DEFAULT 0",
+    );
+    if (names.has("speed_boost_applied")) {
+      db.exec(
+        "UPDATE game_state SET speed_boost_count = CASE WHEN speed_boost_applied != 0 THEN 1 ELSE 0 END",
+      );
+    }
+  }
+  if (!names.has("tap_strength_boost_count")) {
+    db.exec(
+      "ALTER TABLE game_state ADD COLUMN tap_strength_boost_count INTEGER NOT NULL DEFAULT 0",
     );
   }
 

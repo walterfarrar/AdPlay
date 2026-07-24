@@ -63,5 +63,8 @@ export function freshGame(t: Tunables, now = new Date()): import("./types").Game
     lastTickAt: nowIso(now),
     lastBoostType: null,
     satsBalance: 0,
+    durationBoostCount: 0,
+    speedBoostCount: 0,
+    tapStrengthBoostCount: 0,
   };
 }

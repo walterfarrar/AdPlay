@@ -14,8 +14,14 @@ export type PublicGameState = {
   autoFillActive: boolean;
   autoFillUntil: string | null;
   fillRate: number;
+  /** True only after the player watched a Faster ad this cycle. */
   speedBoostActive: boolean;
   speedBoostUntil: string | null;
+  /** True only after the player watched a Longer ad this cycle. */
+  durationBoostActive: boolean;
+  durationBoostCount: number;
+  speedBoostCount: number;
+  tapStrengthBoostCount: number;
   tapStrengthActive: boolean;
   tapStrengthUntil: string | null;
   tapPower: number;
@@ -35,6 +41,9 @@ type GameRow = {
   speed_boost_amount: number;
   tap_strength_boost_until: string | null;
   tap_strength_boost_amount: number;
+  duration_boost_count: number;
+  speed_boost_count: number;
+  tap_strength_boost_count: number;
   taps_remaining: number;
   tap_day: string;
   ads_used_today: number;
@@ -68,8 +77,20 @@ function creditSat(userId: string, count: number, meta?: Record<string, unknown>
 function loadRow(userId: string): GameRow {
   const row = getDb()
     .prepare("SELECT * FROM game_state WHERE user_id = ?")
-    .get(userId) as GameRow | undefined;
+    .get(userId) as GameRow & {
+      duration_boost_applied?: number;
+      speed_boost_applied?: number;
+    };
   if (!row) throw new Error("game_state missing");
+  if (row.duration_boost_count == null) {
+    row.duration_boost_count = row.duration_boost_applied ? 1 : 0;
+  }
+  if (row.speed_boost_count == null) {
+    row.speed_boost_count = row.speed_boost_applied ? 1 : 0;
+  }
+  if (row.tap_strength_boost_count == null) {
+    row.tap_strength_boost_count = row.tap_strength_boost_amount > 0 ? 1 : 0;
+  }
   return row;
 }
 
@@ -79,6 +100,7 @@ function saveRow(row: GameRow): void {
       `UPDATE game_state SET
         progress = ?, fill_rate = ?, auto_fill_until = ?, speed_boost_until = ?,
         speed_boost_amount = ?, tap_strength_boost_until = ?, tap_strength_boost_amount = ?,
+        duration_boost_count = ?, speed_boost_count = ?, tap_strength_boost_count = ?,
         taps_remaining = ?, tap_day = ?,
         ads_used_today = ?, ads_day = ?, sats_earned_today = ?, sats_day = ?,
         last_ad_at = ?, last_tick_at = ?, updated_at = ?
@@ -92,6 +114,9 @@ function saveRow(row: GameRow): void {
       row.speed_boost_amount,
       row.tap_strength_boost_until,
       row.tap_strength_boost_amount,
+      row.duration_boost_count || 0,
+      row.speed_boost_count || 0,
+      row.tap_strength_boost_count || 0,
       row.taps_remaining,
       row.tap_day,
       row.ads_used_today,
@@ -128,6 +153,9 @@ function refreshAdCycleIfIdle(row: GameRow, now: Date): void {
   row.speed_boost_amount = 0;
   row.tap_strength_boost_until = null;
   row.tap_strength_boost_amount = 0;
+  row.duration_boost_count = 0;
+  row.speed_boost_count = 0;
+  row.tap_strength_boost_count = 0;
   row.ads_used_today = 0;
 }
 
@@ -215,8 +243,12 @@ function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
     .get(userId) as { boost_type: string } | undefined;
 
   const autoActive = !!(autoUntil && autoUntil > now);
+  const durationCount = row.duration_boost_count || 0;
+  const speedCount = row.speed_boost_count || 0;
+  const tapCount = row.tap_strength_boost_count || 0;
   const tapActive = autoActive && row.tap_strength_boost_amount > 0;
-  const speedActive = autoActive && row.speed_boost_amount > 0;
+  const speedActive = autoActive && speedCount > 0;
+  const durationActive = autoActive && durationCount > 0;
 
   return {
     progress: Math.min(row.progress, gameConfig.unitsPerSat),
@@ -231,6 +263,10 @@ function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
     fillRate: effectiveFillRate(row, now),
     speedBoostActive: speedActive,
     speedBoostUntil: autoActive ? row.auto_fill_until : null,
+    durationBoostActive: durationActive,
+    durationBoostCount: durationCount,
+    speedBoostCount: speedCount,
+    tapStrengthBoostCount: tapCount,
     tapStrengthActive: tapActive,
     tapStrengthUntil: tapActive ? row.auto_fill_until : null,
     tapPower: effectiveTapPower(row, now),
@@ -329,6 +365,7 @@ export function applyBoost(
     }
     row.tap_strength_boost_amount =
       (row.tap_strength_boost_amount || 0) + gameConfig.tapStrengthBoostAmount;
+    row.tap_strength_boost_count = (row.tap_strength_boost_count || 0) + 1;
     row.tap_strength_boost_until = row.auto_fill_until;
   } else if (idle) {
     // First Longer/Faster: shared auto window + base Faster rate
@@ -339,18 +376,25 @@ export function applyBoost(
     );
     row.speed_boost_amount = gameConfig.speedBoostAmount;
     row.speed_boost_until = null;
+    if (boostType === "duration") {
+      row.duration_boost_count = (row.duration_boost_count || 0) + 1;
+    } else {
+      row.speed_boost_count = (row.speed_boost_count || 0) + 1;
+    }
   } else if (boostType === "duration") {
     row.auto_fill_until = extendIsoBySeconds(
       row.auto_fill_until,
       gameConfig.durationBoostSeconds,
       now,
     );
+    row.duration_boost_count = (row.duration_boost_count || 0) + 1;
     if (row.tap_strength_boost_amount > 0) {
       row.tap_strength_boost_until = row.auto_fill_until;
     }
   } else {
     // Faster: rate only — does not change the shared auto timer
     row.speed_boost_amount = row.speed_boost_amount + gameConfig.speedBoostAmount;
+    row.speed_boost_count = (row.speed_boost_count || 0) + 1;
   }
 
   row.ads_used_today += 1;
@@ -390,6 +434,9 @@ export function resetEverything(userId: string): PublicGameState {
         speed_boost_amount = 0,
         tap_strength_boost_until = NULL,
         tap_strength_boost_amount = 0,
+        duration_boost_count = 0,
+        speed_boost_count = 0,
+        tap_strength_boost_count = 0,
         taps_remaining = ?,
         tap_day = ?,
         ads_used_today = 0,

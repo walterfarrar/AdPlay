@@ -19,9 +19,11 @@ Source of truth: [`server/src/config/game.ts`](../server/src/config/game.ts)
 
 ## First ad vs stacks
 
-When idle (no auto time and no speed boost), the **first** Longer or Faster grants both:
+When idle (no auto time and no speed boost), the **first** Longer or Faster still grants both gameplay effects:
 - **+20 min** auto-fill
 - **0.15 taps/s**
+
+Button “active” state is separate: Longer / Faster / Stronger only light after that specific ad was watched this cycle.
 
 After that:
 

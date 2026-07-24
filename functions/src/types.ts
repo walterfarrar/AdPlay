@@ -65,6 +65,12 @@ export type GameStateDoc = {
   lastTickAt: string;
   lastBoostType: BoostType | null;
   satsBalance: number;
+  /** Times Longer was completed this auto cycle. */
+  durationBoostCount: number;
+  /** Times Faster was completed this auto cycle. */
+  speedBoostCount: number;
+  /** Times Stronger was completed this auto cycle. */
+  tapStrengthBoostCount: number;
 };
 export type PublicGameState = {
   progress: number;
@@ -81,8 +87,17 @@ export type PublicGameState = {
   autoFillActive: boolean;
   autoFillUntil: string | null;
   fillRate: number;
+  /** True only after the player watched a Faster ad this cycle (not starter rate from Longer/Stronger). */
   speedBoostActive: boolean;
   speedBoostUntil: string | null;
+  /** True only after the player watched a Longer ad this cycle. */
+  durationBoostActive: boolean;
+  /** Longer ads completed this run (0 while idle / before first Longer). */
+  durationBoostCount: number;
+  /** Faster ads completed this run. */
+  speedBoostCount: number;
+  /** Stronger ads completed this run. */
+  tapStrengthBoostCount: number;
   tapStrengthActive: boolean;
   tapStrengthUntil: string | null;
   /** Effective progress units per tap right now (also scales auto fill). */

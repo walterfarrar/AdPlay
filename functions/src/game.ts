@@ -28,10 +28,30 @@ function gameRef(uid: string) {
 
 function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables): GameStateDoc {
   if (!raw) return freshGame(t);
-  const g = raw as GameStateDoc;
+  const g = raw as GameStateDoc & {
+    durationBoostApplied?: boolean;
+    speedBoostApplied?: boolean;
+  };
   if (g.tapStrengthBoostUntil === undefined) g.tapStrengthBoostUntil = null;
   if (g.tapStrengthBoostAmount === undefined) g.tapStrengthBoostAmount = 0;
   if (g.skipAdsUsed === undefined) g.skipAdsUsed = 0;
+  // Migrate legacy booleans → counts (true ⇒ at least 1 this cycle).
+  if (g.durationBoostCount === undefined) {
+    g.durationBoostCount = g.durationBoostApplied ? 1 : 0;
+  }
+  if (g.speedBoostCount === undefined) {
+    g.speedBoostCount = g.speedBoostApplied ? 1 : 0;
+  }
+  if (g.tapStrengthBoostCount === undefined) {
+    if (g.tapStrengthBoostAmount > 0 && t.tapStrengthBoostAmount > 0) {
+      g.tapStrengthBoostCount = Math.max(
+        1,
+        Math.round(g.tapStrengthBoostAmount / t.tapStrengthBoostAmount),
+      );
+    } else {
+      g.tapStrengthBoostCount = 0;
+    }
+  }
   return g;
 }
 
@@ -78,6 +98,9 @@ function refreshAdCycleIfIdle(g: GameStateDoc, now: Date): void {
   g.speedBoostAmount = 0;
   g.tapStrengthBoostUntil = null;
   g.tapStrengthBoostAmount = 0;
+  g.durationBoostCount = 0;
+  g.speedBoostCount = 0;
+  g.tapStrengthBoostCount = 0;
   g.adsUsed = 0;
   g.skipAdsUsed = 0;
 }
@@ -91,8 +114,13 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     cooldownLeft = Math.max(0, Math.ceil(t.adCooldownSeconds - elapsed));
   }
   const autoActive = !!(autoUntil && autoUntil > now);
+  const durationCount = g.durationBoostCount || 0;
+  const speedCount = g.speedBoostCount || 0;
+  const tapCount = g.tapStrengthBoostCount || 0;
   const tapActive = autoActive && g.tapStrengthBoostAmount > 0;
-  const speedActive = autoActive && g.speedBoostAmount > 0;
+  // Button "running" state: only after that boost type was actually watched.
+  const speedActive = autoActive && speedCount > 0;
+  const durationActive = autoActive && durationCount > 0;
   const skipUsed = g.skipAdsUsed || 0;
   const skipRemaining =
     t.skipAdsPerCycle === 0 ? -1 : Math.max(0, t.skipAdsPerCycle - skipUsed);
@@ -111,6 +139,10 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     speedBoostActive: speedActive,
     // Same shared auto timer — Faster/Stronger have no separate clock
     speedBoostUntil: autoActive ? g.autoFillUntil : null,
+    durationBoostActive: durationActive,
+    durationBoostCount: durationCount,
+    speedBoostCount: speedCount,
+    tapStrengthBoostCount: tapCount,
     tapStrengthActive: tapActive,
     tapStrengthUntil: tapActive ? g.autoFillUntil : null,
     tapPower: effectiveTapPower(g, t, now),
@@ -390,6 +422,7 @@ export async function applyBoost(
         g.speedBoostUntil = null;
       }
       g.tapStrengthBoostAmount = (g.tapStrengthBoostAmount || 0) + t.tapStrengthBoostAmount;
+      g.tapStrengthBoostCount = (g.tapStrengthBoostCount || 0) + 1;
       // Stronger uses the shared auto clock (no separate timer)
       g.tapStrengthBoostUntil = g.autoFillUntil;
     } else if (idle) {
@@ -397,15 +430,22 @@ export async function applyBoost(
       g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
       g.speedBoostAmount = t.speedBoostAmount;
       g.speedBoostUntil = null;
+      if (boostType === "duration") {
+        g.durationBoostCount = (g.durationBoostCount || 0) + 1;
+      } else {
+        g.speedBoostCount = (g.speedBoostCount || 0) + 1;
+      }
     } else if (boostType === "duration") {
       // Longer: extend the shared auto timer only
       g.autoFillUntil = extendIsoBySeconds(g.autoFillUntil, t.durationBoostSeconds, now);
+      g.durationBoostCount = (g.durationBoostCount || 0) + 1;
       if (g.tapStrengthBoostAmount > 0) {
         g.tapStrengthBoostUntil = g.autoFillUntil;
       }
     } else {
       // Faster: raise rate for the remaining shared auto window (no timer change)
       g.speedBoostAmount = g.speedBoostAmount + t.speedBoostAmount;
+      g.speedBoostCount = (g.speedBoostCount || 0) + 1;
     }
 
     g.adsUsed += 1;

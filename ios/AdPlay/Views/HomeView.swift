@@ -96,7 +96,8 @@ struct HomeView: View {
                         title: "Longer",
                         actionLabel: formatLongerAction(session.tunables),
                         theme: Color("BrandTime"),
-                        running: state.autoFillActive,
+                        running: state.longerBoostActive,
+                        applyCount: state.longerBoostCount,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .duration) }
@@ -105,7 +106,8 @@ struct HomeView: View {
                         title: "Faster",
                         actionLabel: formatFasterAction(session.tunables),
                         theme: Color("BrandAccent"),
-                        running: state.autoFillActive && state.fillRate > 0,
+                        running: state.speedBoostActive,
+                        applyCount: state.fasterBoostCount,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .speed) }
@@ -115,6 +117,7 @@ struct HomeView: View {
                         actionLabel: formatStrongerAction(session.tunables),
                         theme: Color("BrandPower"),
                         running: state.tapStrengthActive ?? false,
+                        applyCount: state.strongerBoostCount,
                         disabled: !canWatch
                     ) {
                         Task { await session.watch(boost: .tapStrength) }
@@ -529,6 +532,7 @@ struct BoostButton: View {
     let actionLabel: String
     let theme: Color
     var running: Bool = false
+    var applyCount: Int = 0
     let disabled: Bool
     let action: () -> Void
 
@@ -545,7 +549,7 @@ struct BoostButton: View {
         }()
 
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 Text(title)
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundStyle(titleColor(visual))
@@ -555,9 +559,13 @@ struct BoostButton: View {
                     .foregroundStyle(detailColor(visual))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                Text("(\(applyCount))")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(countColor(visual))
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .padding(.horizontal, 4)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -587,6 +595,15 @@ struct BoostButton: View {
         case .runningReady: return Color(red: 0.043, green: 0.047, blue: 0.078)
         case .runningLocked: return theme.opacity(0.55)
         case .locked: return Color("BrandMuted").opacity(0.45)
+        }
+    }
+
+    private func countColor(_ visual: Visual) -> Color {
+        switch visual {
+        case .ready: return Color("BrandInk").opacity(0.45)
+        case .runningReady: return Color(red: 0.043, green: 0.047, blue: 0.078).opacity(0.75)
+        case .runningLocked: return theme.opacity(0.40)
+        case .locked: return Color("BrandMuted").opacity(0.35)
         }
     }
 
