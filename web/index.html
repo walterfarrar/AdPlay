@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>AdPlay</title>
+    <meta name="description" content="Tap, watch ads for boosts, earn sats." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="top">
+        <h1 class="brand">AdPlay</h1>
+        <div class="top-actions">
+          <button type="button" id="btn-redeem" class="ghost">Redeem</button>
+          <button type="button" id="btn-reset" class="ghost hidden">Reset</button>
+        </div>
+      </header>
+
+      <p class="hint" id="early-rates">
+        Early rates — they can improve as more players join and ad revenue grows.
+      </p>
+
+      <section class="balance-block">
+        <p class="balance-label">Balance</p>
+        <p class="balance" id="balance">0 sats</p>
+      </section>
+
+      <section class="bar-block">
+        <div class="bar-meta">
+          <span id="bar-count">0 / 1000 taps</span>
+          <span id="bar-rate"></span>
+        </div>
+        <button type="button" id="progress-bar" class="progress" aria-label="Tap to fill">
+          <span id="progress-fill" class="progress-fill"></span>
+        </button>
+        <p class="muted center" id="taps-left">Tap the bar</p>
+      </section>
+
+      <section class="boosts">
+        <p class="muted center boost-caption">Watch an Ad for a Boost</p>
+        <div class="boost-row">
+          <button type="button" class="boost" data-boost="duration" id="boost-longer">
+            <span class="boost-title">Longer</span>
+            <span class="boost-action" id="action-longer">Add 30 min</span>
+            <span class="boost-count" id="count-longer">(0)</span>
+          </button>
+          <button type="button" class="boost" data-boost="speed" id="boost-faster">
+            <span class="boost-title">Faster</span>
+            <span class="boost-action" id="action-faster">+0.50 taps/s</span>
+            <span class="boost-count" id="count-faster">(0)</span>
+          </button>
+          <button type="button" class="boost" data-boost="tap_strength" id="boost-stronger">
+            <span class="boost-title">Stronger</span>
+            <span class="boost-action" id="action-stronger">+0.25 power/tap</span>
+            <span class="boost-count" id="count-stronger">(0)</span>
+          </button>
+        </div>
+        <p class="auto-timer" id="auto-timer">&nbsp;</p>
+        <p class="error" id="error" hidden></p>
+        <p class="muted center" id="ads-footer">…</p>
+        <button type="button" id="btn-skip" class="skip hidden">
+          <span id="skip-action">Skip 1 min</span>
+          <span id="skip-remaining">0 left</span>
+        </button>
+      </section>
+    </main>
+
+    <div id="overlay" class="overlay hidden" role="status">
+      <div class="spinner"></div>
+    </div>
+
+    <dialog id="redeem-dialog">
+      <form method="dialog" id="redeem-form">
+        <h2>Redeem</h2>
+        <p class="muted">
+          Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.
+        </p>
+        <label>
+          Amount (sats)
+          <input id="redeem-amount" type="number" min="1" step="1" required />
+        </label>
+        <label>
+          BOLT11 invoice
+          <textarea id="redeem-bolt11" rows="3" required placeholder="lnbc…"></textarea>
+        </label>
+        <p class="error" id="redeem-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="submit" value="cancel" class="ghost">Close</button>
+          <button type="submit" value="submit" id="redeem-submit" class="primary">Request</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
