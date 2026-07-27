@@ -278,6 +278,15 @@ fun HomeScreen(
                     Spacer(Modifier.weight(0.8f))
 
                     val t = ui.tunables
+                    Text(
+                        "Watch an Ad for a Boost",
+                        color = BrandMuted,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
