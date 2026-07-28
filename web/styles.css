@@ -102,6 +102,15 @@ body {
   margin-top: auto;
 }
 
+.sats-per-hour {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 .bar-meta {
   display: flex;
   justify-content: space-between;

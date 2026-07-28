@@ -615,6 +615,12 @@ struct ProgressBarView: View {
             let fraction = total > 0 ? min(1, display / Double(total)) : 0
 
             VStack(alignment: .leading, spacing: 10) {
+                Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color("BrandAccent"))
+                    .monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .center)
+
                 HStack {
                     Text("\(Int(display.rounded(.down))) / \(total) taps")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -771,6 +777,21 @@ func formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int) -> String 
 func tapsPerSecond(fillRate: Double, tapPower: Double) -> Double {
     let power = tapPower > 0 ? tapPower : 1
     return fillRate / power
+}
+
+/// Sats earned per hour from the current auto fill rate (0 when idle).
+func satsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: Bool) -> Double {
+    guard autoActive, fillRate > 0, unitsPerSat > 0 else { return 0 }
+    return (fillRate / Double(unitsPerSat)) * 3600
+}
+
+func formatSatsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: Bool) -> String {
+    let rate = satsPerHour(fillRate: fillRate, unitsPerSat: unitsPerSat, autoActive: autoActive)
+    if rate <= 0 { return "0 sats/h" }
+    if rate >= 100 {
+        return String(format: "%.0f sats/h", rate)
+    }
+    return String(format: "%.1f sats/h", rate)
 }
 
 struct SkipTimeButton: View {

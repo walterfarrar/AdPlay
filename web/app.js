@@ -107,6 +107,19 @@ function tapsPerSecond(fillRate, tapPower) {
   return fillRate / power;
 }
 
+/** Sats earned per hour from the current auto fill rate (0 when idle). */
+function satsPerHour(fillRate, unitsPerSat, autoActive) {
+  if (!autoActive || fillRate <= 0 || unitsPerSat <= 0) return 0;
+  return (fillRate / unitsPerSat) * 3600;
+}
+
+function formatSatsPerHour(fillRate, unitsPerSat, autoActive) {
+  const rate = satsPerHour(fillRate, unitsPerSat, autoActive);
+  if (rate <= 0) return "0 sats/h";
+  if (rate >= 100) return `${rate.toFixed(0)} sats/h`;
+  return `${rate.toFixed(1)} sats/h`;
+}
+
 /** Project a server snapshot forward by wall-clock elapsed time (display only). */
 function project(s, nowMs) {
   const elapsedSec = Math.max(0, nowMs - anchorMs) / 1000;
@@ -207,6 +220,11 @@ function render(state) {
     !loading && state.adsRemainingToday > 0 && state.adCooldownSecondsLeft === 0;
 
   $("balance").textContent = `${state.satsBalance} sats`;
+  $("sats-per-hour").textContent = formatSatsPerHour(
+    state.fillRate,
+    state.unitsPerSat,
+    state.autoFillActive
+  );
   $("bar-count").textContent = `${Math.floor(state.progress)} / ${state.unitsPerSat} taps`;
 
   const tps = tapsPerSecond(state.fillRate, state.tapPower);
