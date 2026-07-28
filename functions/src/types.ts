@@ -19,8 +19,9 @@ export type Tunables = {
   /** Max banked ad charges (burst pool). */
   adsPerCycle: number;
   /**
-   * Seconds between +1 ad charge while below adsPerCycle.
-   * 0 = no timed regen (charges never refill automatically).
+   * Seconds between +1 ad charge while below adsPerCycle during an active run.
+   * When the shared auto timer ends, charges refill to adsPerCycle immediately.
+   * 0 = no timed regen during a run.
    */
   adRegenSeconds: number;
   /** Seconds of auto time / progress to skip per Skip Time ad. */

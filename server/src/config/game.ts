@@ -45,7 +45,11 @@ export const gameConfig = {
   /** Max banked ad charges */
   adsPerCycle: 10,
 
-  /** Seconds between +1 ad charge while below adsPerCycle. 0 = no regen. */
+  /**
+   * Seconds between +1 ad charge while below adsPerCycle during an active run.
+   * When the shared auto timer ends, charges refill to adsPerCycle immediately.
+   * 0 = no timed regen during a run.
+   */
   adRegenSeconds: 20 * 60,
 
   /** Max sats earnable from bar completions per UTC day. 0 = unlimited. */

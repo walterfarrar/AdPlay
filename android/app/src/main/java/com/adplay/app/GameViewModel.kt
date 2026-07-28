@@ -330,7 +330,25 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val cooldown = ceil(s.adCooldownSecondsLeft - elapsedSec).toInt().coerceAtLeast(0)
         val untilMs = parseMs(s.autoFillUntil)
         val autoActive = s.autoFillActive && untilMs != null && untilMs > nowMs
-        val (adsLeft, regenLeft) = projectAdCharges(s, nowMs)
+        // When the shared auto window just ended, show a full ad bank until refresh lands.
+        val windowExpired = s.autoFillActive && !autoActive
+        val maxCharges = _ui.value.tunables?.adsPerCycle?.coerceAtLeast(0)
+            ?: maxOf(s.adsRemainingToday, 1)
+        val (adsLeft, regenLeft) = if (windowExpired) {
+            maxCharges to 0
+        } else {
+            projectAdCharges(s, nowMs)
+        }
+        val skipLeft = if (windowExpired) {
+            val skipMax = _ui.value.tunables?.skipAdsPerCycle
+            when {
+                skipMax == null -> s.skipAdsRemaining
+                skipMax == 0 -> -1
+                else -> skipMax
+            }
+        } else {
+            s.skipAdsRemaining
+        }
 
         if (!s.autoFillActive || s.fillRate <= 0.0 || s.unitsPerSat <= 0 || untilMs == null) {
             return s.copy(
@@ -338,6 +356,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 autoFillActive = autoActive,
                 adsRemainingToday = adsLeft,
                 adRegenSecondsLeft = regenLeft,
+                nextAdChargeAt = if (windowExpired) null else s.nextAdChargeAt,
+                skipAdsRemaining = skipLeft,
                 durationBoostActive = if (autoActive) s.durationBoostActive else false,
                 speedBoostActive = if (autoActive) s.speedBoostActive else false,
                 tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
@@ -367,6 +387,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             autoFillActive = autoActive,
             adsRemainingToday = adsLeft,
             adRegenSecondsLeft = regenLeft,
+            nextAdChargeAt = if (windowExpired) null else s.nextAdChargeAt,
+            skipAdsRemaining = skipLeft,
             durationBoostActive = if (autoActive) s.durationBoostActive else false,
             speedBoostActive = if (autoActive) s.speedBoostActive else false,
             tapStrengthActive = if (autoActive) s.tapStrengthActive else false,

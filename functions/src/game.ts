@@ -52,7 +52,7 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
       g.tapStrengthBoostCount = 0;
     }
   }
-  // Legacy adsUsed → banked adCharges (do not refill on idle anymore).
+  // Legacy adsUsed → banked adCharges.
   if (g.adCharges === undefined) {
     const used = typeof g.adsUsed === "number" ? g.adsUsed : 0;
     g.adCharges = Math.max(0, t.adsPerCycle - used);
@@ -157,7 +157,8 @@ function resetDaily(g: GameStateDoc, t: Tunables, now: Date): void {
   }
 }
 
-function refreshAdCycleIfIdle(g: GameStateDoc, now: Date): void {
+/** When the shared auto window ends, clear boosts and refill the ad bank. */
+function refreshAdCycleIfIdle(g: GameStateDoc, t: Tunables, now: Date): void {
   const autoUntil = parseIso(g.autoFillUntil);
   if (autoUntil && autoUntil > now) return;
   g.autoFillUntil = null;
@@ -168,7 +169,9 @@ function refreshAdCycleIfIdle(g: GameStateDoc, now: Date): void {
   g.durationBoostCount = 0;
   g.speedBoostCount = 0;
   g.tapStrengthBoostCount = 0;
-  // Ad charges do NOT refill here — timed regen owns the bank.
+  // New run: restore the full ad + skip bank.
+  g.adCharges = Math.max(0, t.adsPerCycle);
+  g.adChargesAt = nowIso(now);
   g.adsUsed = 0;
   g.skipAdsUsed = 0;
 }
@@ -280,8 +283,8 @@ function advanceInMemory(
   const autoAlive = !!(autoUntil && autoUntil > at);
 
   if (!autoAlive) {
-    // Shared auto ended — clear Faster + Stronger with it
-    refreshAdCycleIfIdle(g, at);
+    // Shared auto ended — clear boosts and refill ads for the next run
+    refreshAdCycleIfIdle(g, t, at);
   } else if (g.tapStrengthBoostAmount > 0) {
     // Keep legacy field mirrored to the shared auto clock
     g.tapStrengthBoostUntil = g.autoFillUntil;
@@ -361,7 +364,7 @@ function applySkipTimeInMemory(
   g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
 
   if (newUntil <= at) {
-    refreshAdCycleIfIdle(g, at);
+    refreshAdCycleIfIdle(g, t, at);
   }
 
   g.fillRate = effectiveFillRate(g, t, at);
