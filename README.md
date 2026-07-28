@@ -2,10 +2,16 @@
 
 Idle progress bar → earn sats → redeem via Lightning invoice (manual payout).
 
+**Release target: iOS.** Android (LDPlayer) and the browser client are for testing only.
+
 **Primary local test target:** Android on **LDPlayer** (see [docs/LDPLAYER.md](docs/LDPLAYER.md)).  
 iOS builds without a Mac: **Codemagic** + [docs/CODEMAGIC.md](docs/CODEMAGIC.md).  
 iOS uses the same **Firebase Auth + Cloud Functions** backend as Android (`ios/` via XcodeGen).  
 **Play in browser:** https://walterfarrar.github.io/AdPlay/ (`web/` — GitHub Pages; anonymous Firebase auth + mock boost ads).
+
+### For AI / contributors — client parity
+
+Player-facing work (UI, copy, boosts, ads, redeem, game flow) **must be implemented on iOS in the same change**. Do not ship Android-only or web-only UI and leave iOS for later. Android/web may mirror iOS when those clients already have the screen; iOS is never optional.
 
 ## Quick start
 

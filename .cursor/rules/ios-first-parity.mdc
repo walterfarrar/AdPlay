@@ -1,0 +1,27 @@
+---
+description: iOS is the release target — implement client features on iOS, not Android-only
+alwaysApply: true
+---
+
+# iOS-first client parity
+
+**AdPlay ships on iOS.** Android and `web/` are secondary / test clients.
+
+## Required for every player-facing change
+
+When adding or changing UI, copy, game flow, boosts, ads, redeem, or anything a player sees:
+
+1. **Implement it on iOS** (`ios/AdPlay/…`) in the same change.
+2. Mirror on Android / web only if that client already has the surface — never leave iOS for “later.”
+3. Shared backend (`functions/`, `server/`) is fine once; **do not** treat Android as the primary client.
+
+## Done means
+
+- iOS shows the same label, button, state, and behavior as the product intent.
+- If you only touched Android or web, the task is **not done**.
+
+## Examples
+
+- Caption above boost buttons → `HomeView.swift` **and** `HomeScreen.kt` (and web if present).
+- New boost field / active state → iOS `GameState` + UI bindings, not just Kotlin.
+---

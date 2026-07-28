@@ -16,7 +16,9 @@ ios/Pods/
 .DS_Store
 *.iml
 .idea/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 *.apk
 *.aab
 *.jks

@@ -91,6 +91,12 @@ struct HomeView: View {
 
                 Spacer(minLength: 36)
 
+                Text("Watch an Ad for a Boost")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color("BrandMuted"))
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 8)
+
                 HStack(spacing: 10) {
                     BoostButton(
                         title: "Longer",
