@@ -126,12 +126,26 @@ function project(s, nowMs) {
   const cooldown = Math.max(0, Math.ceil(s.adCooldownSecondsLeft - elapsedSec));
   const untilMs = parseMs(s.autoFillUntil);
   const autoActive = Boolean(s.autoFillActive && untilMs != null && untilMs > nowMs);
+  // When the shared auto window just ended, show a full ad bank until refresh lands.
+  const windowExpired = Boolean(s.autoFillActive && !autoActive);
+  const maxCharges = tunables?.adsPerCycle ?? Math.max(s.adsRemainingToday ?? 0, 1);
+  const adsLeft = windowExpired ? maxCharges : s.adsRemainingToday;
+  const skipMax = tunables?.skipAdsPerCycle;
+  const skipLeft = windowExpired
+    ? skipMax === 0
+      ? -1
+      : skipMax ?? s.skipAdsRemaining
+    : s.skipAdsRemaining;
 
   if (!s.autoFillActive || s.fillRate <= 0 || s.unitsPerSat <= 0 || untilMs == null) {
     return {
       ...s,
       adCooldownSecondsLeft: cooldown,
       autoFillActive: autoActive,
+      adsRemainingToday: adsLeft,
+      adRegenSecondsLeft: windowExpired ? 0 : s.adRegenSecondsLeft,
+      nextAdChargeAt: windowExpired ? null : s.nextAdChargeAt,
+      skipAdsRemaining: skipLeft,
       durationBoostActive: autoActive ? s.durationBoostActive : false,
       speedBoostActive: autoActive ? s.speedBoostActive : false,
       tapStrengthActive: autoActive ? s.tapStrengthActive : false,
@@ -159,6 +173,10 @@ function project(s, nowMs) {
     satsEarnedToday: s.satsEarnedToday + bars,
     adCooldownSecondsLeft: cooldown,
     autoFillActive: autoActive,
+    adsRemainingToday: adsLeft,
+    adRegenSecondsLeft: windowExpired ? 0 : s.adRegenSecondsLeft,
+    nextAdChargeAt: windowExpired ? null : s.nextAdChargeAt,
+    skipAdsRemaining: skipLeft,
     durationBoostActive: autoActive ? s.durationBoostActive : false,
     speedBoostActive: autoActive ? s.speedBoostActive : false,
     tapStrengthActive: autoActive ? s.tapStrengthActive : false,

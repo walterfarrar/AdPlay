@@ -297,7 +297,22 @@ final class SessionStore: ObservableObject {
         let cooldown = max(0, Int(ceil(Double(s.adCooldownSecondsLeft) - elapsed)))
         let until = parseIso8601(s.autoFillUntil ?? "")
         let autoActive = s.autoFillActive && (until.map { $0 > now } ?? false)
-        let (adsLeft, regenLeft) = projectAdCharges(s, now: now)
+        // When the shared auto window just ended, show a full ad bank until refresh lands.
+        let windowExpired = s.autoFillActive && !autoActive
+        let maxCharges = tunables?.adsPerCycle ?? max(s.adsRemainingToday, 1)
+        let adsLeft: Int
+        let regenLeft: Int
+        if windowExpired {
+            adsLeft = maxCharges
+            regenLeft = 0
+        } else {
+            (adsLeft, regenLeft) = projectAdCharges(s, now: now)
+        }
+        let skipLeft: Int? = {
+            guard windowExpired else { return s.skipAdsRemaining }
+            guard let skipMax = tunables?.skipAdsPerCycle else { return s.skipAdsRemaining }
+            return skipMax == 0 ? -1 : skipMax
+        }()
 
         guard s.autoFillActive, s.fillRate > 0, s.unitsPerSat > 0, let until else {
             var c = s
@@ -305,6 +320,8 @@ final class SessionStore: ObservableObject {
             c.autoFillActive = autoActive
             c.adsRemainingToday = adsLeft
             c.adRegenSecondsLeft = regenLeft
+            c.nextAdChargeAt = windowExpired ? nil : s.nextAdChargeAt
+            c.skipAdsRemaining = skipLeft
             if !autoActive {
                 c.durationBoostActive = false
                 c.speedBoostActive = false
@@ -334,6 +351,8 @@ final class SessionStore: ObservableObject {
         c.autoFillActive = autoActive
         c.adsRemainingToday = adsLeft
         c.adRegenSecondsLeft = regenLeft
+        c.nextAdChargeAt = windowExpired ? nil : s.nextAdChargeAt
+        c.skipAdsRemaining = skipLeft
         if !autoActive {
             c.durationBoostActive = false
             c.speedBoostActive = false

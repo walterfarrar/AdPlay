@@ -192,7 +192,7 @@ function resetDailyCounters(row: GameRow, now: Date): void {
   }
 }
 
-/** When the shared auto window is gone, clear boosts. Charges use timed regen. */
+/** When the shared auto window is gone, clear boosts and refill the ad bank. */
 function refreshAdCycleIfIdle(row: GameRow, now: Date): void {
   const autoUntil = parseIso(row.auto_fill_until);
   if (autoUntil && autoUntil > now) return;
@@ -205,6 +205,9 @@ function refreshAdCycleIfIdle(row: GameRow, now: Date): void {
   row.duration_boost_count = 0;
   row.speed_boost_count = 0;
   row.tap_strength_boost_count = 0;
+  // New run: restore the full ad bank.
+  row.ad_charges = Math.max(0, gameConfig.adsPerCycle);
+  row.ad_charges_at = nowIso(now);
   row.ads_used_today = 0;
 }
 
