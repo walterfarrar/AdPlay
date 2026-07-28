@@ -65,6 +65,6 @@ cd ios && xcodegen generate && open AdPlay.xcodeproj
 | [docs/admin-redeem-email.md](docs/admin-redeem-email.md) | Gmail notify + Mark paid secrets |
 | [docs/app-store/](docs/app-store/) | Privacy, age rating, Review Notes |
 
-## Note on AdMob
+## Ads
 
-Do **not** use AdMob (or AppLovin / Unity LevelPlay / ironSource) for this product — crypto cash-out + rewarded ads. Use a crypto-friendly **rewarded video** network after written approval; see [docs/partner-outreach.md](docs/partner-outreach.md). No offerwall.
+**Waterfall:** AdMob rewarded first, AdsBitvex fallback (`adProvider=waterfall`). See [docs/partner-outreach.md](docs/partner-outreach.md). No offerwall. AdMob policy risk for Lightning cash-out remains — we ship and seek approval; AdsBitvex covers fill if Google restricts the account.

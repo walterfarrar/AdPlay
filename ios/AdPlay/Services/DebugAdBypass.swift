@@ -1,7 +1,7 @@
 import Foundation
 
-/// Runtime ad bypass for testing. When enabled, boost buttons skip AdsBitvex
-/// and credit via mockComplete (cooldown / timers still apply).
+/// Runtime ad bypass for testing. When enabled, boost buttons skip the ad
+/// waterfall and credit via mockComplete (cooldown / timers still apply).
 ///
 /// Shown in the UI when server `debugReset` is on (same gate as Reset).
 /// Preference defaults to on so test installs skip ads until you turn it off in-app.

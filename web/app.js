@@ -256,7 +256,7 @@ function render(state) {
   if (state.adsRemainingToday <= 0) {
     footer = state.autoFillActive ? "Ads refill when auto ends" : "More ads soon…";
   } else if (state.adCooldownSecondsLeft > 0) {
-    footer = `Next ad in ${state.adCooldownSecondsLeft}s · ${state.adsRemainingToday} ads left`;
+    footer = `Next Boost Ad in ${state.adCooldownSecondsLeft}s · ${state.adsRemainingToday} ads left`;
   } else {
     footer = `${state.adsRemainingToday} ads left this run`;
   }

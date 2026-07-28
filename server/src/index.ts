@@ -26,7 +26,7 @@ async function main() {
 
   app.get("/health", async () => ({
     ok: true,
-    adProvider: process.env.AD_PROVIDER ?? "mock",
+    adProvider: process.env.AD_PROVIDER ?? "waterfall",
   }));
 
   await app.register(fastifyStatic, {

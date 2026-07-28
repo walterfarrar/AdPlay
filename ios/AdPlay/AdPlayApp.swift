@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseCore
+import GoogleMobileAds
 
 @main
 struct AdPlayApp: App {
@@ -8,6 +9,11 @@ struct AdPlayApp: App {
 
     init() {
         FirebaseApp.configure()
+        MobileAds.shared.start { _ in
+            Task { @MainActor in
+                AdMobRewardedPresenter.shared.preload()
+            }
+        }
     }
 
     var body: some Scene {

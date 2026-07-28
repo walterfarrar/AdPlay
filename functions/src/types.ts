@@ -16,7 +16,13 @@ export type Tunables = {
   /** @deprecated Unused — Stronger uses the shared auto timer; kept for config compat */
   tapStrengthBoostSeconds: number;
   adCooldownSeconds: number;
+  /** Max banked ad charges (burst pool). */
   adsPerCycle: number;
+  /**
+   * Seconds between +1 ad charge while below adsPerCycle.
+   * 0 = no timed regen (charges never refill automatically).
+   */
+  adRegenSeconds: number;
   /** Seconds of auto time / progress to skip per Skip Time ad. */
   skipTimeSeconds: number;
   /**
@@ -24,6 +30,7 @@ export type Tunables = {
    * 0 = unlimited.
    */
   skipAdsPerCycle: number;
+  /** Max sats from bars per UTC day. 0 = unlimited. */
   dailySatsEarnCap: number;
   minWithdrawSats: number;
 };
@@ -40,10 +47,11 @@ export const DEFAULT_TUNABLES: Tunables = {
   tapStrengthBoostAmount: 0.25,
   tapStrengthBoostSeconds: 20 * 60,
   adCooldownSeconds: 10,
-  adsPerCycle: 30,
+  adsPerCycle: 10,
+  adRegenSeconds: 20 * 60,
   skipTimeSeconds: 60,
   skipAdsPerCycle: 10,
-  dailySatsEarnCap: 400,
+  dailySatsEarnCap: 0,
   minWithdrawSats: 100,
 };
 export type GameStateDoc = {
@@ -56,7 +64,12 @@ export type GameStateDoc = {
   tapStrengthBoostAmount: number;
   tapsRemaining: number;
   tapDay: string;
+  /** @deprecated Prefer adCharges; kept for mail / legacy migration. */
   adsUsed: number;
+  /** Remaining watchable ad charges (0…adsPerCycle). */
+  adCharges: number;
+  /** Anchor for timed regen (ISO). */
+  adChargesAt: string;
   /** Skip Time ads used this run (reset when auto cycle refreshes). */
   skipAdsUsed: number;
   satsEarnedToday: number;
@@ -77,7 +90,12 @@ export type PublicGameState = {
   unitsPerSat: number;
   satsBalance: number;
   tapsRemaining: number;
+  /** Banked ad charges remaining. */
   adsRemainingToday: number;
+  /** Seconds until the next regenerated charge. 0 if full or regen disabled. */
+  adRegenSecondsLeft: number;
+  /** ISO when the next charge lands; null if full / no regen. */
+  nextAdChargeAt: string | null;
   /**
    * Skip Time ads left this run. -1 means unlimited (skipAdsPerCycle === 0).
    */

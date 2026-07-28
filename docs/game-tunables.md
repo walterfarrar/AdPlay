@@ -1,43 +1,39 @@
 # Game tunables
 
-Source of truth: [`server/src/config/game.ts`](../server/src/config/game.ts)
+Source of truth (defaults): [`functions/src/types.ts`](../functions/src/types.ts) `DEFAULT_TUNABLES`  
+Live values: Firestore `config/tunables`
 
 | Param | Default | Role |
 |---|---|---|
-| `unitsPerSat` | 100 | Taps toward 1 sat (UI calls these “taps”) |
-| `tapUnits` | 1 | Taps added per manual tap |
+| `unitsPerSat` | 1000 | Progress units toward 1 sat |
+| `tapUnits` | 1 | Progress per manual tap |
 | `dailyTapCap` | 500 | Manual taps per UTC day |
-| `resetHourUtc` | 0 (`RESET_HOUR_UTC`) | Daily counter reset hour |
-| `baseFillRate` | 0 taps/s | No fill without a Faster/first-ad starter |
-| `durationBoostSeconds` | 1200 | +20 minutes auto-fill |
-| `speedBoostAmount` | 0.15 taps/s | Faster additive rate (stacks) |
-| `speedBoostSeconds` | 1200 | Faster extends speed window by 20 min |
-| `adCooldownSeconds` | 10 | Shared cooldown after any rewarded ad |
-| `adsPerCycle` | 30 | Max ads while auto is running; refills when duration hits 0 |
-| `dailySatsEarnCap` | 400 | Max sats from bars / UTC day |
-| `minWithdrawSats` | 100 (`MIN_WITHDRAW_SATS`) | Min redeem request |
+| `resetHourUtc` | 0 | Daily counter reset hour |
+| `baseFillRate` | 0 | No fill without a boost starter |
+| `durationBoostSeconds` | 1800 | Longer: +auto seconds |
+| `speedBoostAmount` | 0.5 | Faster: additive taps/s |
+| `tapStrengthBoostAmount` | 0.25 | Stronger: additive tap power |
+| `adCooldownSeconds` | 10 | Short anti-spam between watches |
+| `adsPerCycle` | **10** | Max **banked** ad charges |
+| `adRegenSeconds` | **1200** | Seconds between +1 charge (20 min). **0 = no regen** |
+| `skipTimeSeconds` | 60 | Skip Time: seconds of auto to skip |
+| `skipAdsPerCycle` | 10 | Skip ads after charges empty; 0 = unlimited |
+| `dailySatsEarnCap` | 0 | Max sats/day; **0 = unlimited** |
+| `minWithdrawSats` | 100 | Min redeem request |
+
+## Ad charge bank
+
+- New players start with a full bank (`adsPerCycle` charges).
+- Watching Longer / Faster / Stronger spends **1 charge**.
+- Charges **do not** refill when auto ends.
+- While below max, +1 charge every `adRegenSeconds` (always, including idle).
+- Skip Time only when charges are **0** and auto is still running.
+- Skip Time also advances the **ad regen** clock by `skipTimeSeconds` (same as auto skip).
 
 ## First ad vs stacks
 
-When idle (no auto time and no speed boost), the **first** Longer or Faster still grants both gameplay effects:
-- **+20 min** auto-fill
-- **0.15 taps/s**
-
-Button “active” state is separate: Longer / Faster / Stronger only light after that specific ad was watched this cycle.
-
-After that:
-
-| Ad | Effect |
-|---|---|
-| **Longer** | +20 min (also extends speed window if rate is active) |
-| **Faster** | +0.15 taps/s and +20 min on speed window |
-
-| Example | Rate | Time |
-|---|---|---|
-| 1× Longer or Faster (from idle) | 0.15 | 20 min |
-| +1 Longer | 0.15 | 40 min |
-| +1 Faster | 0.30 | speed window +20 |
+When idle, the **first** Longer / Faster / Stronger starts the shared auto window + base Faster rate. Button “active” state lights only after that boost type was watched this cycle.
 
 ## Economy guardrail
 
-Keep expected sats paid out per day **below** net ad/offer revenue after partner fees. Raise cooldown / lower fill rates before raising sats caps.
+Throttle via `adsPerCycle`, `adRegenSeconds`, boost sizes, and cooldown. Keep expected sats paid out **below** net ad revenue.

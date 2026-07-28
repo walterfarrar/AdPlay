@@ -42,18 +42,21 @@ export const gameConfig = {
   /** Minimum seconds between rewarded ad grants per user */
   adCooldownSeconds: 10,
 
-  /** Max rewarded ads per run; refreshes when auto duration fully expires */
-  adsPerCycle: 30,
+  /** Max banked ad charges */
+  adsPerCycle: 10,
 
-  /** Max sats earnable from bar completions per UTC day (~10 sats/ad headroom) */
-  dailySatsEarnCap: 400,
+  /** Seconds between +1 ad charge while below adsPerCycle. 0 = no regen. */
+  adRegenSeconds: 20 * 60,
+
+  /** Max sats earnable from bar completions per UTC day. 0 = unlimited. */
+  dailySatsEarnCap: 0,
 
   /** Minimum sats for a withdrawal request */
   minWithdrawSats: Number(process.env.MIN_WITHDRAW_SATS ?? 100),
 
   /** Economics notes (documentation only) */
   economicsNote:
-    "Target ~10 sats expected value per completed rewarded ad (Longer or Faster alone). At ~$0.015 eCPM and ~$0.001/sat, that is aggressive — watch real revenue before raising further.",
+    "Throttle via adsPerCycle bank + adRegenSeconds. dailySatsEarnCap=0 means unlimited daily sats.",
 } as const;
 
 export type BoostType = "duration" | "speed" | "tap_strength";

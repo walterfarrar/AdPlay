@@ -5,10 +5,14 @@ data class GameState(
     val satsBalance: Int = 0,
     val tapsRemaining: Int = 0,
     val adsRemainingToday: Int = 0,
+    /** Seconds until the next regenerated ad charge. 0 if full / no regen. */
+    val adRegenSecondsLeft: Int = 0,
+    /** ISO when the next charge lands. */
+    val nextAdChargeAt: String? = null,
     /** -1 means unlimited skip ads this run. */
     val skipAdsRemaining: Int = 0,
     val satsEarnedToday: Int = 0,
-    val dailySatsEarnCap: Int = 200,
+    val dailySatsEarnCap: Int = 0,
     val autoFillActive: Boolean = false,
     val autoFillUntil: String? = null,
     val fillRate: Double = 0.0,
@@ -41,11 +45,13 @@ data class Tunables(
     val tapStrengthBoostSeconds: Int = 1200,
     val adCooldownSeconds: Int = 10,
     val dailyAdCap: Int = 30,
-    val adsPerCycle: Int = 30,
+    val adsPerCycle: Int = 10,
+    /** Seconds between +1 ad charge. 0 = no timed regen. */
+    val adRegenSeconds: Int = 1200,
     val skipTimeSeconds: Int = 60,
     /** 0 = unlimited skip ads after regular ads are out. */
     val skipAdsPerCycle: Int = 10,
-    val dailySatsEarnCap: Int = 400,
+    val dailySatsEarnCap: Int = 0,
     val minWithdrawSats: Int = 100,
     val resetHourUtc: Int = 0,
     val adProvider: String = "mock",

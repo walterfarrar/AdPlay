@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
+        android:name=".AdPlayApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -15,6 +16,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AdPlay"
         android:usesCleartextTraffic="true">
+
+        <!-- Replace with your AdMob Android app ID once registered (iOS app ID will not work). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

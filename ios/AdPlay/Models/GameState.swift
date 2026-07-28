@@ -6,6 +6,10 @@ struct GameState: Codable, Equatable {
     var satsBalance: Int
     var tapsRemaining: Int
     var adsRemainingToday: Int
+    /** Seconds until the next regenerated ad charge. 0 if full / no regen. */
+    var adRegenSecondsLeft: Int?
+    /** ISO when the next charge lands. */
+    var nextAdChargeAt: String?
     /** -1 means unlimited skip ads this run. */
     var skipAdsRemaining: Int?
     var satsEarnedToday: Int
@@ -49,9 +53,11 @@ struct GameState: Codable, Equatable {
         satsBalance: 0,
         tapsRemaining: 0,
         adsRemainingToday: 0,
+        adRegenSecondsLeft: 0,
+        nextAdChargeAt: nil,
         skipAdsRemaining: 0,
         satsEarnedToday: 0,
-        dailySatsEarnCap: 400,
+        dailySatsEarnCap: 0,
         autoFillActive: false,
         autoFillUntil: nil,
         fillRate: 0,
@@ -84,6 +90,8 @@ struct Tunables: Codable, Equatable {
     var adCooldownSeconds: Int
     var dailyAdCap: Int?
     var adsPerCycle: Int?
+    /** Seconds between +1 ad charge. 0 = no timed regen. */
+    var adRegenSeconds: Int?
     var skipTimeSeconds: Int?
     /** 0 = unlimited skip ads after regular ads are out. */
     var skipAdsPerCycle: Int?

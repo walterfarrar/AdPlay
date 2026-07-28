@@ -59,12 +59,14 @@ export async function adRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Mock rewarded completion for AD_PROVIDER=mock.
-   * Client calls this after "watching" a fake ad; server signs and applies via same path.
+   * Client-credited rewarded completion (until partner S2S is wired).
+   * Used after AdMob / AdsBitvex / mock watch completes.
    */
   app.post("/ads/mock/complete", async (req, reply) => {
-    if ((process.env.AD_PROVIDER ?? "mock") !== "mock") {
-      return reply.code(403).send({ error: "Mock ads disabled" });
+    const provider = process.env.AD_PROVIDER ?? "mock";
+    const allowed = ["mock", "waterfall", "admob", "adsbitvex"];
+    if (!allowed.includes(provider)) {
+      return reply.code(403).send({ error: "Client ad complete disabled" });
     }
     const user = getBearerUser(req);
     if (!user) return reply.code(401).send({ error: "Unauthorized" });

@@ -4,7 +4,7 @@ import { getState, resetEverything, tap } from "../game/engine.js";
 import { gameConfig } from "../config/game.js";
 
 function debugResetAllowed(): boolean {
-  const provider = process.env.AD_PROVIDER ?? "mock";
+  const provider = process.env.AD_PROVIDER ?? "waterfall";
   return provider === "mock" || process.env.DEBUG_RESET === "1";
 }
 
@@ -50,10 +50,11 @@ function publicTunables() {
     adCooldownSeconds: gameConfig.adCooldownSeconds,
     dailyAdCap: gameConfig.adsPerCycle,
     adsPerCycle: gameConfig.adsPerCycle,
+    adRegenSeconds: gameConfig.adRegenSeconds,
     dailySatsEarnCap: gameConfig.dailySatsEarnCap,
     minWithdrawSats: gameConfig.minWithdrawSats,
     resetHourUtc: gameConfig.resetHourUtc,
-    adProvider: process.env.AD_PROVIDER ?? "mock",
+    adProvider: process.env.AD_PROVIDER ?? "waterfall",
     debugReset: debugResetAllowed(),
   };
 }

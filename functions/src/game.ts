@@ -52,7 +52,74 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
       g.tapStrengthBoostCount = 0;
     }
   }
+  // Legacy adsUsed → banked adCharges (do not refill on idle anymore).
+  if (g.adCharges === undefined) {
+    const used = typeof g.adsUsed === "number" ? g.adsUsed : 0;
+    g.adCharges = Math.max(0, t.adsPerCycle - used);
+    g.adChargesAt = g.lastTickAt || nowIso();
+  }
+  if (!g.adChargesAt) g.adChargesAt = g.lastTickAt || nowIso();
   return g;
+}
+
+/** Apply timed +1 charge regen up to adsPerCycle. Mutates g. */
+function applyAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
+  const max = t.adsPerCycle;
+  if (max <= 0) {
+    g.adCharges = 0;
+    return;
+  }
+  if (g.adCharges > max) g.adCharges = max;
+  if (t.adRegenSeconds <= 0) return;
+  if (g.adCharges >= max) return;
+
+  const from = parseIso(g.adChargesAt) ?? now;
+  const elapsed = Math.max(0, (now.getTime() - from.getTime()) / 1000);
+  if (elapsed < t.adRegenSeconds) return;
+
+  const gained = Math.floor(elapsed / t.adRegenSeconds);
+  g.adCharges = Math.min(max, g.adCharges + gained);
+  const remainderSec = elapsed % t.adRegenSeconds;
+  g.adChargesAt = nowIso(new Date(now.getTime() - remainderSec * 1000));
+  if (g.adCharges >= max) {
+    g.adCharges = max;
+    g.adChargesAt = nowIso(now);
+  }
+}
+
+function spendAdCharge(g: GameStateDoc, t: Tunables, now: Date): void {
+  applyAdRegen(g, t, now);
+  if (g.adCharges <= 0) {
+    throw Object.assign(new Error("No ad charges — wait for the next one"), {
+      code: "resource-exhausted",
+    });
+  }
+  const wasFull = g.adCharges >= t.adsPerCycle;
+  g.adCharges -= 1;
+  g.adsUsed = (g.adsUsed || 0) + 1;
+  if (wasFull) {
+    g.adChargesAt = nowIso(now);
+  }
+}
+
+function regenPublic(g: GameStateDoc, t: Tunables, now: Date): {
+  adsRemaining: number;
+  adRegenSecondsLeft: number;
+  nextAdChargeAt: string | null;
+} {
+  applyAdRegen(g, t, now);
+  const adsRemaining = Math.max(0, g.adCharges);
+  if (t.adRegenSeconds <= 0 || adsRemaining >= t.adsPerCycle) {
+    return { adsRemaining, adRegenSecondsLeft: 0, nextAdChargeAt: null };
+  }
+  const from = parseIso(g.adChargesAt) ?? now;
+  const nextMs = from.getTime() + t.adRegenSeconds * 1000;
+  const left = Math.max(0, Math.ceil((nextMs - now.getTime()) / 1000));
+  return {
+    adsRemaining,
+    adRegenSecondsLeft: left,
+    nextAdChargeAt: new Date(nextMs).toISOString(),
+  };
 }
 
 function autoFillRate(g: GameStateDoc, t: Tunables): number {
@@ -101,6 +168,7 @@ function refreshAdCycleIfIdle(g: GameStateDoc, now: Date): void {
   g.durationBoostCount = 0;
   g.speedBoostCount = 0;
   g.tapStrengthBoostCount = 0;
+  // Ad charges do NOT refill here — timed regen owns the bank.
   g.adsUsed = 0;
   g.skipAdsUsed = 0;
 }
@@ -124,12 +192,15 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
   const skipUsed = g.skipAdsUsed || 0;
   const skipRemaining =
     t.skipAdsPerCycle === 0 ? -1 : Math.max(0, t.skipAdsPerCycle - skipUsed);
+  const regen = regenPublic(g, t, now);
   return {
     progress: Math.min(g.progress, t.unitsPerSat),
     unitsPerSat: t.unitsPerSat,
     satsBalance: g.satsBalance,
     tapsRemaining: g.tapsRemaining,
-    adsRemainingToday: Math.max(0, t.adsPerCycle - g.adsUsed),
+    adsRemainingToday: regen.adsRemaining,
+    adRegenSecondsLeft: regen.adRegenSecondsLeft,
+    nextAdChargeAt: regen.nextAdChargeAt,
     skipAdsRemaining: skipRemaining,
     satsEarnedToday: g.satsEarnedToday,
     dailySatsEarnCap: t.dailySatsEarnCap,
@@ -167,7 +238,8 @@ function applyProgressUnits(
   if (units <= 0) return { earned, credits };
   let progress = g.progress + units;
   while (progress >= t.unitsPerSat) {
-    if (g.satsEarnedToday + earned >= t.dailySatsEarnCap) {
+    // dailySatsEarnCap <= 0 means unlimited
+    if (t.dailySatsEarnCap > 0 && g.satsEarnedToday + earned >= t.dailySatsEarnCap) {
       progress = t.unitsPerSat - 0.0001;
       break;
     }
@@ -186,6 +258,7 @@ function advanceInMemory(
   at: Date,
 ): { earned: number; credits: LedgerCredit[] } {
   resetDaily(g, t, at);
+  applyAdRegen(g, t, at);
   let credits: LedgerCredit[] = [];
   let earned = 0;
 
@@ -253,8 +326,9 @@ function applySkipTimeInMemory(
   if (!autoUntil || autoUntil <= at) {
     throw Object.assign(new Error("Auto is not running"), { code: "failed-precondition" });
   }
-  if (g.adsUsed < t.adsPerCycle) {
-    throw Object.assign(new Error("Skip available only after ads are used up"), {
+  applyAdRegen(g, t, at);
+  if (g.adCharges > 0) {
+    throw Object.assign(new Error("Skip available only when ad charges are empty"), {
       code: "failed-precondition",
     });
   }
@@ -278,6 +352,11 @@ function applySkipTimeInMemory(
   if (g.tapStrengthBoostAmount > 0) {
     g.tapStrengthBoostUntil = g.autoFillUntil;
   }
+
+  // Pull the ad-regen clock forward by the same skipped duration.
+  const chargeFrom = parseIso(g.adChargesAt) ?? at;
+  g.adChargesAt = nowIso(new Date(chargeFrom.getTime() - skipSec * 1000));
+  applyAdRegen(g, t, at);
 
   g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
 
@@ -349,7 +428,7 @@ export async function getPublicState(uid: string): Promise<{
   const t = await loadTunables();
   return {
     state,
-    tunables: { ...t, adProvider: "adsbitvex", debugReset: true },
+    tunables: { ...t, adProvider: "waterfall", debugReset: true },
   };
 }
 
@@ -405,11 +484,7 @@ export async function applyBoost(
       return toPublic(g, t, now);
     }
 
-    if (g.adsUsed >= t.adsPerCycle) {
-      throw Object.assign(new Error("Ad limit reached — wait for boosts to run out"), {
-        code: "resource-exhausted",
-      });
-    }
+    spendAdCharge(g, t, now);
 
     const autoUntil = parseIso(g.autoFillUntil);
     const idle = !autoUntil || autoUntil <= now;
@@ -448,7 +523,6 @@ export async function applyBoost(
       g.speedBoostCount = (g.speedBoostCount || 0) + 1;
     }
 
-    g.adsUsed += 1;
     g.lastAdAt = nowIso(now);
     g.lastBoostType = boostType;
     g.fillRate = effectiveFillRate(g, t, now);

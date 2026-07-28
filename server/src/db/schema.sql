@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS game_state (
   taps_remaining INTEGER NOT NULL,
   tap_day TEXT NOT NULL,
   ads_used_today INTEGER NOT NULL DEFAULT 0,
+  ad_charges INTEGER NOT NULL DEFAULT 10,
+  ad_charges_at TEXT,
   ads_day TEXT NOT NULL,
   sats_earned_today INTEGER NOT NULL DEFAULT 0,
   sats_day TEXT NOT NULL,

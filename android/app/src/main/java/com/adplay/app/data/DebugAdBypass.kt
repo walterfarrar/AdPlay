@@ -4,8 +4,8 @@ import android.content.Context
 import com.adplay.app.BuildConfig
 
 /**
- * Runtime ad bypass for debug builds. When enabled, boost buttons skip AdsBitvex
- * and credit via mockComplete (cooldown / timers still apply).
+ * Runtime ad bypass for debug builds. When enabled, boost buttons skip the ad
+ * waterfall and credit via mockComplete (cooldown / timers still apply).
  *
  * Compile gate: only available when [BuildConfig.DEBUG_BYPASS_ADS] is true.
  * Preference defaults to on so debug installs skip ads until you turn it off in-app.

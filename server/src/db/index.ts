@@ -62,6 +62,14 @@ export function getDb(): DatabaseSync {
       "ALTER TABLE game_state ADD COLUMN tap_strength_boost_count INTEGER NOT NULL DEFAULT 0",
     );
   }
+  if (!names.has("ad_charges")) {
+    db.exec(
+      "ALTER TABLE game_state ADD COLUMN ad_charges INTEGER NOT NULL DEFAULT 10",
+    );
+  }
+  if (!names.has("ad_charges_at")) {
+    db.exec("ALTER TABLE game_state ADD COLUMN ad_charges_at TEXT");
+  }
 
   return db;
 }

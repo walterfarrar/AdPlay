@@ -6,6 +6,11 @@ protocol AdServing {
     func showBoostAd(type: BoostType) async throws -> GameState
 }
 
+/// Low-level network that reports fill outcome without calling the game API.
+protocol AdNetwork {
+    func attempt() async -> AdFillResult
+}
+
 final class MockAdService: AdServing {
     private let api: APIClient
 
@@ -19,24 +24,67 @@ final class MockAdService: AdServing {
     }
 }
 
-final class AdsBitvexAdService: AdServing {
-    static let appId = "000241"
+final class AdMobNetwork: AdNetwork {
+    func attempt() async -> AdFillResult {
+        await AdMobRewardedPresenter.shared.present()
+    }
+}
 
+final class AdsBitvexNetwork: AdNetwork {
+    func attempt() async -> AdFillResult {
+        let ok = await AdsBitvexPresenter.shared.present()
+        return ok ? .earned : .unavailable
+    }
+}
+
+/// Single network: attempt → credit on earn.
+final class NetworkAdService: AdServing {
     private let api: APIClient
+    private let network: AdNetwork
 
-    init(api: APIClient) {
+    init(api: APIClient, network: AdNetwork) {
         self.api = api
+        self.network = network
     }
 
     func showBoostAd(type: BoostType) async throws -> GameState {
         if DebugAdBypass.isEnabled {
             return try await MockAdService(api: api).showBoostAd(type: type)
         }
-        let ok = await AdsBitvexPresenter.shared.present()
-        guard ok else {
+        switch await network.attempt() {
+        case .earned:
+            return try await api.mockComplete(boostType: type)
+        case .declined, .unavailable:
             throw APIError.message("Ad not completed")
         }
-        return try await api.mockComplete(boostType: type)
+    }
+}
+
+/// AdMob first, then AdsBitvex on no-fill only (not after a declined watch).
+final class WaterfallAdService: AdServing {
+    private let api: APIClient
+    private let networks: [AdNetwork]
+
+    init(api: APIClient, networks: [AdNetwork]) {
+        self.api = api
+        self.networks = networks
+    }
+
+    func showBoostAd(type: BoostType) async throws -> GameState {
+        if DebugAdBypass.isEnabled {
+            return try await MockAdService(api: api).showBoostAd(type: type)
+        }
+        for network in networks {
+            switch await network.attempt() {
+            case .earned:
+                return try await api.mockComplete(boostType: type)
+            case .declined:
+                throw APIError.message("Ad not completed")
+            case .unavailable:
+                continue
+            }
+        }
+        throw APIError.message("Ad not completed")
     }
 }
 
@@ -45,10 +93,21 @@ enum AdServiceFactory {
         switch provider.lowercased() {
         case "mock":
             return MockAdService(api: api)
-        case "adsbitvex":
-            return AdsBitvexAdService(api: api)
+        case "admob":
+            return NetworkAdService(api: api, network: AdMobNetwork())
+        case "adsbitvex_only":
+            return NetworkAdService(api: api, network: AdsBitvexNetwork())
+        // Older backends returned "adsbitvex"; treat as waterfall so AdMob is tried first.
+        case "waterfall", "adsbitvex":
+            return WaterfallAdService(
+                api: api,
+                networks: [AdMobNetwork(), AdsBitvexNetwork()],
+            )
         default:
-            return AdsBitvexAdService(api: api)
+            return WaterfallAdService(
+                api: api,
+                networks: [AdMobNetwork(), AdsBitvexNetwork()],
+            )
         }
     }
 }
@@ -98,7 +157,7 @@ final class AdsBitvexPresenter: NSObject, WKScriptMessageHandler, WKNavigationDe
         host = vc
         presenter.present(vc, animated: true)
 
-        let html = Self.htmlPage(appId: AdsBitvexAdService.appId)
+        let html = Self.htmlPage(appId: "000241")
         web.loadHTMLString(html, baseURL: URL(string: "https://sdk.adsbitvex.com/"))
     }
 

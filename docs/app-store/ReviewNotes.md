@@ -17,9 +17,9 @@ AdPlay is an idle progress game:
 4. Players may request a redemption by pasting a **Lightning BOLT11 invoice**. An operator pays the invoice **manually** outside the app; Apple is not involved in the payment.
 
 ## Ads
-- Rewarded ads are optional and skippable via the partner UI.
-- Boosts are applied only after server-to-server verification.
-- Until a rewards partner is approved for crypto redemption, TestFlight builds use `AD_PROVIDER=mock` (simulated rewarded completion) so reviewers can exercise Longer/Faster without live ads.
+- Rewarded ads are optional and skippable via the ad UI (AdMob, with AdsBitvex fallback).
+- Boosts are applied only after our backend credits the completion (`mockCompleteBoost` / future S2S).
+- Reviewers can use the in-app ad bypass when `debugReset` is enabled, or builds can set `adProvider=mock` for simulated rewarded completion.
 
 ## Backend for review
 Provide a reachable API base URL in the build’s `ADPLAY_API_URL` (or default staging).  

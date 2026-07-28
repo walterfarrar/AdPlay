@@ -22,6 +22,10 @@ final class SessionStore: ObservableObject {
     private var anchorDate: Date = .now
     private var windowEndHandled = false
     private var foreground = false
+    /// True while Skip Time is animating display toward the new server snapshot.
+    private var skipAnimating = false
+    private var skipLerpTask: Task<Void, Never>?
+    private static let skipLerpSeconds: TimeInterval = 3
 
     /// Same gate as Reset — server `debugReset` (TestFlight/Release included).
     var bypassAdsAvailable: Bool {
@@ -35,9 +39,10 @@ final class SessionStore: ObservableObject {
         do {
             GameReminderScheduler.requestPermissionIfNeeded()
             try await refresh(force: true)
-            adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "adsbitvex")
+            adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "waterfall")
             isReady = true
             foreground = true
+            AdMobRewardedPresenter.shared.preload()
             ensureTicker()
         } catch {
             isReady = false
@@ -49,6 +54,7 @@ final class SessionStore: ObservableObject {
     func onForeground() {
         foreground = true
         guard isReady else { return }
+        AdMobRewardedPresenter.shared.preload()
         Task { try? await refresh(force: true) }
         ensureTicker()
     }
@@ -58,6 +64,16 @@ final class SessionStore: ObservableObject {
         foreground = false
         tickTask?.cancel()
         tickTask = nil
+        if skipAnimating {
+            skipLerpTask?.cancel()
+            skipLerpTask = nil
+            skipAnimating = false
+            anchorDate = Date()
+            windowEndHandled = false
+            state = project(serverState, now: Date())
+        }
+        // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
+        GameReminderScheduler.sync(project(serverState, now: Date()))
     }
 
     func refresh(force: Bool = false) async throws {
@@ -82,16 +98,105 @@ final class SessionStore: ObservableObject {
     func watch(boost: BoostType) async {
         errorMessage = nil
         isLoading = true
-        defer { isLoading = false }
         do {
             guard let adService else {
                 throw APIError.message("Ad service not ready")
             }
-            apply(try await adService.showBoostAd(type: boost), force: true)
+            let from = state
+            let to = try await adService.showBoostAd(type: boost)
+            isLoading = false
+            if boost == .skipTime {
+                await playSkipLerp(from: from, to: to)
+            } else {
+                apply(to, force: true)
+            }
         } catch {
+            isLoading = false
             errorMessage = error.localizedDescription
             try? await refresh(force: true)
         }
+    }
+
+    /// Lerp progress / sats / auto timer / regen over a few seconds after Skip Time.
+    private func playSkipLerp(from: GameState, to: GameState) async {
+        skipLerpTask?.cancel()
+        tickTask?.cancel()
+        tickTask = nil
+        skipAnimating = true
+
+        if let u = to.updatedAt {
+            lastUpdatedAt = u
+        }
+        serverState = to
+        GameReminderScheduler.sync(to)
+
+        let duration = Self.skipLerpSeconds
+        let start = Date()
+        let units = max(1, to.unitsPerSat)
+        let fromAbs = Double(from.satsBalance) * Double(units) + from.progress
+        let toAbs = Double(to.satsBalance) * Double(units) + to.progress
+        let fromAuto = Double(remainingSeconds(untilIso: from.autoFillUntil))
+        let toAuto = Double(remainingSeconds(untilIso: to.autoFillUntil))
+        let fromRegen = Double(from.adRegenSecondsLeft ?? 0)
+        let toRegen = Double(to.adRegenSecondsLeft ?? 0)
+        let fromAds = from.adsRemainingToday
+        let toAds = to.adsRemainingToday
+
+        let task = Task { @MainActor in
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(start)
+                let u = min(1, elapsed / duration)
+                // Ease-out cubic
+                let e = 1 - pow(1 - u, 3)
+
+                var d = to
+                // Freeze normal fill overlay so we only show the lerp.
+                d.fillRate = 0
+
+                let absProg = fromAbs + (toAbs - fromAbs) * e
+                let sats = Int(floor(absProg / Double(units)))
+                var prog = absProg - Double(sats) * Double(units)
+                if prog < 0 { prog = 0 }
+                if prog >= Double(units) { prog = Double(units) - 0.0001 }
+                d.satsBalance = sats
+                d.progress = prog
+                d.satsEarnedToday = from.satsEarnedToday + max(0, sats - from.satsBalance)
+
+                let autoLeft = max(0, fromAuto + (toAuto - fromAuto) * e)
+                if autoLeft > 0.05 {
+                    d.autoFillActive = true
+                    d.autoFillUntil = iso8601String(Date().addingTimeInterval(autoLeft))
+                } else {
+                    d.autoFillActive = to.autoFillActive && toAuto > 0
+                    d.autoFillUntil = to.autoFillUntil
+                }
+
+                let regenLeft = max(0, fromRegen + (toRegen - fromRegen) * e)
+                d.adRegenSecondsLeft = Int(regenLeft.rounded())
+                if regenLeft > 0.5 {
+                    d.nextAdChargeAt = iso8601String(Date().addingTimeInterval(regenLeft))
+                } else {
+                    d.nextAdChargeAt = to.nextAdChargeAt
+                }
+
+                // Reveal unlocked charges near the end of the animation.
+                d.adsRemainingToday = e < 0.85 ? fromAds : toAds
+
+                self.state = d
+                if u >= 1 { break }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+        }
+        skipLerpTask = task
+        await task.value
+
+        skipAnimating = false
+        skipLerpTask = nil
+        guard !Task.isCancelled else { return }
+        anchorDate = Date()
+        windowEndHandled = false
+        state = project(to, now: Date())
+        ensureTicker()
     }
 
     func withdraw(amountSats: Int, bolt11: String) async -> Bool {
@@ -139,7 +244,7 @@ final class SessionStore: ObservableObject {
         anchorDate = Date()
         windowEndHandled = false
         state = project(next, now: anchorDate)
-        GameReminderScheduler.sync(next)
+        GameReminderScheduler.sync(state)
         ensureTicker()
     }
 
@@ -147,10 +252,10 @@ final class SessionStore: ObservableObject {
     /// deterministic, so we project from the last snapshot instead of polling. When the
     /// window ends we hit the server once for the authoritative reset (ads refilled).
     private func ensureTicker() {
-        guard foreground, tickTask == nil else { return }
+        guard foreground, tickTask == nil, !skipAnimating else { return }
         tickTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            while !Task.isCancelled && self.foreground {
+            while !Task.isCancelled && self.foreground && !self.skipAnimating {
                 self.state = self.project(self.serverState, now: Date())
 
                 if self.serverState.autoFillActive, !self.windowEndHandled,
@@ -160,7 +265,12 @@ final class SessionStore: ObservableObject {
                     try? await self.refresh(force: true)
                 }
 
-                if !self.state.autoFillActive && self.state.adCooldownSecondsLeft <= 0 {
+                let regenLeft = self.state.adRegenSecondsLeft ?? 0
+                let adsMax = self.tunables?.adsPerCycle ?? 10
+                let waitingRegen = regenLeft > 0 && self.state.adsRemainingToday < adsMax
+                if !self.state.autoFillActive
+                    && self.state.adCooldownSecondsLeft <= 0
+                    && !waitingRegen {
                     break
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -175,11 +285,14 @@ final class SessionStore: ObservableObject {
         let cooldown = max(0, Int(ceil(Double(s.adCooldownSecondsLeft) - elapsed)))
         let until = parseIso8601(s.autoFillUntil ?? "")
         let autoActive = s.autoFillActive && (until.map { $0 > now } ?? false)
+        let (adsLeft, regenLeft) = projectAdCharges(s, now: now)
 
         guard s.autoFillActive, s.fillRate > 0, s.unitsPerSat > 0, let until else {
             var c = s
             c.adCooldownSecondsLeft = cooldown
             c.autoFillActive = autoActive
+            c.adsRemainingToday = adsLeft
+            c.adRegenSecondsLeft = regenLeft
             if !autoActive {
                 c.durationBoostActive = false
                 c.speedBoostActive = false
@@ -194,9 +307,11 @@ final class SessionStore: ObservableObject {
         let earnUntil = min(now, until)
         let earnSec = max(0, earnUntil.timeIntervalSince(anchorDate))
         let total = s.progress + s.fillRate * earnSec
-        var bars = Int(floor(total / Double(s.unitsPerSat)))
-        let maxBars = max(0, s.dailySatsEarnCap - s.satsEarnedToday)
-        bars = max(0, min(bars, maxBars))
+        var bars = max(0, Int(floor(total / Double(s.unitsPerSat))))
+        // dailySatsEarnCap <= 0 means unlimited
+        if s.dailySatsEarnCap > 0 {
+            bars = min(bars, max(0, s.dailySatsEarnCap - s.satsEarnedToday))
+        }
         let newProgress = min(Double(s.unitsPerSat), max(0, total - Double(bars) * Double(s.unitsPerSat)))
 
         var c = s
@@ -205,6 +320,8 @@ final class SessionStore: ObservableObject {
         c.satsEarnedToday = s.satsEarnedToday + bars
         c.adCooldownSecondsLeft = cooldown
         c.autoFillActive = autoActive
+        c.adsRemainingToday = adsLeft
+        c.adRegenSecondsLeft = regenLeft
         if !autoActive {
             c.durationBoostActive = false
             c.speedBoostActive = false
@@ -215,4 +332,49 @@ final class SessionStore: ObservableObject {
         }
         return c
     }
+
+    /// Local display of banked charges + regen countdown from the server anchor.
+    private func projectAdCharges(_ s: GameState, now: Date) -> (Int, Int) {
+        let maxCharges = tunables?.adsPerCycle ?? max(s.adsRemainingToday, 1)
+        let regenSec = tunables?.adRegenSeconds ?? 0
+        var charges = s.adsRemainingToday
+        var regenLeft = s.adRegenSecondsLeft ?? 0
+
+        guard regenSec > 0, charges < maxCharges else {
+            return (min(charges, maxCharges), 0)
+        }
+
+        if let next = parseIso8601(s.nextAdChargeAt ?? "") {
+            if now >= next {
+                let gained = 1 + Int(floor(now.timeIntervalSince(next) / Double(regenSec)))
+                charges = min(maxCharges, s.adsRemainingToday + gained)
+                if charges >= maxCharges {
+                    regenLeft = 0
+                } else {
+                    let into = now.timeIntervalSince(next).truncatingRemainder(dividingBy: Double(regenSec))
+                    regenLeft = max(0, Int(ceil(Double(regenSec) - into)))
+                }
+            } else {
+                regenLeft = max(0, Int(ceil(next.timeIntervalSince(now))))
+            }
+        } else if regenLeft > 0 {
+            let elapsed = max(0, now.timeIntervalSince(anchorDate))
+            let left = Int(ceil(Double(regenLeft) - elapsed))
+            if left <= 0 {
+                let overdue = -left
+                let gained = 1 + overdue / regenSec
+                charges = min(maxCharges, s.adsRemainingToday + gained)
+                regenLeft = charges >= maxCharges ? 0 : regenSec - (overdue % regenSec)
+            } else {
+                regenLeft = left
+            }
+        }
+        return (charges, regenLeft)
+    }
+}
+
+private func iso8601String(_ date: Date) -> String {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.string(from: date)
 }

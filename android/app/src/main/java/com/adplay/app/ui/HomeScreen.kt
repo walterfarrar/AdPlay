@@ -1,6 +1,18 @@
 package com.adplay.app.ui
 
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,30 +37,45 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.adplay.app.UiState
 import com.adplay.app.data.Tunables
 import java.time.Instant
 import java.time.format.DateTimeParseException
 import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 private enum class BoostVisual {
@@ -147,6 +174,99 @@ fun HomeScreen(
                     state.adsRemainingToday > 0 &&
                     state.adCooldownSecondsLeft == 0
                 var displayProgress by remember { mutableDoubleStateOf(state.progress) }
+                val view = LocalView.current
+                val density = LocalDensity.current
+                var homeCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+                var homeWidthPx by remember { mutableFloatStateOf(0f) }
+                var homeHeightPx by remember { mutableFloatStateOf(0f) }
+                var redeemCenter by remember { mutableStateOf(Offset.Zero) }
+                var barEnd by remember { mutableStateOf(Offset.Zero) }
+                val satParticles = remember { mutableStateListOf<SatParticle>() }
+                var redeemGlow by remember { mutableStateOf(false) }
+                var barFlash by remember { mutableFloatStateOf(0f) }
+                var lastCelebrateAtMs by remember { mutableLongStateOf(0L) }
+                var previousSats by remember { mutableStateOf<Int?>(null) }
+                var nextParticleId by remember { mutableLongStateOf(1L) }
+
+                val redeemGlowScale by animateFloatAsState(
+                    targetValue = if (redeemGlow) 1.08f else 1f,
+                    animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+                    label = "redeemGlowScale",
+                )
+                val redeemGlowStrength by animateFloatAsState(
+                    targetValue = if (redeemGlow) 1f else 0f,
+                    animationSpec = tween(if (redeemGlow) 180 else 500),
+                    label = "redeemGlowStrength",
+                )
+                val barFlashAnimated by animateFloatAsState(
+                    targetValue = barFlash,
+                    animationSpec = tween(if (barFlash > 0f) 80 else 450),
+                    label = "barFlash",
+                )
+
+                fun localInHome(child: LayoutCoordinates, pointInChild: Offset): Offset {
+                    val home = homeCoords ?: return Offset.Zero
+                    return if (child.isAttached && home.isAttached) {
+                        home.localPositionOf(child, pointInChild)
+                    } else {
+                        Offset.Zero
+                    }
+                }
+
+                fun fireSatCelebrationBeat() {
+                    val now = System.currentTimeMillis()
+                    if (now - lastCelebrateAtMs < 120L && satParticles.isNotEmpty()) return
+                    lastCelebrateAtMs = now
+                    barFlash = 1f
+
+                    val fallbackFrom = Offset(
+                        x = (homeWidthPx - with(density) { 36.dp.toPx() }).coerceAtLeast(0f),
+                        y = homeHeightPx * 0.42f,
+                    )
+                    val fallbackTo = Offset(
+                        x = (homeWidthPx - with(density) { 56.dp.toPx() }).coerceAtLeast(0f),
+                        y = with(density) { 36.dp.toPx() },
+                    )
+                    val from = if (barEnd != Offset.Zero) barEnd else fallbackFrom
+                    val to = if (redeemCenter != Offset.Zero) redeemCenter else fallbackTo
+                    if (satParticles.size < 4 && homeWidthPx > 0f) {
+                        satParticles.add(
+                            SatParticle(id = nextParticleId++, from = from, to = to),
+                        )
+                    }
+
+                    @Suppress("DEPRECATION")
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    playSatTick()
+
+                    // Afterglow when the orb lands on Redeem (pop + hover + fly).
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        redeemGlow = true
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            redeemGlow = false
+                        }, 550)
+                    }, SatParticleMotion.LAND_AT_MS)
+                }
+
+                LaunchedEffect(barFlash) {
+                    if (barFlash > 0f) {
+                        delay(90)
+                        barFlash = 0f
+                    }
+                }
+
+                LaunchedEffect(state.satsBalance) {
+                    val prev = previousSats
+                    previousSats = state.satsBalance
+                    if (prev == null) return@LaunchedEffect
+                    val gained = state.satsBalance - prev
+                    if (gained <= 0) return@LaunchedEffect
+                    val bursts = gained.coerceIn(1, 4)
+                    for (i in 0 until bursts) {
+                        if (i > 0) delay(120)
+                        fireSatCelebrationBeat()
+                    }
+                }
 
                 // Smooth local fill between server polls — shared by BTC balance + progress bar.
                 LaunchedEffect(state.progress, state.fillRate, state.autoFillActive, state.unitsPerSat) {
@@ -171,6 +291,16 @@ fun HomeScreen(
                     }
                 }
 
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { clip = false }
+                        .onGloballyPositioned { coords ->
+                            homeCoords = coords
+                            homeWidthPx = coords.size.width.toFloat()
+                            homeHeightPx = coords.size.height.toFloat()
+                        },
+                ) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -199,11 +329,38 @@ fun HomeScreen(
                             }
                             Box(
                                 Modifier
+                                    .graphicsLayer {
+                                        scaleX = redeemGlowScale
+                                        scaleY = redeemGlowScale
+                                    }
                                     .clip(RoundedCornerShape(50))
-                                    .background(BrandAccent.copy(alpha = 0.14f))
-                                    .border(1.dp, BrandAccent.copy(alpha = 0.55f), RoundedCornerShape(50))
+                                    .background(BrandAccent.copy(alpha = 0.14f + 0.24f * redeemGlowStrength))
+                                    .border(
+                                        width = (1f + redeemGlowStrength).dp,
+                                        color = BrandAccent.copy(alpha = 0.55f + 0.45f * redeemGlowStrength),
+                                        shape = RoundedCornerShape(50),
+                                    )
+                                    .drawBehind {
+                                        if (redeemGlowStrength > 0.01f) {
+                                            drawCircle(
+                                                brush = Brush.radialGradient(
+                                                    colors = listOf(
+                                                        BrandAccent.copy(alpha = 0.55f * redeemGlowStrength),
+                                                        Color.Transparent,
+                                                    ),
+                                                ),
+                                                radius = size.maxDimension * 0.95f,
+                                            )
+                                        }
+                                    }
                                     .clickable(onClick = onRedeem)
-                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .onGloballyPositioned { coords ->
+                                        redeemCenter = localInHome(
+                                            coords,
+                                            Offset(coords.size.width / 2f, coords.size.height / 2f),
+                                        )
+                                    },
                             ) {
                                 Text("Redeem", color = BrandAccent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             }
@@ -222,44 +379,25 @@ fun HomeScreen(
 
                     Spacer(Modifier.weight(1f))
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            formatBtcAmount(
-                                satsBalance = state.satsBalance,
-                                barProgress = displayProgress,
-                                unitsPerSat = state.unitsPerSat,
-                            ),
-                            fontSize = 42.sp,
-                            fontWeight = FontWeight.Black,
-                            color = BrandInk,
-                            maxLines = 1,
-                            style = TextStyle(
-                                shadow = Shadow(
-                                    color = BrandAccent.copy(alpha = 0.5f),
-                                    offset = Offset(0f, 6f),
-                                    blurRadius = 34f,
-                                ),
-                            ),
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "BTC",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = BrandAccent,
-                            letterSpacing = 3.sp,
-                        )
-                    }
-
-                    Spacer(Modifier.weight(0.6f))
-
-                    ProgressBar(
+                    SatEarnStage(
+                        satsBalance = state.satsBalance,
                         displayProgress = displayProgress,
-                        total = state.unitsPerSat,
+                        unitsPerSat = state.unitsPerSat,
                         autoActive = state.autoFillActive,
                         fillRate = state.fillRate,
                         tapPower = state.tapPower,
                         onTap = onTap,
+                        barFlash = barFlashAnimated,
+                        onBarPositioned = { coords ->
+                            barEnd = localInHome(
+                                coords,
+                                Offset(
+                                    coords.size.width - with(density) { 10.dp.toPx() },
+                                    coords.size.height - with(density) { 15.dp.toPx() },
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
                     )
 
                     Spacer(Modifier.height(14.dp))
@@ -341,8 +479,8 @@ fun HomeScreen(
                     AdsFooter(
                         adsRemaining = state.adsRemainingToday,
                         cooldownLeft = state.adCooldownSecondsLeft,
-                        autoFillUntil = state.autoFillUntil,
-                        autoActive = state.autoFillActive,
+                        regenLeft = state.adRegenSecondsLeft,
+                        adsMax = t?.adsPerCycle ?: 10,
                     )
 
                     // Reserved height so layout never jumps when Skip appears.
@@ -378,6 +516,23 @@ fun HomeScreen(
                         CircularProgressIndicator(color = BrandAccent)
                     }
                 }
+
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .graphicsLayer { clip = false }
+                        .zIndex(3f),
+                ) {
+                    satParticles.forEach { particle ->
+                        key(particle.id) {
+                            FlyingSatParticle(
+                                particle = particle,
+                                onFinished = { satParticles.removeAll { it.id == particle.id } },
+                            )
+                        }
+                    }
+                }
+                } // home Box
             }
         }
     }
@@ -412,31 +567,18 @@ private fun SharedAutoTimer(
 private fun AdsFooter(
     adsRemaining: Int,
     cooldownLeft: Int,
-    autoFillUntil: String?,
-    autoActive: Boolean,
+    regenLeft: Int,
+    adsMax: Int,
 ) {
-    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val refillUntil = autoFillUntil.takeIf { autoActive && adsRemaining <= 0 }
-    val needTick = adsRemaining <= 0 && refillUntil != null
-    LaunchedEffect(needTick, refillUntil) {
-        if (!needTick) return@LaunchedEffect
-        while (true) {
-            nowMs = System.currentTimeMillis()
-            if (remainingSeconds(refillUntil, nowMs) <= 0L) break
-            delay(250)
-        }
-    }
-
     val footer = when {
         adsRemaining <= 0 -> {
-            if (autoActive) {
-                "Ads refill when auto ends"
-            } else {
-                "More ads soon…"
-            }
+            if (regenLeft > 0) "Next Boost Ad in ${formatCountdown(regenLeft.toLong())}"
+            else "No ads available"
         }
-        cooldownLeft > 0 -> "Next ad in ${cooldownLeft}s · $adsRemaining ads left"
-        else -> "$adsRemaining ads left this run"
+        cooldownLeft > 0 -> "Next Boost Ad in ${cooldownLeft}s · $adsRemaining/$adsMax ads"
+        adsRemaining < adsMax && regenLeft > 0 ->
+            "$adsRemaining/$adsMax ads · +1 in ${formatCountdown(regenLeft.toLong())}"
+        else -> "$adsRemaining/$adsMax ads"
     }
 
     Text(
@@ -552,6 +694,222 @@ internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
     return fillRate / power
 }
 
+private data class SatParticle(
+    val id: Long,
+    val from: Offset,
+    val to: Offset,
+)
+
+/** BTC balance + progress bar; reports bar-end position for the sat-earn particle. */
+@Composable
+private fun SatEarnStage(
+    satsBalance: Int,
+    displayProgress: Double,
+    unitsPerSat: Int,
+    autoActive: Boolean,
+    fillRate: Double,
+    tapPower: Double,
+    onTap: () -> Unit,
+    barFlash: Float = 0f,
+    onBarPositioned: (LayoutCoordinates) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                formatBtcAmount(
+                    satsBalance = satsBalance,
+                    barProgress = displayProgress,
+                    unitsPerSat = unitsPerSat,
+                ),
+                fontSize = 42.sp,
+                fontWeight = FontWeight.Black,
+                color = BrandInk,
+                maxLines = 1,
+                style = TextStyle(
+                    shadow = Shadow(
+                        color = BrandAccent.copy(alpha = 0.5f),
+                        offset = Offset(0f, 6f),
+                        blurRadius = 34f,
+                    ),
+                ),
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "BTC",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = BrandAccent,
+                letterSpacing = 3.sp,
+            )
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        ProgressBar(
+            displayProgress = displayProgress,
+            total = unitsPerSat,
+            autoActive = autoActive,
+            fillRate = fillRate,
+            tapPower = tapPower,
+            onTap = onTap,
+            flash = barFlash,
+            modifier = Modifier.onGloballyPositioned(onBarPositioned),
+        )
+    }
+}
+
+private object SatParticleMotion {
+    const val POP_MS = 320L
+    const val HOVER_MS = 500L
+    const val FLY_MS = 850
+    /** When the orb arrives at Redeem (for afterglow sync). */
+    const val LAND_AT_MS = POP_MS + HOVER_MS + FLY_MS - 60L
+}
+
+@Composable
+private fun FlyingSatParticle(
+    particle: SatParticle,
+    onFinished: () -> Unit,
+) {
+    val popT = remember { Animatable(0f) }
+    val flyT = remember { Animatable(0f) }
+    val bob = remember { Animatable(0f) }
+    val density = LocalDensity.current
+    val popUpPx = with(density) { 58.dp.toPx() }
+    val popOutPx = with(density) { 18.dp.toPx() }
+    val curveBulgePx = with(density) { 42.dp.toPx() }
+    val curveLiftPx = with(density) { 36.dp.toPx() }
+    val bobPx = with(density) { 7.dp.toPx() }
+    val orbPx = with(density) { 44.dp.toPx() }
+
+    LaunchedEffect(particle.id) {
+        // 1) Pop out of the bar
+        popT.animateTo(
+            1f,
+            animationSpec = spring(
+                dampingRatio = 0.58f,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        )
+        // 2) Hover / breathe
+        val hoverJob = launch {
+            while (true) {
+                bob.animateTo(-bobPx, animationSpec = tween(420, easing = FastOutSlowInEasing))
+                bob.animateTo(0f, animationSpec = tween(420, easing = FastOutSlowInEasing))
+            }
+        }
+        delay(SatParticleMotion.HOVER_MS)
+        hoverJob.cancel()
+        bob.snapTo(0f)
+        // 3) Ease along the curve to Redeem
+        flyT.animateTo(
+            1f,
+            animationSpec = tween(
+                durationMillis = SatParticleMotion.FLY_MS,
+                easing = CubicBezierEasing(0.4f, 0.0f, 0.15f, 1.0f),
+            ),
+        )
+        delay(80)
+        onFinished()
+    }
+
+    val hover = Offset(particle.from.x + popOutPx, particle.from.y - popUpPx)
+    val ctrl = Offset(
+        x = hover.x + (particle.to.x - hover.x) * 0.3f + curveBulgePx,
+        y = minOf(hover.y, particle.to.y) - curveLiftPx,
+    )
+    val flyEased = smoothstep(flyT.value)
+    val pos = if (flyT.value > 0.0001f) {
+        quadBezier(hover, ctrl, particle.to, flyEased)
+    } else {
+        val p = lerp(particle.from, hover, popEase(popT.value))
+        Offset(p.x, p.y + bob.value)
+    }
+    val scale = if (flyT.value > 0.0001f) {
+        1.28f - 0.38f * flyEased
+    } else {
+        0.55f + 0.78f * popEase(popT.value)
+    }
+    val alpha = when {
+        popT.value < 0.15f -> (popT.value / 0.15f).coerceIn(0f, 1f)
+        flyT.value < 0.82f -> 1f
+        else -> ((1f - flyT.value) / 0.18f).coerceAtLeast(0f)
+    }
+
+    Box(
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    (pos.x - orbPx / 2f).roundToInt(),
+                    (pos.y - orbPx / 2f).roundToInt(),
+                )
+            }
+            .size(44.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+                clip = false
+            }
+            .drawBehind {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.95f),
+                            BrandAccent,
+                            BrandAccentHot.copy(alpha = 0.35f),
+                            Color.Transparent,
+                        ),
+                    ),
+                    radius = size.minDimension * 0.72f,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "S",
+            color = BrandOnAccent.copy(alpha = 0.92f),
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Black,
+        )
+    }
+}
+
+private fun popEase(t: Float): Float {
+    val x = t.coerceIn(0f, 1f)
+    return 1f - (1f - x) * (1f - x) * (1f - x)
+}
+
+private fun smoothstep(t: Float): Float {
+    val x = t.coerceIn(0f, 1f)
+    return x * x * (3f - 2f * x)
+}
+
+private fun lerp(a: Offset, b: Offset, t: Float): Offset =
+    Offset(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+
+private fun quadBezier(p0: Offset, p1: Offset, p2: Offset, t: Float): Offset {
+    val u = 1f - t
+    return Offset(
+        x = u * u * p0.x + 2f * u * t * p1.x + t * t * p2.x,
+        y = u * u * p0.y + 2f * u * t * p1.y + t * t * p2.y,
+    )
+}
+
+private fun playSatTick() {
+    try {
+        val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+        tg.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
+        Handler(Looper.getMainLooper()).postDelayed({ tg.release() }, 100)
+    } catch (_: Exception) {
+        // ToneGenerator can fail on some emulators — haptic still fires.
+    }
+}
+
 @Composable
 private fun ProgressBar(
     displayProgress: Double,
@@ -560,12 +918,14 @@ private fun ProgressBar(
     fillRate: Double,
     tapPower: Double,
     onTap: () -> Unit,
+    flash: Float = 0f,
+    modifier: Modifier = Modifier,
 ) {
     val fraction by animateFloatAsState(
         targetValue = if (total > 0) (displayProgress / total).toFloat().coerceIn(0f, 1f) else 0f,
         label = "bar",
     )
-    Column(Modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 "${floor(displayProgress).toInt()} / $total taps",
@@ -582,7 +942,11 @@ private fun ProgressBar(
                 .height(30.dp)
                 .clip(RoundedCornerShape(50))
                 .background(BrandInk.copy(alpha = 0.06f))
-                .border(1.dp, BrandInk.copy(alpha = 0.10f), RoundedCornerShape(50))
+                .border(
+                    1.dp,
+                    BrandAccent.copy(alpha = 0.10f + 0.75f * flash),
+                    RoundedCornerShape(50),
+                )
                 .clickable(onClick = onTap),
         ) {
             Box(
@@ -590,8 +954,15 @@ private fun ProgressBar(
                     .fillMaxWidth(fraction.coerceAtLeast(0.04f))
                     .height(30.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(Brush.horizontalGradient(listOf(BrandFill, BrandFillHot)))
-                    .border(1.dp, BrandFillHot.copy(alpha = 0.5f), RoundedCornerShape(50)),
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                androidx.compose.ui.graphics.lerp(BrandFill, BrandAccent, flash * 0.85f),
+                                androidx.compose.ui.graphics.lerp(BrandFillHot, Color.White, flash * 0.65f),
+                            ),
+                        ),
+                    )
+                    .border(1.dp, BrandFillHot.copy(alpha = 0.5f + 0.5f * flash), RoundedCornerShape(50)),
             )
         }
     }

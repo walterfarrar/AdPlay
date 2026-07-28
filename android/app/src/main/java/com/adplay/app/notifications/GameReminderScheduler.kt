@@ -16,7 +16,7 @@ import java.time.Instant
 import kotlin.math.abs
 
 /**
- * Local reminders keyed off Firebase server timestamps (autoFillUntil / tapStrengthUntil).
+ * Local reminders keyed off Firebase server timestamps (autoFillUntil / nextAdChargeAt).
  * Device clock only affects *when the alarm fires*, not how much was earned.
  */
 object GameReminderScheduler {
@@ -40,7 +40,7 @@ object GameReminderScheduler {
             "Game alerts",
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "Auto timer and ad availability"
+            description = "Auto timer and Boost Ad availability"
         }
         mgr.createNotificationChannel(channel)
     }
@@ -53,13 +53,9 @@ object GameReminderScheduler {
 
         val now = System.currentTimeMillis()
         val autoAt = parseMillis(state.autoFillUntil)?.takeIf { state.autoFillActive }
-        val tapAt = parseMillis(state.tapStrengthUntil)?.takeIf { state.tapStrengthActive }
 
-        // Ads refill when both auto and Stronger windows are gone
-        val adsRefillAt = when {
-            state.adsRemainingToday > 0 -> null
-            else -> listOfNotNull(autoAt, tapAt).maxOrNull()
-        }
+        // Out of Boost Ads: notify when the next timed charge lands.
+        val adsRefillAt = nextBoostAdRefillMs(state, now)
 
         val scheduleAuto = autoAt != null && autoAt > now + 2_000L
         val scheduleAds = adsRefillAt != null && adsRefillAt > now + 2_000L
@@ -85,6 +81,15 @@ object GameReminderScheduler {
         }
     }
 
+    /** Only when the bank is empty — first regen charge from 0 → 1. */
+    private fun nextBoostAdRefillMs(state: GameState, nowMs: Long): Long? {
+        if (state.adsRemainingToday > 0) return null
+        parseMillis(state.nextAdChargeAt)?.let { return it }
+        val regenLeft = state.adRegenSecondsLeft
+        if (regenLeft <= 0) return null
+        return nowMs + regenLeft * 1_000L
+    }
+
     fun show(context: Context, kind: String) {
         ensureChannel(context)
         val (title, body, id) = when (kind) {
@@ -94,8 +99,8 @@ object GameReminderScheduler {
                 NOTIF_AUTO,
             )
             KIND_ADS_AVAILABLE -> Triple(
-                "More ads available",
-                "Your ad run refreshed — open AdPlay to watch more.",
+                "Boost Ad ready",
+                "A Boost Ad charged up — open AdPlay to use it.",
                 NOTIF_ADS,
             )
             else -> return
@@ -167,4 +172,3 @@ object GameReminderScheduler {
         }
     }
 }
-

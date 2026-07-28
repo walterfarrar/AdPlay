@@ -1,8 +1,11 @@
 package com.adplay.app.data
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import com.adplay.app.BuildConfig
+import com.adplay.app.ads.AdFillResult
+import com.adplay.app.ads.AdMobRewarded
 import com.adplay.app.ads.AdsBitvexAdActivity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -11,11 +14,15 @@ import kotlinx.coroutines.TimeoutCancellationException
 
 /**
  * Partner abstraction.
- * Mock: short delay then server credit.
- * AdsBitvex: WebView JS reward ad, then server credit (no S2S from partner).
+ * Waterfall: AdMob rewarded, then AdsBitvex on no-fill.
+ * Boost credit via mockCompleteBoost after a successful reward.
  */
 interface AdServing {
     suspend fun showBoostAd(type: BoostType): GameState
+}
+
+private fun interface AdNetwork {
+    suspend fun attempt(activity: Activity?): AdFillResult
 }
 
 class MockAdService(private val api: ApiClient) : AdServing {
@@ -25,14 +32,13 @@ class MockAdService(private val api: ApiClient) : AdServing {
     }
 }
 
-class AdsBitvexAdService(
-    private val api: ApiClient,
-    private val appContext: Context,
-) : AdServing {
-    override suspend fun showBoostAd(type: BoostType): GameState {
-        if (DebugAdBypass.isEnabled(appContext)) {
-            return MockAdService(api).showBoostAd(type)
-        }
+private class AdMobNetwork : AdNetwork {
+    override suspend fun attempt(activity: Activity?): AdFillResult =
+        AdMobRewarded.present(activity)
+}
+
+private class AdsBitvexNetwork(private val appContext: Context) : AdNetwork {
+    override suspend fun attempt(activity: Activity?): AdFillResult {
         val deferred = CompletableDeferred<Boolean>()
         AdsBitvexAdActivity.pendingResult?.cancel()
         AdsBitvexAdActivity.pendingResult = deferred
@@ -46,25 +52,73 @@ class AdsBitvexAdService(
             AdsBitvexAdActivity.pendingResult = null
             false
         }
-        if (!ok) {
-            throw ApiException(408, "Ad not completed")
-        }
-        return api.mockComplete(type)
+        // WebView partner: treat failure as unavailable so waterfall can continue if more rungs exist.
+        return if (ok) AdFillResult.EARNED else AdFillResult.UNAVAILABLE
     }
 }
 
-class PartnerAdService(private val api: ApiClient) : AdServing {
+private class NetworkAdService(
+    private val api: ApiClient,
+    private val appContext: Context,
+    private val network: AdNetwork,
+) : AdServing {
     override suspend fun showBoostAd(type: BoostType): GameState {
-        throw ApiException(501, "Partner SDK not configured.")
+        if (DebugAdBypass.isEnabled(appContext)) {
+            return MockAdService(api).showBoostAd(type)
+        }
+        return when (network.attempt(null)) {
+            AdFillResult.EARNED -> api.mockComplete(type)
+            AdFillResult.DECLINED, AdFillResult.UNAVAILABLE ->
+                throw ApiException(408, "Ad not completed")
+        }
+    }
+}
+
+private class WaterfallAdService(
+    private val api: ApiClient,
+    private val appContext: Context,
+    private val networks: List<AdNetwork>,
+) : AdServing {
+    override suspend fun showBoostAd(type: BoostType): GameState {
+        if (DebugAdBypass.isEnabled(appContext)) {
+            return MockAdService(api).showBoostAd(type)
+        }
+        for ((index, network) in networks.withIndex()) {
+            when (val result = network.attempt(null)) {
+                AdFillResult.EARNED -> return api.mockComplete(type)
+                AdFillResult.DECLINED -> throw ApiException(408, "Ad not completed")
+                AdFillResult.UNAVAILABLE -> {
+                    android.util.Log.i("AdPlayAds", "Waterfall rung $index unavailable, trying next")
+                    continue
+                }
+            }
+        }
+        throw ApiException(408, "Ad not completed")
     }
 }
 
 object AdServiceFactory {
     fun make(api: ApiClient, provider: String, context: Context): AdServing {
-        return when (provider.lowercase()) {
+        val app = context.applicationContext
+        val key = provider.lowercase()
+        android.util.Log.i("AdPlayAds", "AdServiceFactory provider=$key")
+        return when (key) {
             "mock" -> MockAdService(api)
-            "adsbitvex" -> AdsBitvexAdService(api, context.applicationContext)
-            else -> AdsBitvexAdService(api, context.applicationContext)
+            "admob" -> NetworkAdService(api, app, AdMobNetwork())
+            // Explicit Bitvex-only (skip AdMob). Prefer "waterfall" in production.
+            "adsbitvex_only" -> NetworkAdService(api, app, AdsBitvexNetwork(app))
+            // "adsbitvex" used to mean Bitvex-only; treat as waterfall so AdMob is tried first
+            // even if an older backend still returns adProvider=adsbitvex.
+            "waterfall", "adsbitvex" -> WaterfallAdService(
+                api,
+                app,
+                listOf(AdMobNetwork(), AdsBitvexNetwork(app)),
+            )
+            else -> WaterfallAdService(
+                api,
+                app,
+                listOf(AdMobNetwork(), AdsBitvexNetwork(app)),
+            )
         }
     }
 

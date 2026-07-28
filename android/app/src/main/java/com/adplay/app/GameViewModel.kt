@@ -3,6 +3,7 @@ package com.adplay.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.adplay.app.ads.AdMobRewarded
 import com.adplay.app.data.AdServiceFactory
 import com.adplay.app.data.AdServing
 import com.adplay.app.data.ApiClient
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 data class UiState(
     val ready: Boolean = false,
@@ -32,7 +34,7 @@ data class UiState(
     val error: String? = null,
     val withdrawals: List<Withdrawal> = emptyList(),
     val apiBaseUrl: String = "Firebase (adplay-sats)",
-    /** Debug builds only — skip AdsBitvex and auto-credit boosts. */
+    /** Debug builds only — skip live ads and auto-credit boosts. */
     val bypassAdsAvailable: Boolean = DebugAdBypass.available,
     val bypassAds: Boolean = false,
 )
@@ -54,6 +56,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private var anchorMs: Long = System.currentTimeMillis()
     private var windowEndHandled = false
     private var foreground = false
+    private var skipAnimating = false
+
+    companion object {
+        private const val SKIP_LERP_MS = 3_000L
+    }
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -83,6 +90,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 refresh(force = true)
                 _ui.update { it.copy(ready = true, loading = false) }
                 foreground = true
+                AdMobRewarded.preload(appContext)
                 ensureTicker()
             } catch (e: Exception) {
                 _ui.update {
@@ -107,6 +115,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     fun onBackground() {
         foreground = false
         tickerJob?.cancel()
+        // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
+        GameReminderScheduler.sync(appContext, project(serverState, System.currentTimeMillis()))
     }
 
     fun clearError() {
@@ -129,13 +139,95 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(loading = true, error = null) }
             try {
                 val service = ads ?: throw IllegalStateException("Ad service not ready")
-                applyState(service.showBoostAd(boost), force = true)
+                val from = _ui.value.state
+                val to = service.showBoostAd(boost)
                 _ui.update { it.copy(loading = false) }
+                if (boost == BoostType.SKIP_TIME) {
+                    playSkipLerp(from, to)
+                } else {
+                    applyState(to, force = true)
+                }
             } catch (e: Exception) {
                 _ui.update { it.copy(loading = false, error = e.message) }
                 runCatching { refresh(force = true) }
             }
         }
+    }
+
+    /** Lerp progress / sats / auto timer / regen over a few seconds after Skip Time. */
+    private suspend fun playSkipLerp(from: GameState, to: GameState) {
+        skipAnimating = true
+        tickerJob?.cancel()
+        tickerJob = null
+
+        val incoming = to.updatedAt
+        if (incoming != null) lastUpdatedAt = incoming
+        serverState = to
+        GameReminderScheduler.sync(appContext, to)
+
+        val durationMs = SKIP_LERP_MS
+        val startMs = System.currentTimeMillis()
+        val units = maxOf(1, to.unitsPerSat)
+        val fromAbs = from.satsBalance.toDouble() * units + from.progress
+        val toAbs = to.satsBalance.toDouble() * units + to.progress
+        val fromAuto = remainingSecondsDouble(from.autoFillUntil)
+        val toAuto = remainingSecondsDouble(to.autoFillUntil)
+        val fromRegen = from.adRegenSecondsLeft.toDouble()
+        val toRegen = to.adRegenSecondsLeft.toDouble()
+        val fromAds = from.adsRemainingToday
+        val toAds = to.adsRemainingToday
+
+        while (true) {
+            val elapsed = System.currentTimeMillis() - startMs
+            val u = (elapsed.toDouble() / durationMs).coerceIn(0.0, 1.0)
+            val e = 1.0 - (1.0 - u).let { it * it * it } // ease-out cubic
+
+            val absProg = fromAbs + (toAbs - fromAbs) * e
+            val sats = floor(absProg / units).toInt()
+            var prog = absProg - sats.toDouble() * units
+            if (prog < 0) prog = 0.0
+            if (prog >= units) prog = units - 0.0001
+
+            val autoLeft = (fromAuto + (toAuto - fromAuto) * e).coerceAtLeast(0.0)
+            val regenLeft = (fromRegen + (toRegen - fromRegen) * e).coerceAtLeast(0.0)
+            val now = System.currentTimeMillis()
+            val autoUntil = if (autoLeft > 0.05) {
+                Instant.ofEpochMilli(now + (autoLeft * 1000).toLong()).toString()
+            } else {
+                to.autoFillUntil
+            }
+            val nextCharge = if (regenLeft > 0.5) {
+                Instant.ofEpochMilli(now + (regenLeft * 1000).toLong()).toString()
+            } else {
+                to.nextAdChargeAt
+            }
+
+            val display = to.copy(
+                fillRate = 0.0,
+                satsBalance = sats,
+                progress = prog,
+                satsEarnedToday = from.satsEarnedToday + maxOf(0, sats - from.satsBalance),
+                autoFillActive = autoLeft > 0.05 || (to.autoFillActive && toAuto > 0),
+                autoFillUntil = autoUntil,
+                adRegenSecondsLeft = regenLeft.roundToInt(),
+                nextAdChargeAt = nextCharge,
+                adsRemainingToday = if (e < 0.85) fromAds else toAds,
+            )
+            _ui.update { it.copy(state = display) }
+            if (u >= 1.0) break
+            delay(16)
+        }
+
+        skipAnimating = false
+        anchorMs = System.currentTimeMillis()
+        windowEndHandled = false
+        _ui.update { it.copy(state = project(to, System.currentTimeMillis())) }
+        ensureTicker()
+    }
+
+    private fun remainingSecondsDouble(untilIso: String?): Double {
+        val untilMs = parseMs(untilIso) ?: return 0.0
+        return ((untilMs - System.currentTimeMillis()) / 1000.0).coerceAtLeast(0.0)
     }
 
     fun debugReset() {
@@ -175,7 +267,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun refresh(force: Boolean = false) {
         val (state, tunables) = api.fetchState()
-        ads = AdServiceFactory.make(api, tunables?.adProvider ?: "adsbitvex", appContext)
+        ads = AdServiceFactory.make(api, tunables?.adProvider ?: "waterfall", appContext)
         applyState(state, force = force)
         _ui.update { it.copy(tunables = tunables, error = null) }
     }
@@ -194,8 +286,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         serverState = state
         anchorMs = System.currentTimeMillis()
         windowEndHandled = false
-        _ui.update { it.copy(state = state) }
-        GameReminderScheduler.sync(appContext, state)
+        val projected = project(state, anchorMs)
+        _ui.update { it.copy(state = projected) }
+        GameReminderScheduler.sync(appContext, projected)
         ensureTicker()
     }
 
@@ -206,10 +299,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
      * we hit the server exactly once to pull the authoritative reset (ads refilled).
      */
     private fun ensureTicker() {
-        if (!foreground) return
+        if (!foreground || skipAnimating) return
         if (tickerJob?.isActive == true) return
         tickerJob = viewModelScope.launch {
-            while (isActive && foreground) {
+            while (isActive && foreground && !skipAnimating) {
                 val now = System.currentTimeMillis()
                 val projected = project(serverState, now)
                 _ui.update { it.copy(state = projected) }
@@ -223,7 +316,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val shown = _ui.value.state
-                if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0) break
+                val adsMax = _ui.value.tunables?.adsPerCycle ?: 10
+                val waitingRegen = shown.adRegenSecondsLeft > 0 && shown.adsRemainingToday < adsMax
+                if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0 && !waitingRegen) break
                 delay(1_000)
             }
         }
@@ -235,11 +330,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val cooldown = ceil(s.adCooldownSecondsLeft - elapsedSec).toInt().coerceAtLeast(0)
         val untilMs = parseMs(s.autoFillUntil)
         val autoActive = s.autoFillActive && untilMs != null && untilMs > nowMs
+        val (adsLeft, regenLeft) = projectAdCharges(s, nowMs)
 
         if (!s.autoFillActive || s.fillRate <= 0.0 || s.unitsPerSat <= 0 || untilMs == null) {
             return s.copy(
                 adCooldownSecondsLeft = cooldown,
                 autoFillActive = autoActive,
+                adsRemainingToday = adsLeft,
+                adRegenSecondsLeft = regenLeft,
                 durationBoostActive = if (autoActive) s.durationBoostActive else false,
                 speedBoostActive = if (autoActive) s.speedBoostActive else false,
                 tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
@@ -253,8 +351,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val earnSec = (earnUntil - anchorMs).coerceAtLeast(0L) / 1000.0
         val total = s.progress + s.fillRate * earnSec
         var bars = floor(total / s.unitsPerSat).toInt().coerceAtLeast(0)
-        val maxBars = (s.dailySatsEarnCap - s.satsEarnedToday).coerceAtLeast(0)
-        if (bars > maxBars) bars = maxBars
+        // dailySatsEarnCap <= 0 means unlimited
+        if (s.dailySatsEarnCap > 0) {
+            val maxBars = (s.dailySatsEarnCap - s.satsEarnedToday).coerceAtLeast(0)
+            if (bars > maxBars) bars = maxBars
+        }
         val newProgress = (total - bars.toDouble() * s.unitsPerSat)
             .coerceIn(0.0, s.unitsPerSat.toDouble())
 
@@ -264,6 +365,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             satsEarnedToday = s.satsEarnedToday + bars,
             adCooldownSecondsLeft = cooldown,
             autoFillActive = autoActive,
+            adsRemainingToday = adsLeft,
+            adRegenSecondsLeft = regenLeft,
             durationBoostActive = if (autoActive) s.durationBoostActive else false,
             speedBoostActive = if (autoActive) s.speedBoostActive else false,
             tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
@@ -271,6 +374,46 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             speedBoostCount = if (autoActive) s.speedBoostCount else 0,
             tapStrengthBoostCount = if (autoActive) s.tapStrengthBoostCount else 0,
         )
+    }
+
+    private fun projectAdCharges(s: GameState, nowMs: Long): Pair<Int, Int> {
+        val maxCharges = _ui.value.tunables?.adsPerCycle?.coerceAtLeast(1)
+            ?: maxOf(s.adsRemainingToday, 1)
+        val regenSec = _ui.value.tunables?.adRegenSeconds ?: 0
+        var charges = s.adsRemainingToday
+        var regenLeft = s.adRegenSecondsLeft
+
+        if (regenSec <= 0 || charges >= maxCharges) {
+            return minOf(charges, maxCharges) to 0
+        }
+
+        val nextMs = parseMs(s.nextAdChargeAt)
+        if (nextMs != null) {
+            if (nowMs >= nextMs) {
+                val gained = 1 + ((nowMs - nextMs) / 1000L / regenSec).toInt()
+                charges = minOf(maxCharges, s.adsRemainingToday + gained)
+                regenLeft = if (charges >= maxCharges) {
+                    0
+                } else {
+                    val into = ((nowMs - nextMs) / 1000L % regenSec).toInt()
+                    (regenSec - into).coerceAtLeast(0)
+                }
+            } else {
+                regenLeft = ceil((nextMs - nowMs) / 1000.0).toInt().coerceAtLeast(0)
+            }
+        } else if (regenLeft > 0) {
+            val elapsed = ((nowMs - anchorMs).coerceAtLeast(0L) / 1000.0)
+            val left = ceil(regenLeft - elapsed).toInt()
+            if (left <= 0) {
+                val overdue = -left
+                val gained = 1 + overdue / regenSec
+                charges = minOf(maxCharges, s.adsRemainingToday + gained)
+                regenLeft = if (charges >= maxCharges) 0 else regenSec - (overdue % regenSec)
+            } else {
+                regenLeft = left
+            }
+        }
+        return charges to regenLeft
     }
 
     private fun parseMs(iso: String?): Long? =

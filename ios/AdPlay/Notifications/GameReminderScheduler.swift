@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-/// Local reminders keyed off Firebase server timestamps (`autoFillUntil` / `tapStrengthUntil`).
+/// Local reminders keyed off Firebase server timestamps (`autoFillUntil` / `nextAdChargeAt`).
 /// Device clock only affects *when* the alert fires, not how much was earned.
 enum GameReminderScheduler {
     private static let idAuto = "adplay.auto_ended"
@@ -22,14 +22,9 @@ enum GameReminderScheduler {
 
         let now = Date()
         let autoAt = parseDate(state.autoFillUntil).flatMap { state.autoFillActive ? $0 : nil }
-        let tapActive = state.tapStrengthActive ?? false
-        let tapAt = parseDate(state.tapStrengthUntil).flatMap { tapActive ? $0 : nil }
 
-        // Ads refill when both auto and Stronger windows are gone
-        let adsRefillAt: Date? = {
-            if state.adsRemainingToday > 0 { return nil }
-            return [autoAt, tapAt].compactMap { $0 }.max()
-        }()
+        // Out of Boost Ads: notify when the next timed charge lands.
+        let adsRefillAt = nextBoostAdRefill(from: state, now: now)
 
         let scheduleAuto = autoAt.map { $0 > now.addingTimeInterval(2) } ?? false
         let scheduleAds = adsRefillAt.map { $0 > now.addingTimeInterval(2) } ?? false
@@ -37,19 +32,37 @@ enum GameReminderScheduler {
         if scheduleAuto, scheduleAds,
            let autoAt, let adsRefillAt,
            abs(autoAt.timeIntervalSince(adsRefillAt)) < 1.5 {
-            // Same moment — one combined alert
-            schedule(id: idAds, at: adsRefillAt, title: "More ads available",
-                     body: "Your ad run refreshed — open AdPlay to watch more.")
+            schedule(
+                id: idAds,
+                at: adsRefillAt,
+                title: "Boost Ad ready",
+                body: "A Boost Ad charged up — open AdPlay to use it."
+            )
         } else {
             if scheduleAuto, let autoAt {
                 schedule(id: idAuto, at: autoAt, title: "Auto fill ended",
                          body: "Your auto timer ran out.")
             }
             if scheduleAds, let adsRefillAt {
-                schedule(id: idAds, at: adsRefillAt, title: "More ads available",
-                         body: "Your ad run refreshed — open AdPlay to watch more.")
+                schedule(
+                    id: idAds,
+                    at: adsRefillAt,
+                    title: "Boost Ad ready",
+                    body: "A Boost Ad charged up — open AdPlay to use it."
+                )
             }
         }
+    }
+
+    /// Only when the bank is empty — first regen charge from 0 → 1.
+    private static func nextBoostAdRefill(from state: GameState, now: Date) -> Date? {
+        guard state.adsRemainingToday <= 0 else { return nil }
+        if let at = parseDate(state.nextAdChargeAt) {
+            return at
+        }
+        let regenLeft = state.adRegenSecondsLeft ?? 0
+        guard regenLeft > 0 else { return nil }
+        return now.addingTimeInterval(TimeInterval(regenLeft))
     }
 
     private static func schedule(id: String, at date: Date, title: String, body: String) {

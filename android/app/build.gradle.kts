@@ -37,14 +37,32 @@ android {
         // Override per buildType. Flip debug → false to test real AdsBitvex locally.
         buildConfigField("boolean", "DEBUG_BYPASS_ADS", "false")
 
+        // Production Android AdMob app. Debug overrides the unit ID to Google's sample.
+        manifestPlaceholders["admobAppId"] = "ca-app-pub-1524015618608684~9712547486"
+        buildConfigField(
+            "String",
+            "ADMOB_REWARDED_UNIT_ID",
+            "\"ca-app-pub-1524015618608684/6292177229\"",
+        )
     }
 
     buildTypes {
         debug {
             buildConfigField("boolean", "DEBUG_BYPASS_ADS", "true")
+            // Sample rewarded unit (safe for local testing / avoids invalid traffic).
+            buildConfigField(
+                "String",
+                "ADMOB_REWARDED_UNIT_ID",
+                "\"ca-app-pub-3940256099942544/5224354917\"",
+            )
         }
         release {
             buildConfigField("boolean", "DEBUG_BYPASS_ADS", "false")
+            buildConfigField(
+                "String",
+                "ADMOB_REWARDED_UNIT_ID",
+                "\"ca-app-pub-1524015618608684/6292177229\"",
+            )
         }
     }
 
@@ -122,7 +140,7 @@ dependencies {
 
     implementation("com.google.firebase:firebase-firestore-ktx")
 
-
+    implementation("com.google.android.gms:play-services-ads:23.6.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

@@ -1,8 +1,16 @@
+import AudioToolbox
 import SwiftUI
+import UIKit
 
 struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var showRedeem = false
+    @State private var satAnchors: [SatEarnAnchor: CGPoint] = [:]
+    @State private var satParticles: [SatParticle] = []
+    @State private var redeemGlow = false
+    @State private var barFlash = false
+    @State private var lastCelebrateAt: Date = .distantPast
+    @State private var homeSize: CGSize = .zero
 
     var body: some View {
         let state = session.state
@@ -39,12 +47,22 @@ struct HomeView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
                             .background(
-                                Capsule().fill(Color("BrandAccent").opacity(0.14))
+                                Capsule().fill(Color("BrandAccent").opacity(redeemGlow ? 0.38 : 0.14))
                             )
                             .overlay(
-                                Capsule().stroke(Color("BrandAccent").opacity(0.55), lineWidth: 1)
+                                Capsule().stroke(
+                                    Color("BrandAccent").opacity(redeemGlow ? 1.0 : 0.55),
+                                    lineWidth: redeemGlow ? 2 : 1
+                                )
                             )
+                            .shadow(
+                                color: Color("BrandAccent").opacity(redeemGlow ? 0.85 : 0),
+                                radius: redeemGlow ? 16 : 0,
+                                y: 0
+                            )
+                            .scaleEffect(redeemGlow ? 1.08 : 1.0)
                     }
+                    .background(satAnchorReporter(.redeem))
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 12)
@@ -61,24 +79,15 @@ struct HomeView: View {
 
                 Spacer(minLength: 24)
 
-                BtcBalanceView(
+                SatEarnStage(
                     satsBalance: state.satsBalance,
                     progress: state.progress,
                     total: state.unitsPerSat,
                     fillRate: state.fillRate,
-                    autoActive: state.autoFillActive
-                )
-
-                Spacer(minLength: 28)
-
-                ProgressBarView(
-                    progress: state.progress,
-                    total: state.unitsPerSat,
-                    fillRate: state.fillRate,
                     tapPower: state.effectiveTapPower,
-                    autoActive: state.autoFillActive
+                    autoActive: state.autoFillActive,
+                    barFlash: barFlash
                 )
-                .padding(.horizontal, 24)
 
                 Text(
                     state.tapsRemaining > 0
@@ -151,8 +160,8 @@ struct HomeView: View {
                 AdsFooterView(
                     adsRemaining: state.adsRemainingToday,
                     cooldownLeft: state.adCooldownSecondsLeft,
-                    autoFillUntil: state.autoFillUntil,
-                    autoActive: state.autoFillActive
+                    regenLeft: state.adRegenSecondsLeft ?? 0,
+                    adsMax: session.tunables?.adsPerCycle ?? 10
                 )
 
                 // Reserved height so layout never jumps when Skip appears.
@@ -182,6 +191,26 @@ struct HomeView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 8)
             }
+
+            ForEach(satParticles) { particle in
+                FlyingSatParticleView(particle: particle) {
+                    satParticles.removeAll { $0.id == particle.id }
+                }
+            }
+        }
+        .coordinateSpace(name: "satEarn")
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { homeSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in homeSize = newSize }
+            }
+        )
+        .onPreferenceChange(SatEarnAnchorKey.self) { satAnchors = $0 }
+        .onChange(of: session.state.satsBalance) { oldValue, newValue in
+            let gained = newValue - oldValue
+            guard gained > 0 else { return }
+            celebrateSatEarn(gained: gained)
         }
         .sheet(isPresented: $showRedeem) {
             RedeemView()
@@ -193,6 +222,66 @@ struct HomeView: View {
         !session.isLoading
             && session.state.adsRemainingToday > 0
             && session.state.adCooldownSecondsLeft == 0
+    }
+
+    private func celebrateSatEarn(gained: Int) {
+        let bursts = min(max(gained, 1), 4)
+        for i in 0..<bursts {
+            let delay = Double(i) * 0.12
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                fireSatCelebrationBeat()
+            }
+        }
+    }
+
+    private func fireSatCelebrationBeat() {
+        let now = Date()
+        guard now.timeIntervalSince(lastCelebrateAt) >= 0.12 || satParticles.isEmpty else { return }
+        lastCelebrateAt = now
+
+        withAnimation(.easeOut(duration: 0.12)) {
+            barFlash = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.easeOut(duration: 0.45)) {
+                barFlash = false
+            }
+        }
+
+        let from = satAnchors[.barEnd]
+            ?? CGPoint(x: max(24, homeSize.width - 36), y: homeSize.height * 0.42)
+        let to = satAnchors[.redeem]
+            ?? CGPoint(x: max(48, homeSize.width - 56), y: 36)
+        if satParticles.count < 4, homeSize.width > 0 {
+            satParticles.append(SatParticle(from: from, to: to))
+        }
+
+        // Afterglow when the orb lands on Redeem (pop + hover + fly).
+        DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.landAt) {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.55)) {
+                redeemGlow = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                withAnimation(.easeOut(duration: 0.5)) {
+                    redeemGlow = false
+                }
+            }
+        }
+
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        AudioServicesPlaySystemSound(1057)
+    }
+
+    private func satAnchorReporter(_ id: SatEarnAnchor) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: SatEarnAnchorKey.self,
+                value: [id: CGPoint(
+                    x: geo.frame(in: .named("satEarn")).midX,
+                    y: geo.frame(in: .named("satEarn")).midY
+                )]
+            )
+        }
     }
 }
 
@@ -215,29 +304,30 @@ struct SharedAutoTimerView: View {
 struct AdsFooterView: View {
     let adsRemaining: Int
     let cooldownLeft: Int
-    let autoFillUntil: String?
-    let autoActive: Bool
+    let regenLeft: Int
+    let adsMax: Int
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            Text(footerText(at: context.date))
-                .font(.caption)
-                .foregroundStyle(Color("BrandMuted"))
-                .padding(.bottom, 16)
-        }
+        Text(footerText)
+            .font(.caption)
+            .foregroundStyle(Color("BrandMuted"))
+            .padding(.bottom, 16)
     }
 
-    private func footerText(at now: Date) -> String {
+    private var footerText: String {
         if adsRemaining <= 0 {
-            if autoActive {
-                return "Ads refill when auto ends"
+            if regenLeft > 0 {
+                return "Next Boost Ad in \(formatCountdown(regenLeft))"
             }
-            return "More ads soon…"
+            return "No ads available"
         }
         if cooldownLeft > 0 {
-            return "Next ad in \(cooldownLeft)s · \(adsRemaining) ads left"
+            return "Next Boost Ad in \(cooldownLeft)s · \(adsRemaining)/\(adsMax) ads"
         }
-        return "\(adsRemaining) ads left this run"
+        if adsRemaining < adsMax, regenLeft > 0 {
+            return "\(adsRemaining)/\(adsMax) ads · +1 in \(formatCountdown(regenLeft))"
+        }
+        return "\(adsRemaining)/\(adsMax) ads"
     }
 }
 
@@ -262,6 +352,190 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
     let btc = (Double(satsBalance) + fraction) * 1e-8
     // 11 dp: 1 sat = 1e-8 BTC; with ~1000 units/sat each unit is visible as 1e-11.
     return String(format: "%.11f", btc)
+}
+
+// MARK: - Sat earn celebration
+
+private enum SatEarnAnchor: Hashable {
+    case redeem
+    case barEnd
+}
+
+private struct SatEarnAnchorKey: PreferenceKey {
+    static var defaultValue: [SatEarnAnchor: CGPoint] = [:]
+    static func reduce(value: inout [SatEarnAnchor: CGPoint], nextValue: () -> [SatEarnAnchor: CGPoint]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private struct SatParticle: Identifiable {
+    let id = UUID()
+    let from: CGPoint
+    let to: CGPoint
+}
+
+/// BTC balance + progress bar; reports bar-end anchor for the sat-earn particle.
+struct SatEarnStage: View {
+    let satsBalance: Int
+    let progress: Double
+    let total: Int
+    let fillRate: Double
+    let tapPower: Double
+    let autoActive: Bool
+    var barFlash: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            BtcBalanceView(
+                satsBalance: satsBalance,
+                progress: progress,
+                total: total,
+                fillRate: fillRate,
+                autoActive: autoActive
+            )
+
+            Spacer(minLength: 28)
+
+            ProgressBarView(
+                progress: progress,
+                total: total,
+                fillRate: fillRate,
+                tapPower: tapPower,
+                autoActive: autoActive,
+                flash: barFlash
+            )
+            .padding(.horizontal, 24)
+            .background(barEndReporter)
+        }
+    }
+
+    private var barEndReporter: some View {
+        GeometryReader { geo in
+            let frame = geo.frame(in: .named("satEarn"))
+            Color.clear.preference(
+                key: SatEarnAnchorKey.self,
+                value: [.barEnd: CGPoint(x: frame.maxX - 12, y: frame.maxY - 15)]
+            )
+        }
+    }
+}
+
+private enum SatParticleMotion {
+    static let pop: TimeInterval = 0.32
+    static let hover: TimeInterval = 0.50
+    static let fly: TimeInterval = 0.85
+    /// When the orb arrives at Redeem (for afterglow sync).
+    static var landAt: TimeInterval { pop + hover + fly - 0.06 }
+}
+
+private struct FlyingSatParticleView: View {
+    let particle: SatParticle
+    let onFinished: () -> Void
+
+    @State private var popT: CGFloat = 0
+    @State private var flyT: CGFloat = 0
+    @State private var bob: CGFloat = 0
+
+    var body: some View {
+        let hover = CGPoint(x: particle.from.x + 18, y: particle.from.y - 58)
+        // Gentle S-curve toward Redeem (bulge right, then in).
+        let ctrl = CGPoint(
+            x: hover.x + (particle.to.x - hover.x) * 0.3 + 42,
+            y: min(hover.y, particle.to.y) - 36
+        )
+        let pos: CGPoint = {
+            if flyT > 0.0001 {
+                return quadBezier(hover, ctrl, particle.to, easedFly(flyT))
+            }
+            let p = lerp(particle.from, hover, popEase(popT))
+            return CGPoint(x: p.x, y: p.y + bob)
+        }()
+        let scale: CGFloat = {
+            if flyT > 0.0001 {
+                return 1.28 - 0.38 * easedFly(flyT)
+            }
+            return 0.55 + 0.78 * popEase(popT)
+        }()
+        let fade: CGFloat = {
+            if popT < 0.15 { return popT / 0.15 }
+            if flyT < 0.82 { return 1 }
+            return max(0, (1 - flyT) / 0.18)
+        }()
+
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.95),
+                            Color("BrandAccent"),
+                            Color("BrandAccent").opacity(0.35),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 28
+                    )
+                )
+                .frame(width: 56, height: 56)
+            Text("S")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(Color(red: 0.04, green: 0.05, blue: 0.08).opacity(0.92))
+        }
+        .scaleEffect(scale)
+        .opacity(fade)
+        .position(pos)
+        .allowsHitTesting(false)
+        .onAppear {
+            // 1) Pop out of the bar
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.58)) {
+                popT = 1
+            }
+            // 2) Hover / breathe
+            DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.pop) {
+                withAnimation(.easeInOut(duration: 0.42).repeatForever(autoreverses: true)) {
+                    bob = -7
+                }
+            }
+            // 3) Ease along the curve to Redeem
+            DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.pop + SatParticleMotion.hover) {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { bob = 0 }
+                withAnimation(.timingCurve(0.4, 0.0, 0.15, 1.0, duration: SatParticleMotion.fly)) {
+                    flyT = 1
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.fly + 0.08) {
+                    onFinished()
+                }
+            }
+        }
+    }
+
+    /// Ease-out cubic for the pop lerp (spring still drives popT).
+    private func popEase(_ t: CGFloat) -> CGFloat {
+        let x = min(1, max(0, t))
+        return 1 - pow(1 - x, 3)
+    }
+
+    /// Extra ease on fly progress so mid-path coasts then settles.
+    private func easedFly(_ t: CGFloat) -> CGFloat {
+        let x = min(1, max(0, t))
+        // Smoothstep-ish ease-in-out
+        return x * x * (3 - 2 * x)
+    }
+
+    private func lerp(_ a: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
+        CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+    }
+
+    private func quadBezier(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        return CGPoint(
+            x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+            y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+        )
+    }
 }
 
 struct BtcBalanceView: View {
@@ -321,6 +595,7 @@ struct ProgressBarView: View {
     let fillRate: Double
     let tapPower: Double
     let autoActive: Bool
+    var flash: Bool = false
 
     @EnvironmentObject private var session: SessionStore
     @State private var anchorProgress: Double = 0
@@ -358,12 +633,17 @@ struct ProgressBarView: View {
                         Capsule()
                             .fill(Color("BrandInk").opacity(0.06))
                             .overlay(
-                                Capsule().stroke(Color("BrandInk").opacity(0.10), lineWidth: 1)
+                                Capsule().stroke(
+                                    Color("BrandAccent").opacity(flash ? 0.85 : 0.10),
+                                    lineWidth: flash ? 2 : 1
+                                )
                             )
                         Capsule()
                             .fill(
                                 LinearGradient(
-                                    colors: [Color("BrandFill"), Color("BrandFillHot")],
+                                    colors: flash
+                                        ? [Color("BrandAccent"), Color.white]
+                                        : [Color("BrandFill"), Color("BrandFillHot")],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -372,14 +652,18 @@ struct ProgressBarView: View {
                                 Capsule()
                                     .fill(
                                         LinearGradient(
-                                            colors: [Color.white.opacity(0.35), Color.clear],
+                                            colors: [Color.white.opacity(flash ? 0.65 : 0.35), Color.clear],
                                             startPoint: .top,
                                             endPoint: .center
                                         )
                                     )
                             )
                             .frame(width: max(20, geo.size.width * fraction))
-                            .shadow(color: Color("BrandFill").opacity(0.55), radius: 10, y: 0)
+                            .shadow(
+                                color: (flash ? Color("BrandAccent") : Color("BrandFill")).opacity(flash ? 0.9 : 0.55),
+                                radius: flash ? 18 : 10,
+                                y: 0
+                            )
                     }
                     .contentShape(Capsule())
                     .onTapGesture {

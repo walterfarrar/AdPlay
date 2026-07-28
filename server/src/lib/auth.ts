@@ -99,7 +99,17 @@ export function ensureGameState(userId: string): void {
   db.prepare(
     `INSERT INTO game_state (
       user_id, progress, fill_rate, taps_remaining, tap_day,
-      ads_used_today, ads_day, sats_earned_today, sats_day, last_tick_at
-    ) VALUES (?, 0, 0, ?, ?, 0, ?, 0, ?, ?)`,
-  ).run(userId, gameConfig.dailyTapCap, day, day, day, nowIso());
+      ads_used_today, ad_charges, ad_charges_at, ads_day,
+      sats_earned_today, sats_day, last_tick_at
+    ) VALUES (?, 0, 0, ?, ?, 0, ?, ?, ?, 0, ?, ?)`,
+  ).run(
+    userId,
+    gameConfig.dailyTapCap,
+    day,
+    gameConfig.adsPerCycle,
+    nowIso(),
+    day,
+    day,
+    nowIso(),
+  );
 }
