@@ -694,6 +694,22 @@ internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
     return fillRate / power
 }
 
+/** Sats earned per hour from the current auto fill rate (0 when idle). */
+internal fun satsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: Boolean): Double {
+    if (!autoActive || fillRate <= 0.0 || unitsPerSat <= 0) return 0.0
+    return (fillRate / unitsPerSat) * 3600.0
+}
+
+internal fun formatSatsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: Boolean): String {
+    val rate = satsPerHour(fillRate, unitsPerSat, autoActive)
+    if (rate <= 0.0) return "0 sats/h"
+    return if (rate >= 100.0) {
+        String.format("%.0f sats/h", rate)
+    } else {
+        String.format("%.1f sats/h", rate)
+    }
+}
+
 private data class SatParticle(
     val id: Long,
     val from: Offset,
@@ -926,6 +942,15 @@ private fun ProgressBar(
         label = "bar",
     )
     Column(modifier.fillMaxWidth()) {
+        Text(
+            formatSatsPerHour(fillRate = fillRate, unitsPerSat = total, autoActive = autoActive),
+            fontWeight = FontWeight.Bold,
+            color = BrandAccent,
+            fontSize = 14.sp,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 "${floor(displayProgress).toInt()} / $total taps",
