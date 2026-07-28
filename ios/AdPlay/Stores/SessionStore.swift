@@ -40,9 +40,9 @@ final class SessionStore: ObservableObject {
             GameReminderScheduler.requestPermissionIfNeeded()
             try await refresh(force: true)
             adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "waterfall")
+            configureAdMobUnit()
             isReady = true
             foreground = true
-            AdMobRewardedPresenter.shared.preload()
             ensureTicker()
         } catch {
             isReady = false
@@ -54,7 +54,7 @@ final class SessionStore: ObservableObject {
     func onForeground() {
         foreground = true
         guard isReady else { return }
-        AdMobRewardedPresenter.shared.preload()
+        configureAdMobUnit()
         Task { try? await refresh(force: true) }
         ensureTicker()
     }
@@ -82,7 +82,19 @@ final class SessionStore: ObservableObject {
         if let provider = t?.adProvider {
             adService = AdServiceFactory.make(api: api, provider: provider)
         }
+        configureAdMobUnit()
         setServerState(s, force: force)
+    }
+
+    /// TestFlight is Release (`#if DEBUG` is false). Use Google sample units while
+    /// `debugReset` is on so AdMob fills instead of falling through to AdsBitvex.
+    private func configureAdMobUnit() {
+        #if DEBUG
+        let useSample = true
+        #else
+        let useSample = tunables?.debugReset != false
+        #endif
+        AdMobRewardedPresenter.shared.configure(useSampleAds: useSample)
     }
 
     func tap() async {

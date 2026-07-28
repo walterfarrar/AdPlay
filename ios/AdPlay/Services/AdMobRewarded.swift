@@ -4,14 +4,41 @@ import UIKit
 
 enum AdMobConfig {
     static let appId = "ca-app-pub-1524015618608684~3874360461"
+    /// Google sample rewarded unit — safe for Debug / TestFlight while debugReset is on.
+    static let sampleRewardedUnitId = "ca-app-pub-3940256099942544/1712485313"
+    static let productionRewardedUnitId = "ca-app-pub-1524015618608684/6403169508"
 
-    /// Sample unit in DEBUG to avoid invalid traffic on the live unit.
+    /// When true (DEBUG, or server `debugReset`), load Google's sample creatives.
+    /// Codemagic/TestFlight is Release, so we cannot rely on `#if DEBUG` alone.
+    static var useSampleAds: Bool = true
+
     static var rewardedUnitId: String {
-        #if DEBUG
-        "ca-app-pub-3940256099942544/1712485313"
-        #else
-        "ca-app-pub-1524015618608684/6403169508"
-        #endif
+        useSampleAds ? sampleRewardedUnitId : productionRewardedUnitId
+    }
+}
+
+/// Ensures MobileAds.start finished before any load/present (avoids silent no-fills).
+enum AdMobBootstrap {
+    private static var started = false
+    private static var startTask: Task<Void, Never>?
+
+    @MainActor
+    static func ensureStarted() async {
+        if started { return }
+        if let startTask {
+            await startTask.value
+            return
+        }
+        let task = Task { @MainActor in
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                MobileAds.shared.start { _ in
+                    cont.resume()
+                }
+            }
+            started = true
+        }
+        startTask = task
+        await task.value
     }
 }
 
@@ -37,17 +64,34 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
     private var isShowing = false
     /// Continuations waiting on an in-flight preload (present called while loading).
     private var loadWaiters: [CheckedContinuation<RewardedAd?, Never>] = []
+    private var loadedUnitId: String?
+
+    /// Apply sample vs production unit (from tunables / DEBUG). Reloads if the unit changed.
+    func configure(useSampleAds: Bool) {
+        let changed = AdMobConfig.useSampleAds != useSampleAds
+        AdMobConfig.useSampleAds = useSampleAds
+        if changed {
+            rewardedAd = nil
+            loadedUnitId = nil
+        }
+        preload()
+    }
 
     /// Warm a rewarded ad in the background. Safe to call often.
     func preload() {
-        guard !isLoading, !isShowing, rewardedAd == nil else { return }
+        guard !isLoading, !isShowing else { return }
+        if rewardedAd != nil, loadedUnitId == AdMobConfig.rewardedUnitId { return }
+        rewardedAd = nil
         isLoading = true
+        let unit = AdMobConfig.rewardedUnitId
         Task {
-            let ad = await Self.loadAd()
+            await AdMobBootstrap.ensureStarted()
+            let ad = await Self.loadAd(unitId: unit)
             isLoading = false
             if let ad, rewardedAd == nil, !isShowing {
                 ad.fullScreenContentDelegate = self
                 rewardedAd = ad
+                loadedUnitId = unit
             }
             let waiters = loadWaiters
             loadWaiters.removeAll()
@@ -69,9 +113,16 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
 
     private func showReadyOrLoad() async {
         isShowing = true
+        await AdMobBootstrap.ensureStarted()
 
+        let unit = AdMobConfig.rewardedUnitId
         var ad = rewardedAd
+        if loadedUnitId != unit {
+            ad = nil
+            rewardedAd = nil
+        }
         rewardedAd = nil
+        loadedUnitId = nil
 
         if ad == nil {
             if isLoading {
@@ -80,7 +131,7 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
                 }
             } else {
                 isLoading = true
-                ad = await Self.loadAd()
+                ad = await Self.loadAd(unitId: unit)
                 isLoading = false
                 let waiters = loadWaiters
                 loadWaiters.removeAll()
@@ -91,10 +142,12 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
         }
 
         guard let ad else {
+            print("AdPlayAds: AdMob load failed unit=\(unit)")
             finish(.unavailable)
             return
         }
         guard let root = Self.topViewController() else {
+            print("AdPlayAds: AdMob present failed — no root VC")
             finish(.unavailable)
             return
         }
@@ -116,13 +169,16 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
         preload()
     }
 
-    private static func loadAd() async -> RewardedAd? {
+    private static func loadAd(unitId: String) async -> RewardedAd? {
         do {
-            return try await RewardedAd.load(
-                with: AdMobConfig.rewardedUnitId,
+            let ad = try await RewardedAd.load(
+                with: unitId,
                 request: Request(),
             )
+            print("AdPlayAds: AdMob loaded unit=\(unitId)")
+            return ad
         } catch {
+            print("AdPlayAds: AdMob load error unit=\(unitId) err=\(error.localizedDescription)")
             return nil
         }
     }
@@ -158,6 +214,7 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
         _ ad: FullScreenPresentingAd,
         didFailToPresentFullScreenContentWithError error: Error,
     ) {
+        print("AdPlayAds: AdMob present error \(error.localizedDescription)")
         finish(.unavailable)
     }
 }

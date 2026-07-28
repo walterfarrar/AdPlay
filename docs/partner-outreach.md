@@ -34,7 +34,7 @@ Re-apply once those are met. Until then: do not block release on Unity; keep a c
 | App ID | `ca-app-pub-1524015618608684~3874360461` | `ca-app-pub-1524015618608684~9712547486` |
 | Rewarded ad unit | `ca-app-pub-1524015618608684/6403169508` | `ca-app-pub-1524015618608684/6292177229` |
 
-Partner bidding checkbox: **leave unchecked** (standard unit) so AdMob Mediation / waterfall remains available. Debug builds use Google sample rewarded units.
+Partner bidding checkbox: **leave unchecked** (standard unit) so AdMob Mediation / waterfall remains available. Debug builds and TestFlight while `debugReset` is on use Google sample rewarded units (Codemagic is Release, so sample units are gated on `debugReset`, not `#if DEBUG`).
 
 ## If AdMob bans us — independent fallbacks
 
