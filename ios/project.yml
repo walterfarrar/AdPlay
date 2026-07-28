@@ -41,6 +41,8 @@ targets:
         MARKETING_VERSION: "1.0.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: KGT8E4849W
+        # Required by Google Mobile Ads (AppMeasurement categories) — missing this crashes at launch.
+        OTHER_LDFLAGS: $(inherited) -ObjC
       configs:
         # Optional local override; UI gate is tunables.debugReset (works in TestFlight too).
         Debug:
@@ -51,3 +53,4 @@ targets:
         CFBundleDisplayName: AdPlay
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
+        GADApplicationIdentifier: ca-app-pub-1524015618608684~3874360461
