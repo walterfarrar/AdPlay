@@ -59,6 +59,17 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
     g.adChargesAt = g.lastTickAt || nowIso();
   }
   if (!g.adChargesAt) g.adChargesAt = g.lastTickAt || nowIso();
+  // Legacy skipAdsUsed → banked skipAdCharges.
+  if (g.skipAdCharges === undefined) {
+    if (t.skipAdsPerCycle <= 0) {
+      g.skipAdCharges = 0;
+    } else {
+      const used = typeof g.skipAdsUsed === "number" ? g.skipAdsUsed : 0;
+      g.skipAdCharges = Math.max(0, t.skipAdsPerCycle - used);
+    }
+    g.skipAdChargesAt = g.adChargesAt || g.lastTickAt || nowIso();
+  }
+  if (!g.skipAdChargesAt) g.skipAdChargesAt = g.adChargesAt || g.lastTickAt || nowIso();
   return g;
 }
 
@@ -87,6 +98,32 @@ function applyAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
   }
 }
 
+/** Apply timed +1 Skip charge regen up to skipAdsPerCycle (same interval as boost ads). */
+function applySkipAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
+  // 0 = unlimited — no bank / regen.
+  if (t.skipAdsPerCycle <= 0) {
+    g.skipAdCharges = 0;
+    return;
+  }
+  const max = t.skipAdsPerCycle;
+  if (g.skipAdCharges > max) g.skipAdCharges = max;
+  if (t.adRegenSeconds <= 0) return;
+  if (g.skipAdCharges >= max) return;
+
+  const from = parseIso(g.skipAdChargesAt) ?? now;
+  const elapsed = Math.max(0, (now.getTime() - from.getTime()) / 1000);
+  if (elapsed < t.adRegenSeconds) return;
+
+  const gained = Math.floor(elapsed / t.adRegenSeconds);
+  g.skipAdCharges = Math.min(max, g.skipAdCharges + gained);
+  const remainderSec = elapsed % t.adRegenSeconds;
+  g.skipAdChargesAt = nowIso(new Date(now.getTime() - remainderSec * 1000));
+  if (g.skipAdCharges >= max) {
+    g.skipAdCharges = max;
+    g.skipAdChargesAt = nowIso(now);
+  }
+}
+
 function spendAdCharge(g: GameStateDoc, t: Tunables, now: Date): void {
   applyAdRegen(g, t, now);
   if (g.adCharges <= 0) {
@@ -106,19 +143,52 @@ function regenPublic(g: GameStateDoc, t: Tunables, now: Date): {
   adsRemaining: number;
   adRegenSecondsLeft: number;
   nextAdChargeAt: string | null;
+  skipAdsRemaining: number;
+  skipAdRegenSecondsLeft: number;
+  nextSkipAdChargeAt: string | null;
 } {
   applyAdRegen(g, t, now);
+  applySkipAdRegen(g, t, now);
+
   const adsRemaining = Math.max(0, g.adCharges);
-  if (t.adRegenSeconds <= 0 || adsRemaining >= t.adsPerCycle) {
-    return { adsRemaining, adRegenSecondsLeft: 0, nextAdChargeAt: null };
+  let adRegenSecondsLeft = 0;
+  let nextAdChargeAt: string | null = null;
+  if (t.adRegenSeconds > 0 && adsRemaining < t.adsPerCycle) {
+    const from = parseIso(g.adChargesAt) ?? now;
+    const nextMs = from.getTime() + t.adRegenSeconds * 1000;
+    adRegenSecondsLeft = Math.max(0, Math.ceil((nextMs - now.getTime()) / 1000));
+    nextAdChargeAt = new Date(nextMs).toISOString();
   }
-  const from = parseIso(g.adChargesAt) ?? now;
-  const nextMs = from.getTime() + t.adRegenSeconds * 1000;
-  const left = Math.max(0, Math.ceil((nextMs - now.getTime()) / 1000));
+
+  // Unlimited skip bank.
+  if (t.skipAdsPerCycle <= 0) {
+    return {
+      adsRemaining,
+      adRegenSecondsLeft,
+      nextAdChargeAt,
+      skipAdsRemaining: -1,
+      skipAdRegenSecondsLeft: 0,
+      nextSkipAdChargeAt: null,
+    };
+  }
+
+  const skipAdsRemaining = Math.max(0, g.skipAdCharges);
+  let skipAdRegenSecondsLeft = 0;
+  let nextSkipAdChargeAt: string | null = null;
+  if (t.adRegenSeconds > 0 && skipAdsRemaining < t.skipAdsPerCycle) {
+    const from = parseIso(g.skipAdChargesAt) ?? now;
+    const nextMs = from.getTime() + t.adRegenSeconds * 1000;
+    skipAdRegenSecondsLeft = Math.max(0, Math.ceil((nextMs - now.getTime()) / 1000));
+    nextSkipAdChargeAt = new Date(nextMs).toISOString();
+  }
+
   return {
     adsRemaining,
-    adRegenSecondsLeft: left,
-    nextAdChargeAt: new Date(nextMs).toISOString(),
+    adRegenSecondsLeft,
+    nextAdChargeAt,
+    skipAdsRemaining,
+    skipAdRegenSecondsLeft,
+    nextSkipAdChargeAt,
   };
 }
 
@@ -174,6 +244,8 @@ function refreshAdCycleIfIdle(g: GameStateDoc, t: Tunables, now: Date): void {
   g.adChargesAt = nowIso(now);
   g.adsUsed = 0;
   g.skipAdsUsed = 0;
+  g.skipAdCharges = t.skipAdsPerCycle > 0 ? t.skipAdsPerCycle : 0;
+  g.skipAdChargesAt = nowIso(now);
 }
 
 function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
@@ -192,9 +264,6 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
   // Button "running" state: only after that boost type was actually watched.
   const speedActive = autoActive && speedCount > 0;
   const durationActive = autoActive && durationCount > 0;
-  const skipUsed = g.skipAdsUsed || 0;
-  const skipRemaining =
-    t.skipAdsPerCycle === 0 ? -1 : Math.max(0, t.skipAdsPerCycle - skipUsed);
   const regen = regenPublic(g, t, now);
   return {
     progress: Math.min(g.progress, t.unitsPerSat),
@@ -204,7 +273,9 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     adsRemainingToday: regen.adsRemaining,
     adRegenSecondsLeft: regen.adRegenSecondsLeft,
     nextAdChargeAt: regen.nextAdChargeAt,
-    skipAdsRemaining: skipRemaining,
+    skipAdsRemaining: regen.skipAdsRemaining,
+    skipAdRegenSecondsLeft: regen.skipAdRegenSecondsLeft,
+    nextSkipAdChargeAt: regen.nextSkipAdChargeAt,
     satsEarnedToday: g.satsEarnedToday,
     dailySatsEarnCap: t.dailySatsEarnCap,
     autoFillActive: autoActive,
@@ -262,6 +333,7 @@ function advanceInMemory(
 ): { earned: number; credits: LedgerCredit[] } {
   resetDaily(g, t, at);
   applyAdRegen(g, t, at);
+  applySkipAdRegen(g, t, at);
   let credits: LedgerCredit[] = [];
   let earned = 0;
 
@@ -330,19 +402,32 @@ function applySkipTimeInMemory(
     throw Object.assign(new Error("Auto is not running"), { code: "failed-precondition" });
   }
   applyAdRegen(g, t, at);
+  applySkipAdRegen(g, t, at);
   if (g.adCharges > 0) {
     throw Object.assign(new Error("Skip available only when ad charges are empty"), {
       code: "failed-precondition",
     });
   }
-  if (t.skipAdsPerCycle > 0 && (g.skipAdsUsed || 0) >= t.skipAdsPerCycle) {
-    throw Object.assign(new Error("Skip ad limit reached"), { code: "resource-exhausted" });
+  if (t.skipAdsPerCycle > 0 && g.skipAdCharges <= 0) {
+    throw Object.assign(new Error("No Skip charges — wait for the next one"), {
+      code: "resource-exhausted",
+    });
   }
 
   const remainingSec = Math.max(0, (autoUntil.getTime() - at.getTime()) / 1000);
   const skipSec = Math.min(t.skipTimeSeconds, remainingSec);
   if (skipSec <= 0) {
     throw Object.assign(new Error("No auto time left to skip"), { code: "failed-precondition" });
+  }
+
+  // Spend the Skip charge before advancing regen clocks via skipped time.
+  if (t.skipAdsPerCycle > 0) {
+    const wasFull = g.skipAdCharges >= t.skipAdsPerCycle;
+    g.skipAdCharges -= 1;
+    g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
+    if (wasFull) g.skipAdChargesAt = nowIso(at);
+  } else {
+    g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
   }
 
   const rate = effectiveFillRate(g, t, at);
@@ -356,12 +441,13 @@ function applySkipTimeInMemory(
     g.tapStrengthBoostUntil = g.autoFillUntil;
   }
 
-  // Pull the ad-regen clock forward by the same skipped duration.
+  // Pull boost + skip regen clocks forward by the same skipped duration.
   const chargeFrom = parseIso(g.adChargesAt) ?? at;
   g.adChargesAt = nowIso(new Date(chargeFrom.getTime() - skipSec * 1000));
+  const skipFrom = parseIso(g.skipAdChargesAt) ?? at;
+  g.skipAdChargesAt = nowIso(new Date(skipFrom.getTime() - skipSec * 1000));
   applyAdRegen(g, t, at);
-
-  g.skipAdsUsed = (g.skipAdsUsed || 0) + 1;
+  applySkipAdRegen(g, t, at);
 
   if (newUntil <= at) {
     refreshAdCycleIfIdle(g, t, at);

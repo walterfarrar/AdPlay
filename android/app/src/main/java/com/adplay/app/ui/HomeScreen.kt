@@ -487,10 +487,13 @@ fun HomeScreen(
                     Spacer(Modifier.height(8.dp))
                     val skipVisible = state.adsRemainingToday <= 0 &&
                         state.autoFillActive &&
-                        (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0)
+                        (state.skipAdsRemaining < 0 ||
+                            state.skipAdsRemaining > 0 ||
+                            state.skipAdRegenSecondsLeft > 0)
                     val canSkip = !ui.loading &&
                         skipVisible &&
-                        state.adCooldownSecondsLeft == 0
+                        state.adCooldownSecondsLeft == 0 &&
+                        (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -503,6 +506,7 @@ fun HomeScreen(
                                 remainingLabel = formatSkipButtonStatus(
                                     skipAdsRemaining = state.skipAdsRemaining,
                                     cooldownLeft = state.adCooldownSecondsLeft,
+                                    regenLeft = state.skipAdRegenSecondsLeft,
                                 ),
                                 enabled = canSkip,
                                 onClick = onSkipTime,
@@ -683,8 +687,15 @@ internal fun formatSkipRemaining(skipAdsRemaining: Int): String {
     }
 }
 
-internal fun formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int): String {
+internal fun formatSkipButtonStatus(
+    skipAdsRemaining: Int,
+    cooldownLeft: Int,
+    regenLeft: Int = 0,
+): String {
     if (cooldownLeft > 0) return "Next in ${cooldownLeft}s"
+    if (skipAdsRemaining == 0 && regenLeft > 0) {
+        return "Next in ${formatCountdown(regenLeft.toLong())}"
+    }
     return formatSkipRemaining(skipAdsRemaining)
 }
 

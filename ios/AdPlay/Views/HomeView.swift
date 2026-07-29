@@ -166,12 +166,14 @@ struct HomeView: View {
 
                 // Reserved height so layout never jumps when Skip appears.
                 let skipRemaining = state.effectiveSkipAdsRemaining
+                let skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0
                 let skipVisible = state.adsRemainingToday <= 0
                     && state.autoFillActive
-                    && (skipRemaining < 0 || skipRemaining > 0)
+                    && (skipRemaining < 0 || skipRemaining > 0 || skipRegenLeft > 0)
                 let canSkip = !session.isLoading
                     && skipVisible
                     && state.adCooldownSecondsLeft == 0
+                    && (skipRemaining < 0 || skipRemaining > 0)
 
                 ZStack {
                     if skipVisible {
@@ -179,7 +181,8 @@ struct HomeView: View {
                             actionLabel: formatSkipTimeAction(session.tunables),
                             remainingLabel: formatSkipButtonStatus(
                                 skipAdsRemaining: skipRemaining,
-                                cooldownLeft: state.adCooldownSecondsLeft
+                                cooldownLeft: state.adCooldownSecondsLeft,
+                                regenLeft: skipRegenLeft
                             ),
                             disabled: !canSkip
                         ) {
@@ -768,8 +771,11 @@ func formatSkipRemaining(_ skipAdsRemaining: Int) -> String {
     return "\(skipAdsRemaining) left"
 }
 
-func formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int) -> String {
+func formatSkipButtonStatus(skipAdsRemaining: Int, cooldownLeft: Int, regenLeft: Int = 0) -> String {
     if cooldownLeft > 0 { return "Next in \(cooldownLeft)s" }
+    if skipAdsRemaining == 0 && regenLeft > 0 {
+        return "Next in \(formatCountdown(regenLeft))"
+    }
     return formatSkipRemaining(skipAdsRemaining)
 }
 

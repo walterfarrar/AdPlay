@@ -59,6 +59,8 @@ export function freshGame(t: Tunables, now = new Date()): import("./types").Game
     adCharges: t.adsPerCycle,
     adChargesAt: nowIso(now),
     skipAdsUsed: 0,
+    skipAdCharges: t.skipAdsPerCycle > 0 ? t.skipAdsPerCycle : 0,
+    skipAdChargesAt: nowIso(now),
     satsEarnedToday: 0,
     satsDay: day,
     lastAdAt: null,

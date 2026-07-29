@@ -153,6 +153,10 @@ final class SessionStore: ObservableObject {
         let toRegen = Double(to.adRegenSecondsLeft ?? 0)
         let fromAds = from.adsRemainingToday
         let toAds = to.adsRemainingToday
+        let fromSkip = from.effectiveSkipAdsRemaining
+        let toSkip = to.effectiveSkipAdsRemaining
+        let fromSkipRegen = Double(from.skipAdRegenSecondsLeft ?? 0)
+        let toSkipRegen = Double(to.skipAdRegenSecondsLeft ?? 0)
 
         let task = Task { @MainActor in
             while !Task.isCancelled {
@@ -193,6 +197,19 @@ final class SessionStore: ObservableObject {
 
                 // Reveal unlocked charges near the end of the animation.
                 d.adsRemainingToday = e < 0.85 ? fromAds : toAds
+
+                if fromSkip >= 0 && toSkip >= 0 {
+                    d.skipAdsRemaining = e < 0.85 ? fromSkip : toSkip
+                } else {
+                    d.skipAdsRemaining = toSkip
+                }
+                let skipRegenLeft = max(0, fromSkipRegen + (toSkipRegen - fromSkipRegen) * e)
+                d.skipAdRegenSecondsLeft = Int(skipRegenLeft.rounded())
+                if skipRegenLeft > 0.5 {
+                    d.nextSkipAdChargeAt = iso8601String(Date().addingTimeInterval(skipRegenLeft))
+                } else {
+                    d.nextSkipAdChargeAt = to.nextSkipAdChargeAt
+                }
 
                 self.state = d
                 if u >= 1 { break }
@@ -306,13 +323,38 @@ final class SessionStore: ObservableObject {
             adsLeft = maxCharges
             regenLeft = 0
         } else {
-            (adsLeft, regenLeft) = projectAdCharges(s, now: now)
+            (adsLeft, regenLeft) = projectChargeBank(
+                charges: s.adsRemainingToday,
+                regenLeft: s.adRegenSecondsLeft ?? 0,
+                nextAt: s.nextAdChargeAt,
+                maxCharges: maxCharges,
+                now: now
+            )
         }
-        let skipLeft: Int? = {
-            guard windowExpired else { return s.skipAdsRemaining }
-            guard let skipMax = tunables?.skipAdsPerCycle else { return s.skipAdsRemaining }
-            return skipMax == 0 ? -1 : skipMax
-        }()
+        let skipMax = tunables?.skipAdsPerCycle
+        let skipLeft: Int
+        let skipRegenLeft: Int
+        if windowExpired {
+            skipLeft = skipMax == 0 ? -1 : (skipMax ?? s.effectiveSkipAdsRemaining)
+            skipRegenLeft = 0
+        } else if skipMax == 0 {
+            skipLeft = -1
+            skipRegenLeft = 0
+        } else {
+            let maxSkip = skipMax ?? max(s.effectiveSkipAdsRemaining, 0)
+            if maxSkip <= 0 {
+                skipLeft = s.effectiveSkipAdsRemaining
+                skipRegenLeft = 0
+            } else {
+                (skipLeft, skipRegenLeft) = projectChargeBank(
+                    charges: s.effectiveSkipAdsRemaining,
+                    regenLeft: s.skipAdRegenSecondsLeft ?? 0,
+                    nextAt: s.nextSkipAdChargeAt,
+                    maxCharges: maxSkip,
+                    now: now
+                )
+            }
+        }
 
         guard s.autoFillActive, s.fillRate > 0, s.unitsPerSat > 0, let until else {
             var c = s
@@ -322,6 +364,8 @@ final class SessionStore: ObservableObject {
             c.adRegenSecondsLeft = regenLeft
             c.nextAdChargeAt = windowExpired ? nil : s.nextAdChargeAt
             c.skipAdsRemaining = skipLeft
+            c.skipAdRegenSecondsLeft = skipRegenLeft
+            c.nextSkipAdChargeAt = windowExpired || skipLeft < 0 ? nil : s.nextSkipAdChargeAt
             if !autoActive {
                 c.durationBoostActive = false
                 c.speedBoostActive = false
@@ -353,6 +397,8 @@ final class SessionStore: ObservableObject {
         c.adRegenSecondsLeft = regenLeft
         c.nextAdChargeAt = windowExpired ? nil : s.nextAdChargeAt
         c.skipAdsRemaining = skipLeft
+        c.skipAdRegenSecondsLeft = skipRegenLeft
+        c.nextSkipAdChargeAt = windowExpired || skipLeft < 0 ? nil : s.nextSkipAdChargeAt
         if !autoActive {
             c.durationBoostActive = false
             c.speedBoostActive = false
@@ -365,20 +411,25 @@ final class SessionStore: ObservableObject {
     }
 
     /// Local display of banked charges + regen countdown from the server anchor.
-    private func projectAdCharges(_ s: GameState, now: Date) -> (Int, Int) {
-        let maxCharges = tunables?.adsPerCycle ?? max(s.adsRemainingToday, 1)
+    private func projectChargeBank(
+        charges initialCharges: Int,
+        regenLeft initialRegen: Int,
+        nextAt: String?,
+        maxCharges: Int,
+        now: Date
+    ) -> (Int, Int) {
         let regenSec = tunables?.adRegenSeconds ?? 0
-        var charges = s.adsRemainingToday
-        var regenLeft = s.adRegenSecondsLeft ?? 0
+        var charges = initialCharges
+        var regenLeft = initialRegen
 
         guard regenSec > 0, charges < maxCharges else {
             return (min(charges, maxCharges), 0)
         }
 
-        if let next = parseIso8601(s.nextAdChargeAt ?? "") {
+        if let next = parseIso8601(nextAt ?? "") {
             if now >= next {
                 let gained = 1 + Int(floor(now.timeIntervalSince(next) / Double(regenSec)))
-                charges = min(maxCharges, s.adsRemainingToday + gained)
+                charges = min(maxCharges, initialCharges + gained)
                 if charges >= maxCharges {
                     regenLeft = 0
                 } else {
@@ -394,7 +445,7 @@ final class SessionStore: ObservableObject {
             if left <= 0 {
                 let overdue = -left
                 let gained = 1 + overdue / regenSec
-                charges = min(maxCharges, s.adsRemainingToday + gained)
+                charges = min(maxCharges, initialCharges + gained)
                 regenLeft = charges >= maxCharges ? 0 : regenSec - (overdue % regenSec)
             } else {
                 regenLeft = left

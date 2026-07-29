@@ -120,6 +120,43 @@ function formatSatsPerHour(fillRate, unitsPerSat, autoActive) {
   return `${rate.toFixed(1)} sats/h`;
 }
 
+/** Local display of banked charges + regen countdown from the server anchor. */
+function projectChargeBank(initialCharges, initialRegen, nextAt, maxCharges, nowMs) {
+  const regenSec = tunables?.adRegenSeconds ?? 0;
+  let charges = initialCharges;
+  let regenLeft = initialRegen ?? 0;
+  if (!(regenSec > 0) || charges >= maxCharges) {
+    return { charges: Math.min(charges, maxCharges), regenLeft: 0 };
+  }
+  const nextMs = parseMs(nextAt);
+  if (nextMs != null) {
+    if (nowMs >= nextMs) {
+      const gained = 1 + Math.floor((nowMs - nextMs) / 1000 / regenSec);
+      charges = Math.min(maxCharges, initialCharges + gained);
+      if (charges >= maxCharges) {
+        regenLeft = 0;
+      } else {
+        const into = Math.floor(((nowMs - nextMs) / 1000) % regenSec);
+        regenLeft = Math.max(0, regenSec - into);
+      }
+    } else {
+      regenLeft = Math.max(0, Math.ceil((nextMs - nowMs) / 1000));
+    }
+  } else if (regenLeft > 0) {
+    const elapsed = Math.max(0, nowMs - anchorMs) / 1000;
+    const left = Math.ceil(regenLeft - elapsed);
+    if (left <= 0) {
+      const overdue = -left;
+      const gained = 1 + Math.floor(overdue / regenSec);
+      charges = Math.min(maxCharges, initialCharges + gained);
+      regenLeft = charges >= maxCharges ? 0 : regenSec - (overdue % regenSec);
+    } else {
+      regenLeft = left;
+    }
+  }
+  return { charges, regenLeft };
+}
+
 /** Project a server snapshot forward by wall-clock elapsed time (display only). */
 function project(s, nowMs) {
   const elapsedSec = Math.max(0, nowMs - anchorMs) / 1000;
@@ -129,13 +166,49 @@ function project(s, nowMs) {
   // When the shared auto window just ended, show a full ad bank until refresh lands.
   const windowExpired = Boolean(s.autoFillActive && !autoActive);
   const maxCharges = tunables?.adsPerCycle ?? Math.max(s.adsRemainingToday ?? 0, 1);
-  const adsLeft = windowExpired ? maxCharges : s.adsRemainingToday;
+  let adsLeft;
+  let regenLeft;
+  if (windowExpired) {
+    adsLeft = maxCharges;
+    regenLeft = 0;
+  } else {
+    const bank = projectChargeBank(
+      s.adsRemainingToday ?? 0,
+      s.adRegenSecondsLeft ?? 0,
+      s.nextAdChargeAt,
+      maxCharges,
+      nowMs,
+    );
+    adsLeft = bank.charges;
+    regenLeft = bank.regenLeft;
+  }
+
   const skipMax = tunables?.skipAdsPerCycle;
-  const skipLeft = windowExpired
-    ? skipMax === 0
-      ? -1
-      : skipMax ?? s.skipAdsRemaining
-    : s.skipAdsRemaining;
+  let skipLeft;
+  let skipRegenLeft;
+  if (windowExpired) {
+    skipLeft = skipMax === 0 ? -1 : skipMax ?? s.skipAdsRemaining;
+    skipRegenLeft = 0;
+  } else if (skipMax === 0) {
+    skipLeft = -1;
+    skipRegenLeft = 0;
+  } else {
+    const maxSkip = skipMax ?? Math.max(s.skipAdsRemaining ?? 0, 0);
+    if (maxSkip <= 0) {
+      skipLeft = s.skipAdsRemaining ?? 0;
+      skipRegenLeft = 0;
+    } else {
+      const bank = projectChargeBank(
+        Math.max(0, s.skipAdsRemaining ?? 0),
+        s.skipAdRegenSecondsLeft ?? 0,
+        s.nextSkipAdChargeAt,
+        maxSkip,
+        nowMs,
+      );
+      skipLeft = bank.charges;
+      skipRegenLeft = bank.regenLeft;
+    }
+  }
 
   if (!s.autoFillActive || s.fillRate <= 0 || s.unitsPerSat <= 0 || untilMs == null) {
     return {
@@ -143,9 +216,11 @@ function project(s, nowMs) {
       adCooldownSecondsLeft: cooldown,
       autoFillActive: autoActive,
       adsRemainingToday: adsLeft,
-      adRegenSecondsLeft: windowExpired ? 0 : s.adRegenSecondsLeft,
+      adRegenSecondsLeft: regenLeft,
       nextAdChargeAt: windowExpired ? null : s.nextAdChargeAt,
       skipAdsRemaining: skipLeft,
+      skipAdRegenSecondsLeft: skipRegenLeft,
+      nextSkipAdChargeAt: windowExpired || skipLeft < 0 ? null : s.nextSkipAdChargeAt,
       durationBoostActive: autoActive ? s.durationBoostActive : false,
       speedBoostActive: autoActive ? s.speedBoostActive : false,
       tapStrengthActive: autoActive ? s.tapStrengthActive : false,
@@ -174,9 +249,11 @@ function project(s, nowMs) {
     adCooldownSecondsLeft: cooldown,
     autoFillActive: autoActive,
     adsRemainingToday: adsLeft,
-    adRegenSecondsLeft: windowExpired ? 0 : s.adRegenSecondsLeft,
+    adRegenSecondsLeft: regenLeft,
     nextAdChargeAt: windowExpired ? null : s.nextAdChargeAt,
     skipAdsRemaining: skipLeft,
+    skipAdRegenSecondsLeft: skipRegenLeft,
+    nextSkipAdChargeAt: windowExpired || skipLeft < 0 ? null : s.nextSkipAdChargeAt,
     durationBoostActive: autoActive ? s.durationBoostActive : false,
     speedBoostActive: autoActive ? s.speedBoostActive : false,
     tapStrengthActive: autoActive ? s.tapStrengthActive : false,
@@ -298,22 +375,29 @@ function render(state) {
   }
   $("ads-footer").textContent = footer;
 
+  const skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0;
   const skipVisible =
     state.adsRemainingToday <= 0 &&
     state.autoFillActive &&
-    (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0);
+    (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0 || skipRegenLeft > 0);
   const skipBtn = $("btn-skip");
   skipBtn.classList.toggle("hidden", !skipVisible);
   if (skipVisible) {
-    const canSkip = !loading && state.adCooldownSecondsLeft === 0;
+    const canSkip =
+      !loading &&
+      state.adCooldownSecondsLeft === 0 &&
+      (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0);
     skipBtn.disabled = !canSkip;
     $("skip-action").textContent = formatSkipAction(t);
-    $("skip-remaining").textContent =
-      state.adCooldownSecondsLeft > 0
-        ? `Next in ${state.adCooldownSecondsLeft}s`
-        : state.skipAdsRemaining < 0
-          ? "Unlimited"
-          : `${state.skipAdsRemaining} left`;
+    if (state.adCooldownSecondsLeft > 0) {
+      $("skip-remaining").textContent = `Next in ${state.adCooldownSecondsLeft}s`;
+    } else if (state.skipAdsRemaining === 0 && skipRegenLeft > 0) {
+      $("skip-remaining").textContent = `Next in ${formatCountdown(skipRegenLeft)}`;
+    } else if (state.skipAdsRemaining < 0) {
+      $("skip-remaining").textContent = "Unlimited";
+    } else {
+      $("skip-remaining").textContent = `${state.skipAdsRemaining} left`;
+    }
   }
 
   $("btn-reset").classList.toggle("hidden", !t?.debugReset);
