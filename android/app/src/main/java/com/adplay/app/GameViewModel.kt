@@ -176,6 +176,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val toRegen = to.adRegenSecondsLeft.toDouble()
         val fromAds = from.adsRemainingToday
         val toAds = to.adsRemainingToday
+        val fromSkip = from.skipAdsRemaining
+        val toSkip = to.skipAdsRemaining
+        val fromSkipRegen = from.skipAdRegenSecondsLeft.toDouble()
+        val toSkipRegen = to.skipAdRegenSecondsLeft.toDouble()
 
         while (true) {
             val elapsed = System.currentTimeMillis() - startMs
@@ -190,6 +194,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
             val autoLeft = (fromAuto + (toAuto - fromAuto) * e).coerceAtLeast(0.0)
             val regenLeft = (fromRegen + (toRegen - fromRegen) * e).coerceAtLeast(0.0)
+            val skipRegenLeft = (fromSkipRegen + (toSkipRegen - fromSkipRegen) * e).coerceAtLeast(0.0)
             val now = System.currentTimeMillis()
             val autoUntil = if (autoLeft > 0.05) {
                 Instant.ofEpochMilli(now + (autoLeft * 1000).toLong()).toString()
@@ -200,6 +205,16 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 Instant.ofEpochMilli(now + (regenLeft * 1000).toLong()).toString()
             } else {
                 to.nextAdChargeAt
+            }
+            val nextSkipCharge = if (skipRegenLeft > 0.5) {
+                Instant.ofEpochMilli(now + (skipRegenLeft * 1000).toLong()).toString()
+            } else {
+                to.nextSkipAdChargeAt
+            }
+            val skipLeft = if (fromSkip >= 0 && toSkip >= 0) {
+                if (e < 0.85) fromSkip else toSkip
+            } else {
+                toSkip
             }
 
             val display = to.copy(
@@ -212,6 +227,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 adRegenSecondsLeft = regenLeft.roundToInt(),
                 nextAdChargeAt = nextCharge,
                 adsRemainingToday = if (e < 0.85) fromAds else toAds,
+                skipAdsRemaining = skipLeft,
+                skipAdRegenSecondsLeft = skipRegenLeft.roundToInt(),
+                nextSkipAdChargeAt = nextSkipCharge,
             )
             _ui.update { it.copy(state = display) }
             if (u >= 1.0) break
@@ -337,17 +355,36 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val (adsLeft, regenLeft) = if (windowExpired) {
             maxCharges to 0
         } else {
-            projectAdCharges(s, nowMs)
+            projectChargeBank(
+                initialCharges = s.adsRemainingToday,
+                initialRegen = s.adRegenSecondsLeft,
+                nextAt = s.nextAdChargeAt,
+                maxCharges = maxCharges.coerceAtLeast(1),
+                nowMs = nowMs,
+            )
         }
-        val skipLeft = if (windowExpired) {
-            val skipMax = _ui.value.tunables?.skipAdsPerCycle
-            when {
-                skipMax == null -> s.skipAdsRemaining
-                skipMax == 0 -> -1
-                else -> skipMax
+        val skipMax = _ui.value.tunables?.skipAdsPerCycle
+        val (skipLeft, skipRegenLeft) = when {
+            windowExpired -> when {
+                skipMax == null -> s.skipAdsRemaining to 0
+                skipMax == 0 -> -1 to 0
+                else -> skipMax to 0
             }
-        } else {
-            s.skipAdsRemaining
+            skipMax == 0 -> -1 to 0
+            else -> {
+                val maxSkip = skipMax ?: maxOf(s.skipAdsRemaining, 0)
+                if (maxSkip <= 0) {
+                    s.skipAdsRemaining to 0
+                } else {
+                    projectChargeBank(
+                        initialCharges = s.skipAdsRemaining.coerceAtLeast(0),
+                        initialRegen = s.skipAdRegenSecondsLeft,
+                        nextAt = s.nextSkipAdChargeAt,
+                        maxCharges = maxSkip,
+                        nowMs = nowMs,
+                    )
+                }
+            }
         }
 
         if (!s.autoFillActive || s.fillRate <= 0.0 || s.unitsPerSat <= 0 || untilMs == null) {
@@ -358,6 +395,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 adRegenSecondsLeft = regenLeft,
                 nextAdChargeAt = if (windowExpired) null else s.nextAdChargeAt,
                 skipAdsRemaining = skipLeft,
+                skipAdRegenSecondsLeft = skipRegenLeft,
+                nextSkipAdChargeAt = if (windowExpired || skipLeft < 0) null else s.nextSkipAdChargeAt,
                 durationBoostActive = if (autoActive) s.durationBoostActive else false,
                 speedBoostActive = if (autoActive) s.speedBoostActive else false,
                 tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
@@ -389,6 +428,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             adRegenSecondsLeft = regenLeft,
             nextAdChargeAt = if (windowExpired) null else s.nextAdChargeAt,
             skipAdsRemaining = skipLeft,
+            skipAdRegenSecondsLeft = skipRegenLeft,
+            nextSkipAdChargeAt = if (windowExpired || skipLeft < 0) null else s.nextSkipAdChargeAt,
             durationBoostActive = if (autoActive) s.durationBoostActive else false,
             speedBoostActive = if (autoActive) s.speedBoostActive else false,
             tapStrengthActive = if (autoActive) s.tapStrengthActive else false,
@@ -398,22 +439,26 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun projectAdCharges(s: GameState, nowMs: Long): Pair<Int, Int> {
-        val maxCharges = _ui.value.tunables?.adsPerCycle?.coerceAtLeast(1)
-            ?: maxOf(s.adsRemainingToday, 1)
+    private fun projectChargeBank(
+        initialCharges: Int,
+        initialRegen: Int,
+        nextAt: String?,
+        maxCharges: Int,
+        nowMs: Long,
+    ): Pair<Int, Int> {
         val regenSec = _ui.value.tunables?.adRegenSeconds ?: 0
-        var charges = s.adsRemainingToday
-        var regenLeft = s.adRegenSecondsLeft
+        var charges = initialCharges
+        var regenLeft = initialRegen
 
         if (regenSec <= 0 || charges >= maxCharges) {
             return minOf(charges, maxCharges) to 0
         }
 
-        val nextMs = parseMs(s.nextAdChargeAt)
+        val nextMs = parseMs(nextAt)
         if (nextMs != null) {
             if (nowMs >= nextMs) {
                 val gained = 1 + ((nowMs - nextMs) / 1000L / regenSec).toInt()
-                charges = minOf(maxCharges, s.adsRemainingToday + gained)
+                charges = minOf(maxCharges, initialCharges + gained)
                 regenLeft = if (charges >= maxCharges) {
                     0
                 } else {
@@ -429,7 +474,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             if (left <= 0) {
                 val overdue = -left
                 val gained = 1 + overdue / regenSec
-                charges = minOf(maxCharges, s.adsRemainingToday + gained)
+                charges = minOf(maxCharges, initialCharges + gained)
                 regenLeft = if (charges >= maxCharges) 0 else regenSec - (overdue % regenSec)
             } else {
                 regenLeft = left

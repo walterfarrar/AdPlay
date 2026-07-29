@@ -19,8 +19,8 @@ export type Tunables = {
   /** Max banked ad charges (burst pool). */
   adsPerCycle: number;
   /**
-   * Seconds between +1 ad charge while below adsPerCycle during an active run.
-   * When the shared auto timer ends, charges refill to adsPerCycle immediately.
+   * Seconds between +1 boost-ad / Skip charge while below max during an active run.
+   * When the shared auto timer ends, both banks refill to max immediately.
    * 0 = no timed regen during a run.
    */
   adRegenSeconds: number;
@@ -71,8 +71,15 @@ export type GameStateDoc = {
   adCharges: number;
   /** Anchor for timed regen (ISO). */
   adChargesAt: string;
-  /** Skip Time ads used this run (reset when auto cycle refreshes). */
+  /**
+   * @deprecated Prefer skipAdCharges; kept for migration.
+   * Skip Time ads used this run.
+   */
   skipAdsUsed: number;
+  /** Remaining Skip Time charges (0…skipAdsPerCycle). Unused when skipAdsPerCycle === 0. */
+  skipAdCharges: number;
+  /** Anchor for Skip Time timed regen (ISO). */
+  skipAdChargesAt: string;
   satsEarnedToday: number;
   satsDay: string;
   lastAdAt: string | null;
@@ -101,6 +108,10 @@ export type PublicGameState = {
    * Skip Time ads left this run. -1 means unlimited (skipAdsPerCycle === 0).
    */
   skipAdsRemaining: number;
+  /** Seconds until the next regenerated Skip charge. 0 if full / unlimited / no regen. */
+  skipAdRegenSecondsLeft: number;
+  /** ISO when the next Skip charge lands; null if full / unlimited / no regen. */
+  nextSkipAdChargeAt: string | null;
   satsEarnedToday: number;
   dailySatsEarnCap: number;
   autoFillActive: boolean;

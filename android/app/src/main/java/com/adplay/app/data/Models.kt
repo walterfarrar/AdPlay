@@ -11,6 +11,10 @@ data class GameState(
     val nextAdChargeAt: String? = null,
     /** -1 means unlimited skip ads this run. */
     val skipAdsRemaining: Int = 0,
+    /** Seconds until the next regenerated Skip charge. */
+    val skipAdRegenSecondsLeft: Int = 0,
+    /** ISO when the next Skip charge lands. */
+    val nextSkipAdChargeAt: String? = null,
     val satsEarnedToday: Int = 0,
     val dailySatsEarnCap: Int = 0,
     val autoFillActive: Boolean = false,

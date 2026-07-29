@@ -12,6 +12,10 @@ struct GameState: Codable, Equatable {
     var nextAdChargeAt: String?
     /** -1 means unlimited skip ads this run. */
     var skipAdsRemaining: Int?
+    /** Seconds until the next regenerated Skip charge. */
+    var skipAdRegenSecondsLeft: Int?
+    /** ISO when the next Skip charge lands. */
+    var nextSkipAdChargeAt: String?
     var satsEarnedToday: Int
     var dailySatsEarnCap: Int
     var autoFillActive: Bool
@@ -56,6 +60,8 @@ struct GameState: Codable, Equatable {
         adRegenSecondsLeft: 0,
         nextAdChargeAt: nil,
         skipAdsRemaining: 0,
+        skipAdRegenSecondsLeft: 0,
+        nextSkipAdChargeAt: nil,
         satsEarnedToday: 0,
         dailySatsEarnCap: 0,
         autoFillActive: false,
