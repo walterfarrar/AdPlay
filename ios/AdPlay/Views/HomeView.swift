@@ -86,12 +86,13 @@ struct HomeView: View {
                     fillRate: state.fillRate,
                     tapPower: state.effectiveTapPower,
                     autoActive: state.autoFillActive,
-                    barFlash: barFlash
+                    autoFillUntil: state.autoFillUntil,
+                    wheelFlash: barFlash
                 )
 
                 Text(
                     state.tapsRemaining > 0
-                        ? "Tap the bar · \(state.tapsRemaining) taps left today"
+                        ? "Tap the wheel · \(state.tapsRemaining) taps left today"
                         : "0 taps left today"
                 )
                     .font(.system(size: 14, weight: .medium, design: .rounded))
@@ -140,12 +141,6 @@ struct HomeView: View {
                 }
                 .frame(height: 88)
                 .padding(.horizontal, 24)
-
-                SharedAutoTimerView(
-                    autoFillUntil: state.autoFillUntil,
-                    autoActive: state.autoFillActive
-                )
-                .padding(.top, 10)
                 .padding(.bottom, 10)
 
                 if let err = session.errorMessage {
@@ -161,13 +156,17 @@ struct HomeView: View {
                     adsRemaining: state.adsRemainingToday,
                     cooldownLeft: state.adCooldownSecondsLeft,
                     regenLeft: state.adRegenSecondsLeft ?? 0,
-                    adsMax: session.tunables?.adsPerCycle ?? 10
+                    adsMax: session.tunables?.adsPerCycle ?? 10,
+                    adRegenSeconds: session.tunables?.adRegenSeconds ?? 0
                 )
 
                 // Reserved height so layout never jumps when Skip appears.
+                // skipAdsPerCycle < 0 disables Skip Time entirely.
+                let skipEnabled = (session.tunables?.skipAdsPerCycle ?? 10) >= 0
                 let skipRemaining = state.effectiveSkipAdsRemaining
                 let skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0
-                let skipVisible = state.adsRemainingToday <= 0
+                let skipVisible = skipEnabled
+                    && state.adsRemainingToday <= 0
                     && state.autoFillActive
                     && (skipRemaining < 0 || skipRemaining > 0 || skipRegenLeft > 0)
                 let canSkip = !session.isLoading
@@ -251,8 +250,8 @@ struct HomeView: View {
             }
         }
 
-        let from = satAnchors[.barEnd]
-            ?? CGPoint(x: max(24, homeSize.width - 36), y: homeSize.height * 0.42)
+        let from = satAnchors[.wheelTip]
+            ?? CGPoint(x: max(24, homeSize.width * 0.38), y: homeSize.height * 0.38)
         let to = satAnchors[.redeem]
             ?? CGPoint(x: max(48, homeSize.width - 56), y: 36)
         if satParticles.count < 4, homeSize.width > 0 {
@@ -296,10 +295,13 @@ struct SharedAutoTimerView: View {
         TimelineView(.periodic(from: .now, by: 0.25)) { context in
             let left = autoActive ? remainingSeconds(untilIso: autoFillUntil, now: context.date) : 0
             Text(left > 0 ? "Auto \(formatCountdown(left))" : " ")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(left > 0 ? Color("BrandTime") : .clear)
                 .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
                 .monospacedDigit()
+                .minimumScaleFactor(0.8)
+                .lineLimit(1)
         }
     }
 }
@@ -309,6 +311,7 @@ struct AdsFooterView: View {
     let cooldownLeft: Int
     let regenLeft: Int
     let adsMax: Int
+    let adRegenSeconds: Int
 
     var body: some View {
         Text(footerText)
@@ -322,6 +325,9 @@ struct AdsFooterView: View {
             if regenLeft > 0 {
                 return "Next Boost Ad in \(formatCountdown(regenLeft))"
             }
+            if adRegenSeconds <= 0 {
+                return "Ads refill when Auto ends"
+            }
             return "No ads available"
         }
         if cooldownLeft > 0 {
@@ -334,7 +340,7 @@ struct AdsFooterView: View {
     }
 }
 
-/// Live progress toward the next sat, matching the bar’s local auto-fill interpolation.
+/// Live progress toward the next sat, matching local auto-fill interpolation.
 private func displayedBarProgress(
     progress: Double,
     total: Int,
@@ -361,7 +367,7 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
 
 private enum SatEarnAnchor: Hashable {
     case redeem
-    case barEnd
+    case wheelTip
 }
 
 private struct SatEarnAnchorKey: PreferenceKey {
@@ -377,15 +383,26 @@ private struct SatParticle: Identifiable {
     let to: CGPoint
 }
 
-/// BTC balance + progress bar; reports bar-end anchor for the sat-earn particle.
+/// BTC balance + centered sat wheel + overlapping auto knocker.
 struct SatEarnStage: View {
+    @EnvironmentObject private var session: SessionStore
+
     let satsBalance: Int
     let progress: Double
     let total: Int
     let fillRate: Double
     let tapPower: Double
     let autoActive: Bool
-    var barFlash: Bool = false
+    let autoFillUntil: String?
+    var wheelFlash: Bool = false
+
+    @State private var anchorProgress: Double = 0
+    @State private var anchorDate: Date = .now
+    /// Auto-only clock for the knocker — ignores manual tap progress jumps.
+    @State private var knockerAnchorProgress: Double = 0
+    @State private var knockerAnchorDate: Date = .now
+
+    private let wheelSize: CGFloat = 220
 
     var body: some View {
         VStack(spacing: 0) {
@@ -397,30 +414,596 @@ struct SatEarnStage: View {
                 autoActive: autoActive
             )
 
-            Spacer(minLength: 28)
+            Spacer(minLength: 20)
 
-            ProgressBarView(
-                progress: progress,
-                total: total,
-                fillRate: fillRate,
-                tapPower: tapPower,
+            TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { context in
+                let display = displayedBarProgress(
+                    progress: progress,
+                    total: total,
+                    fillRate: fillRate,
+                    autoActive: autoActive,
+                    anchorProgress: anchorProgress,
+                    anchorDate: anchorDate,
+                    now: context.date
+                )
+                let fraction = total > 0 ? min(1, display / Double(total)) : 0
+                let tapsPerSec = tapsPerSecond(fillRate: fillRate, tapPower: tapPower)
+                let knockerProgress = autoActive && fillRate > 0
+                    ? knockerAnchorProgress + fillRate * context.date.timeIntervalSince(knockerAnchorDate)
+                    : knockerAnchorProgress
+                let pose = knockerPose(
+                    displayProgress: knockerProgress,
+                    tapsPerSec: tapsPerSec,
+                    tapPower: tapPower,
+                    autoActive: autoActive
+                )
+
+                VStack(spacing: 8) {
+                    Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color("BrandAccent"))
+                        .monospacedDigit()
+
+                    // Wheel and tapper are one machine, nudged left to make room for the arm.
+                    ZStack {
+                        SatWheelView(fraction: fraction, flash: wheelFlash)
+                            .frame(width: wheelSize, height: wheelSize)
+                            .contentShape(Circle())
+                            .onTapGesture {
+                                Task { await session.tap() }
+                            }
+                            .background(wheelTipReporter)
+
+                        AutoKnockerView(pose: pose, active: autoActive)
+
+                        SharedAutoTimerView(
+                            autoFillUntil: autoFillUntil,
+                            autoActive: autoActive
+                        )
+                        .frame(width: 92)
+                        .offset(x: 153, y: 74)
+                    }
+                    .offset(x: -22)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: wheelSize + 40)
+
+                    Text("\(Int(display.rounded(.down))) / \(total) taps")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color("BrandInk"))
+                        .monospacedDigit()
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 16)
+            .onChange(of: progress) { _, newValue in
+                // Wheel / BTC follow taps; knocker keeps its auto-only clock.
+                anchorProgress = newValue
+                anchorDate = .now
+            }
+            .onChange(of: fillRate) { _, _ in
+                anchorProgress = progress
+                anchorDate = .now
+                knockerAnchorProgress = progress
+                knockerAnchorDate = .now
+            }
+            .onChange(of: tapPower) { _, _ in
+                anchorProgress = progress
+                anchorDate = .now
+                knockerAnchorProgress = progress
+                knockerAnchorDate = .now
+            }
+            .onChange(of: autoActive) { _, active in
+                if active {
+                    knockerAnchorProgress = progress
+                    knockerAnchorDate = .now
+                }
+            }
+            .onAppear {
+                anchorProgress = progress
+                anchorDate = .now
+                knockerAnchorProgress = progress
+                knockerAnchorDate = .now
+            }
+
+            BarRateStatusView(
                 autoActive: autoActive,
-                flash: barFlash
+                fillRate: fillRate,
+                tapPower: tapPower
             )
-            .padding(.horizontal, 24)
-            .background(barEndReporter)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 12)
+            .padding(.horizontal, 20)
         }
     }
 
-    private var barEndReporter: some View {
+    private var wheelTipReporter: some View {
         GeometryReader { geo in
             let frame = geo.frame(in: .named("satEarn"))
             Color.clear.preference(
                 key: SatEarnAnchorKey.self,
-                value: [.barEnd: CGPoint(x: frame.maxX - 12, y: frame.maxY - 15)]
+                value: [.wheelTip: CGPoint(x: frame.midX, y: frame.minY + 8)]
             )
         }
     }
+}
+
+/// Where the auto tapper is within one strike cycle.
+struct KnockerPose {
+    /// 0 = cocked on the stop, 1 = head against the rim. Dips negative while winding up.
+    var arm: CGFloat = 0
+    /// 1 at the moment of contact, fading to 0 shortly after.
+    var impact: CGFloat = 0
+    /// 0…1 through the current tap, used to turn the drive gears.
+    var phase: CGFloat = 0
+}
+
+/// Seconds the hammer takes to swing from the cocked stop into the rim.
+private func knockerStrikeDuration(tapPower: Double) -> Double {
+    max(0.07, 0.16 / max(tapPower, 0.01))
+}
+
+/// How far the head rebounds off the rim, as a fraction of the full swing.
+private let knockerBounce: Double = 0.42
+/// Extra travel loaded past the stop just before release.
+private let knockerWindUp: Double = 0.07
+/// Seconds the contact flash lasts.
+private let knockerImpactFade: Double = 0.16
+
+/// Strike cycle for the auto tapper. Contact lands as `floor(progress)` increments.
+private func knockerPose(
+    displayProgress: Double,
+    tapsPerSec: Double,
+    tapPower: Double,
+    autoActive: Bool
+) -> KnockerPose {
+    guard autoActive, tapsPerSec > 0 else { return KnockerPose() }
+    let period = 1.0 / tapsPerSec
+    let phase = displayProgress - floor(displayProgress) // 0 = just struck
+
+    // Segments of one tap, as fractions of the period.
+    let strike = min(0.34, max(0.06, knockerStrikeDuration(tapPower: tapPower) / period))
+    let recoil = min(0.20, max(0.05, 0.07 / period))
+    let windUp = max(min(0.09, (1 - strike - recoil) * 0.2), 0.0001)
+    let reset = max(1 - strike - recoil - windUp, 0.001)
+
+    let fadeSec = min(knockerImpactFade, period * 0.55)
+    let impact = pow(max(0, 1 - (phase * period) / fadeSec), 1.7)
+    let arm: Double
+    if phase < recoil {
+        // Rebounds off the rim.
+        arm = 1 - knockerBounce * easeOutQuad(phase / recoil)
+    } else if phase < recoil + reset {
+        // Drive hauls the hammer back onto its stop.
+        arm = (1 - knockerBounce) * (1 - easeInOutCubic((phase - recoil) / reset))
+    } else if phase < 1 - strike {
+        // Held on the stop, loading a little extra travel.
+        arm = -knockerWindUp * easeOutQuad((phase - recoil - reset) / windUp)
+    } else {
+        // Released: accelerates the whole way in, with no cushion at the end.
+        let t = min(1, (phase - (1 - strike)) / strike)
+        arm = -knockerWindUp + (1 + knockerWindUp) * pow(t, 2.3)
+    }
+
+    return KnockerPose(arm: CGFloat(arm), impact: CGFloat(impact), phase: CGFloat(phase))
+}
+
+private func easeOutQuad(_ t: Double) -> Double {
+    let x = min(1, max(0, t))
+    return 1 - (1 - x) * (1 - x)
+}
+
+private func easeInOutCubic(_ t: Double) -> Double {
+    let x = min(1, max(0, t))
+    return x < 0.5 ? 4 * x * x * x : 1 - pow(-2 * x + 2, 3) / 2
+}
+
+struct SatWheelView: View {
+    let fraction: Double
+    var flash: Bool = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            let rim = size * 0.06
+            ZStack {
+                // Track ring
+                Circle()
+                    .stroke(Color("BrandInk").opacity(0.08), lineWidth: rim)
+
+                // Progress arc from 12 o'clock clockwise
+                Circle()
+                    .trim(from: 0, to: CGFloat(fraction))
+                    .stroke(
+                        AngularGradient(
+                            colors: flash
+                                ? [Color("BrandAccent"), Color.white, Color("BrandAccent")]
+                                : [Color("BrandFill"), Color("BrandFillHot"), Color("BrandFill")],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: rim, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .shadow(
+                        color: (flash ? Color("BrandAccent") : Color("BrandFill")).opacity(flash ? 0.9 : 0.45),
+                        radius: flash ? 16 : 8
+                    )
+
+                // Rotating face + ticks
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color("BrandInk").opacity(0.04),
+                                    Color("BrandInk").opacity(0.10),
+                                ],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: size * 0.48
+                            )
+                        )
+                        .padding(rim * 0.85)
+
+                    ForEach(0..<12, id: \.self) { i in
+                        Capsule()
+                            .fill(Color("BrandInk").opacity(i % 3 == 0 ? 0.35 : 0.16))
+                            .frame(width: i % 3 == 0 ? 3 : 2, height: i % 3 == 0 ? 14 : 9)
+                            .offset(y: -(size * 0.38))
+                            .rotationEffect(.degrees(Double(i) * 30))
+                    }
+
+                    // Hub peg marker at the "start" of the wheel face (aligns with tip at 0)
+                    Circle()
+                        .fill(Color("BrandAccent").opacity(0.85))
+                        .frame(width: 8, height: 8)
+                        .offset(y: -(size * 0.30))
+                }
+                .rotationEffect(.degrees(fraction * 360))
+                .animation(nil, value: fraction)
+
+                // Fixed 12 o'clock pointer
+                Triangle()
+                    .fill(flash ? Color("BrandAccent") : Color("BrandInk").opacity(0.75))
+                    .frame(width: 14, height: 12)
+                    .offset(y: -(size * 0.5) + 4)
+
+                // Strike plate at 3 o'clock — where the auto tapper lands.
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color("BrandInk").opacity(0.30))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .stroke(Color("BrandInk").opacity(0.35), lineWidth: 1)
+                    )
+                    .frame(width: 9, height: 26)
+                    .offset(x: size * 0.5)
+
+                // Center hub
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color("BrandInk").opacity(0.12), Color("BrandInk").opacity(0.06)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: size * 0.28, height: size * 0.28)
+                    .overlay(
+                        Circle().stroke(Color("BrandInk").opacity(0.12), lineWidth: 1)
+                    )
+                    .overlay(
+                        Circle()
+                            .fill(Color("BrandAccent").opacity(flash ? 0.55 : 0.2))
+                            .frame(width: size * 0.08, height: size * 0.08)
+                    )
+
+                if flash {
+                    Circle()
+                        .stroke(Color("BrandAccent").opacity(0.85), lineWidth: 2)
+                }
+            }
+            .frame(width: size, height: size)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Fixed tapper geometry, in points relative to the wheel centre.
+private enum KnockerGeometry {
+    /// Hammer pivot, up and to the right of the wheel.
+    static let pivot = CGPoint(x: 150, y: -72)
+    /// Head centre at contact — one `headHalfLength` back from `strikePoint`.
+    static let contact = CGPoint(x: 117.1, y: -9.7)
+    /// The spot on the rim the face lands on (3 o'clock, wheel radius 110).
+    static let strikePoint = CGPoint(x: 112, y: 0)
+    /// Degrees travelled between the cocked stop and contact.
+    static let sweepDegrees: Double = 42
+    static let headHalfLength: CGFloat = 11
+    static let headHalfWidth: CGFloat = 15
+
+    static let armLength = hypot(contact.x - pivot.x, contact.y - pivot.y)
+    static let strikeAngle = atan2(contact.y - pivot.y, contact.x - pivot.x)
+
+    /// Housing the pivot and drive gears are bolted to.
+    static let plate = CGRect(x: 128, y: -110, width: 50, height: 56)
+    static let gearWindow = CGRect(x: 133, y: -105, width: 40, height: 26)
+    static let driveGear = CGPoint(x: 146, y: -92)
+    static let idlerGear = CGPoint(x: 164, y: -92)
+    static let driveRadius: CGFloat = 11
+    static let idlerRadius: CGFloat = 7
+    /// Bumper the arm rests against while cocked.
+    static let stop = CGRect(x: 163, y: -53, width: 8, height: 14)
+
+    static func angle(arm: CGFloat) -> CGFloat {
+        strikeAngle - CGFloat(sweepDegrees * .pi / 180) * (1 - arm)
+    }
+}
+
+/// Side-mounted auto tapper: a geared hammer that swings onto the wheel rim.
+/// Driven only by Auto fill progress — manual taps do not move it.
+struct AutoKnockerView: View {
+    let pose: KnockerPose
+    var active: Bool = true
+
+    var body: some View {
+        Canvas { context, size in
+            drawTapper(
+                into: &context,
+                origin: CGPoint(x: size.width / 2, y: size.height / 2),
+                pose: pose,
+                active: active
+            )
+        }
+        .frame(width: 400, height: 300)
+        .allowsHitTesting(false)
+    }
+}
+
+private func drawTapper(
+    into ctx: inout GraphicsContext,
+    origin: CGPoint,
+    pose: KnockerPose,
+    active: Bool
+) {
+    let ink = Color("BrandInk")
+    let accent = Color("BrandAccent")
+    let accentHot = Color("BrandAccentHot")
+    let impact = active ? pose.impact : 0
+    let fade = active ? 1.0 : 0.4
+
+    let angle = KnockerGeometry.angle(arm: pose.arm)
+    // Contact shoves the whole mount back along the strike axis.
+    let kick = CGPoint(
+        x: -cos(KnockerGeometry.strikeAngle) * impact * 3,
+        y: -sin(KnockerGeometry.strikeAngle) * impact * 3
+    )
+    func mounted(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: origin.x + p.x + kick.x, y: origin.y + p.y + kick.y)
+    }
+
+    // Housing.
+    let plate = KnockerGeometry.plate.offsetBy(dx: origin.x + kick.x, dy: origin.y + kick.y)
+    let platePath = Path(roundedRect: plate, cornerRadius: 8, style: .continuous)
+    ctx.fill(
+        platePath,
+        with: .linearGradient(
+            Gradient(colors: [ink.opacity(0.21 * fade), ink.opacity(0.07 * fade)]),
+            startPoint: CGPoint(x: plate.minX, y: plate.minY),
+            endPoint: CGPoint(x: plate.maxX, y: plate.maxY)
+        )
+    )
+    ctx.stroke(platePath, with: .color(ink.opacity(0.22 * fade)), lineWidth: 1)
+    ctx.stroke(
+        Path(roundedRect: plate.insetBy(dx: 5, dy: 5), cornerRadius: 5, style: .continuous),
+        with: .color(ink.opacity(0.10 * fade)),
+        lineWidth: 1
+    )
+
+    // Gear window, then the drive train — one turn per tap, so the machine reads
+    // as the thing swinging the arm.
+    let window = KnockerGeometry.gearWindow.offsetBy(dx: origin.x + kick.x, dy: origin.y + kick.y)
+    ctx.fill(
+        Path(roundedRect: window, cornerRadius: 13, style: .continuous),
+        with: .color(.black.opacity(0.35 * fade))
+    )
+    let turn = pose.phase * 2 * .pi
+    drawGear(
+        into: &ctx,
+        center: mounted(KnockerGeometry.driveGear),
+        radius: KnockerGeometry.driveRadius,
+        teeth: 9,
+        rotation: turn,
+        color: ink.opacity(0.34 * fade),
+        hub: ink.opacity(0.5 * fade)
+    )
+    drawGear(
+        into: &ctx,
+        center: mounted(KnockerGeometry.idlerGear),
+        radius: KnockerGeometry.idlerRadius,
+        teeth: 6,
+        rotation: -turn * (KnockerGeometry.driveRadius / KnockerGeometry.idlerRadius) + .pi / 6,
+        color: ink.opacity(0.28 * fade),
+        hub: ink.opacity(0.44 * fade)
+    )
+
+    for bolt in [
+        CGPoint(x: plate.minX + 9, y: plate.maxY - 9),
+        CGPoint(x: plate.maxX - 9, y: plate.maxY - 9),
+    ] {
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: bolt.x - 3, y: bolt.y - 3, width: 6, height: 6)),
+            with: .color(ink.opacity(0.26 * fade))
+        )
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: bolt.x - 1.2, y: bolt.y - 1.2, width: 2.4, height: 2.4)),
+            with: .color(ink.opacity(0.5 * fade))
+        )
+    }
+
+    ctx.fill(
+        Path(
+            roundedRect: KnockerGeometry.stop.offsetBy(dx: origin.x + kick.x, dy: origin.y + kick.y),
+            cornerRadius: 3,
+            style: .continuous
+        ),
+        with: .color(ink.opacity(0.30 * fade))
+    )
+
+    // Arm and head, drawn along +x from the pivot.
+    let pivot = mounted(KnockerGeometry.pivot)
+    let length = KnockerGeometry.armLength
+    ctx.drawLayer { arm in
+        arm.translateBy(x: pivot.x, y: pivot.y)
+        arm.rotate(by: .radians(Double(angle)))
+
+        var bar = Path()
+        bar.move(to: CGPoint(x: -11, y: -9))
+        bar.addLine(to: CGPoint(x: length - 8, y: -5.5))
+        bar.addLine(to: CGPoint(x: length - 8, y: 5.5))
+        bar.addLine(to: CGPoint(x: -11, y: 9))
+        bar.closeSubpath()
+        for hole in [length * 0.34, length * 0.56] {
+            bar.addEllipse(in: CGRect(x: hole - 3.2, y: -3.2, width: 6.4, height: 6.4))
+        }
+        arm.fill(
+            bar,
+            with: .linearGradient(
+                Gradient(colors: [ink.opacity(0.58 * fade), ink.opacity(0.22 * fade)]),
+                startPoint: CGPoint(x: 0, y: -9),
+                endPoint: CGPoint(x: 0, y: 9)
+            ),
+            style: FillStyle(eoFill: true)
+        )
+        var edge = Path()
+        edge.move(to: CGPoint(x: -8, y: -7))
+        edge.addLine(to: CGPoint(x: length - 8, y: -4))
+        arm.stroke(edge, with: .color(ink.opacity(0.72 * fade)), lineWidth: 1.5)
+
+        arm.drawLayer { head in
+            head.translateBy(x: length, y: 0)
+            // Impact squashes the head into the rim.
+            head.scaleBy(x: 1 - 0.18 * impact, y: 1 + 0.16 * impact)
+
+            head.fill(
+                Path(roundedRect: CGRect(x: -14, y: -9, width: 8, height: 18), cornerRadius: 2.5, style: .continuous),
+                with: .color(ink.opacity(0.45 * fade))
+            )
+            let box = CGRect(
+                x: -KnockerGeometry.headHalfLength,
+                y: -KnockerGeometry.headHalfWidth,
+                width: KnockerGeometry.headHalfLength * 2,
+                height: KnockerGeometry.headHalfWidth * 2
+            )
+            head.fill(
+                Path(roundedRect: box, cornerRadius: 5, style: .continuous),
+                with: .linearGradient(
+                    Gradient(colors: [accentHot.opacity(fade), accent.opacity(fade)]),
+                    startPoint: CGPoint(x: 0, y: box.minY),
+                    endPoint: CGPoint(x: 0, y: box.maxY)
+                )
+            )
+            head.fill(
+                Path(
+                    roundedRect: CGRect(x: box.maxX - 6, y: box.minY + 3, width: 6, height: box.height - 6),
+                    cornerRadius: 3,
+                    style: .continuous
+                ),
+                with: .color(.white.opacity((0.28 + 0.55 * Double(impact)) * fade))
+            )
+            head.fill(
+                Path(ellipseIn: CGRect(x: -2.5, y: -2.5, width: 5, height: 5)),
+                with: .color(.black.opacity(0.18 * fade))
+            )
+        }
+    }
+
+    // Pivot boss on top of the arm root.
+    let boss = CGRect(x: pivot.x - 9, y: pivot.y - 9, width: 18, height: 18)
+    ctx.fill(
+        Path(ellipseIn: boss),
+        with: .linearGradient(
+            Gradient(colors: [ink.opacity(0.42 * fade), ink.opacity(0.18 * fade)]),
+            startPoint: CGPoint(x: boss.minX, y: boss.minY),
+            endPoint: CGPoint(x: boss.maxX, y: boss.maxY)
+        )
+    )
+    ctx.stroke(Path(ellipseIn: boss), with: .color(ink.opacity(0.3 * fade)), lineWidth: 1)
+    ctx.fill(
+        Path(ellipseIn: boss.insetBy(dx: 5.5, dy: 5.5)),
+        with: .color(ink.opacity(0.55 * fade))
+    )
+
+    guard impact > 0.01 else { return }
+
+    // Contact flash on the rim.
+    let hit = CGPoint(
+        x: origin.x + KnockerGeometry.strikePoint.x,
+        y: origin.y + KnockerGeometry.strikePoint.y
+    )
+    let ring = 10 + 24 * (1 - impact)
+    ctx.stroke(
+        Path(ellipseIn: CGRect(x: hit.x - ring, y: hit.y - ring, width: ring * 2, height: ring * 2)),
+        with: .color(accent.opacity(0.6 * Double(impact))),
+        lineWidth: 2
+    )
+    var sparks = Path()
+    for i in 0..<4 {
+        let a = CGFloat((45 + Double(i) * 90) * .pi / 180)
+        let near = 10 + 8 * (1 - impact)
+        let far = near + 8 + 14 * (1 - impact)
+        sparks.move(to: CGPoint(x: hit.x + cos(a) * near, y: hit.y + sin(a) * near))
+        sparks.addLine(to: CGPoint(x: hit.x + cos(a) * far, y: hit.y + sin(a) * far))
+    }
+    ctx.stroke(
+        sparks,
+        with: .color(accent.opacity(0.85 * Double(impact))),
+        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+    )
+    let flash = 4 + 7 * impact
+    ctx.fill(
+        Path(ellipseIn: CGRect(x: hit.x - flash, y: hit.y - flash, width: flash * 2, height: flash * 2)),
+        with: .color(.white.opacity(0.75 * Double(impact)))
+    )
+}
+
+private func drawGear(
+    into ctx: inout GraphicsContext,
+    center: CGPoint,
+    radius: CGFloat,
+    teeth: Int,
+    rotation: CGFloat,
+    color: Color,
+    hub: Color
+) {
+    var path = Path()
+    let root = radius * 0.72
+    for i in 0..<(teeth * 2) {
+        let r = i.isMultiple(of: 2) ? radius : root
+        let a = rotation + CGFloat(i) * .pi / CGFloat(teeth)
+        let point = CGPoint(x: center.x + cos(a) * r, y: center.y + sin(a) * r)
+        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+    }
+    path.closeSubpath()
+    ctx.fill(path, with: .color(color))
+    ctx.fill(
+        Path(ellipseIn: CGRect(
+            x: center.x - radius * 0.26,
+            y: center.y - radius * 0.26,
+            width: radius * 0.52,
+            height: radius * 0.52
+        )),
+        with: .color(hub)
+    )
 }
 
 private enum SatParticleMotion {
@@ -490,7 +1073,7 @@ private struct FlyingSatParticleView: View {
         .position(pos)
         .allowsHitTesting(false)
         .onAppear {
-            // 1) Pop out of the bar
+            // 1) Pop out of the wheel tip
             withAnimation(.spring(response: 0.36, dampingFraction: 0.58)) {
                 popT = 1
             }
@@ -592,116 +1175,7 @@ struct BtcBalanceView: View {
     }
 }
 
-struct ProgressBarView: View {
-    let progress: Double
-    let total: Int
-    let fillRate: Double
-    let tapPower: Double
-    let autoActive: Bool
-    var flash: Bool = false
-
-    @EnvironmentObject private var session: SessionStore
-    @State private var anchorProgress: Double = 0
-    @State private var anchorDate: Date = .now
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.05)) { context in
-            let display = displayedBarProgress(
-                progress: progress,
-                total: total,
-                fillRate: fillRate,
-                autoActive: autoActive,
-                anchorProgress: anchorProgress,
-                anchorDate: anchorDate,
-                now: context.date
-            )
-            let fraction = total > 0 ? min(1, display / Double(total)) : 0
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color("BrandAccent"))
-                    .monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .center)
-
-                HStack {
-                    Text("\(Int(display.rounded(.down))) / \(total) taps")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color("BrandInk"))
-                        .monospacedDigit()
-                    Spacer()
-                    BarRateStatusView(
-                        autoActive: autoActive,
-                        fillRate: fillRate,
-                        tapPower: tapPower
-                    )
-                }
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color("BrandInk").opacity(0.06))
-                            .overlay(
-                                Capsule().stroke(
-                                    Color("BrandAccent").opacity(flash ? 0.85 : 0.10),
-                                    lineWidth: flash ? 2 : 1
-                                )
-                            )
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: flash
-                                        ? [Color("BrandAccent"), Color.white]
-                                        : [Color("BrandFill"), Color("BrandFillHot")],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .overlay(
-                                Capsule()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [Color.white.opacity(flash ? 0.65 : 0.35), Color.clear],
-                                            startPoint: .top,
-                                            endPoint: .center
-                                        )
-                                    )
-                            )
-                            .frame(width: max(20, geo.size.width * fraction))
-                            .shadow(
-                                color: (flash ? Color("BrandAccent") : Color("BrandFill")).opacity(flash ? 0.9 : 0.55),
-                                radius: flash ? 18 : 10,
-                                y: 0
-                            )
-                    }
-                    .contentShape(Capsule())
-                    .onTapGesture {
-                        Task { await session.tap() }
-                    }
-                }
-                .frame(height: 30)
-            }
-        }
-        .onChange(of: progress) { _, newValue in
-            anchorProgress = newValue
-            anchorDate = .now
-        }
-        .onChange(of: fillRate) { _, _ in
-            anchorProgress = progress
-            anchorDate = .now
-        }
-        .onChange(of: tapPower) { _, _ in
-            anchorProgress = progress
-            anchorDate = .now
-        }
-        .onAppear {
-            anchorProgress = progress
-            anchorDate = .now
-        }
-    }
-}
-
-/// Status above the bar: taps/s · power · fill/s — colored by Speed / Power.
+/// Rate line under the wheel stage: taps/s · power · fill/s — colored by Speed / Power.
 struct BarRateStatusView: View {
     let autoActive: Bool
     let fillRate: Double

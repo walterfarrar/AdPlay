@@ -37,6 +37,28 @@ data class GameState(
 ) {
     val progressFraction: Float
         get() = if (unitsPerSat <= 0) 0f else (progress / unitsPerSat).toFloat().coerceIn(0f, 1f)
+
+    /** Local preview of one manual tap (matches server `applyManualTapInMemory`). */
+    fun applyingManualTap(): GameState {
+        if (tapsRemaining <= 0) return this
+        val units = unitsPerSat.coerceAtLeast(1)
+        var nextProgress = progress + tapPower.coerceAtLeast(0.0)
+        var earned = 0
+        while (nextProgress >= units) {
+            if (dailySatsEarnCap > 0 && satsEarnedToday + earned >= dailySatsEarnCap) {
+                nextProgress = units - 0.0001
+                break
+            }
+            nextProgress -= units
+            earned += 1
+        }
+        return copy(
+            tapsRemaining = tapsRemaining - 1,
+            progress = nextProgress,
+            satsBalance = satsBalance + earned,
+            satsEarnedToday = satsEarnedToday + earned,
+        )
+    }
 }
 data class Tunables(
     val unitsPerSat: Int = 1000,
@@ -53,7 +75,7 @@ data class Tunables(
     /** Seconds between +1 ad charge. 0 = no timed regen. */
     val adRegenSeconds: Int = 1200,
     val skipTimeSeconds: Int = 60,
-    /** 0 = unlimited skip ads after regular ads are out. */
+    /** 0 = unlimited; -1 = disabled (Skip Time hidden). */
     val skipAdsPerCycle: Int = 10,
     val dailySatsEarnCap: Int = 0,
     val minWithdrawSats: Int = 100,

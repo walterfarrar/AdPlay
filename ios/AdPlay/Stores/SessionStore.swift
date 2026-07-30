@@ -19,6 +19,12 @@ final class SessionStore: ObservableObject {
     /// project the display from this anchor locally, so Firebase is only hit on real
     /// changes (start, foreground, a mutation, or once when a window ends).
     private var serverState: GameState = .empty
+    /// Last fully-acked server snapshot (excludes optimistic taps still in flight).
+    private var confirmedState: GameState = .empty
+    /// Manual taps shown locally but not yet confirmed by `gameTap`.
+    private var unackedTaps = 0
+    private var tapFlushTask: Task<Void, Never>?
+    private var tapFlushGeneration = 0
     private var anchorDate: Date = .now
     private var windowEndHandled = false
     private var foreground = false
@@ -97,13 +103,60 @@ final class SessionStore: ObservableObject {
         AdMobRewardedPresenter.shared.configure(useSampleAds: useSample)
     }
 
+    /// Instant local feedback; Firebase catch-up is serialized in the background.
     func tap() async {
-        guard state.tapsRemaining > 0 else { return }
-        do {
-            let next = try await api.tap()
-            apply(next, force: true)
-        } catch {
-            // Out of taps / transient
+        guard !skipAnimating else { return }
+        var probe = confirmedState
+        for _ in 0..<unackedTaps {
+            probe = probe.applyingManualTap()
+        }
+        guard probe.tapsRemaining > 0 else { return }
+
+        unackedTaps += 1
+        publishOptimisticTaps()
+        ensureTapFlush()
+    }
+
+    /// Recompute display from confirmed server state + unacked optimistic taps.
+    private func publishOptimisticTaps() {
+        var s = confirmedState
+        for _ in 0..<unackedTaps {
+            s = s.applyingManualTap()
+        }
+        // Keep the auto-fill clock; only progress / taps change.
+        serverState = s
+        state = project(s, now: Date())
+    }
+
+    private func ensureTapFlush() {
+        guard tapFlushTask == nil else { return }
+        let generation = tapFlushGeneration
+        tapFlushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.tapFlushTask = nil }
+            while self.unackedTaps > 0 {
+                guard generation == self.tapFlushGeneration else { return }
+                do {
+                    let next = try await self.api.tap()
+                    guard generation == self.tapFlushGeneration else { return }
+                    if let u = next.updatedAt {
+                        self.lastUpdatedAt = u
+                    }
+                    self.confirmedState = next
+                    self.unackedTaps = max(0, self.unackedTaps - 1)
+                    // Confirmed snapshot already includes auto catch-up through now.
+                    self.anchorDate = Date()
+                    self.windowEndHandled = false
+                    self.publishOptimisticTaps()
+                    GameReminderScheduler.sync(self.state)
+                    self.ensureTicker()
+                } catch {
+                    guard generation == self.tapFlushGeneration else { return }
+                    self.unackedTaps = 0
+                    try? await self.refresh(force: true)
+                    return
+                }
+            }
         }
     }
 
@@ -139,6 +192,9 @@ final class SessionStore: ObservableObject {
         if let u = to.updatedAt {
             lastUpdatedAt = u
         }
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        confirmedState = to
         serverState = to
         GameReminderScheduler.sync(to)
 
@@ -269,6 +325,11 @@ final class SessionStore: ObservableObject {
         if let u = next.updatedAt {
             lastUpdatedAt = u
         }
+        // Invalidate any in-flight optimistic tap flush; those responses are stale
+        // relative to this authoritative snapshot (boost / refresh / reset).
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        confirmedState = next
         serverState = next
         anchorDate = Date()
         windowEndHandled = false
@@ -334,7 +395,11 @@ final class SessionStore: ObservableObject {
         let skipMax = tunables?.skipAdsPerCycle
         let skipLeft: Int
         let skipRegenLeft: Int
-        if windowExpired {
+        if let skipMax, skipMax < 0 {
+            // Disabled
+            skipLeft = 0
+            skipRegenLeft = 0
+        } else if windowExpired {
             skipLeft = skipMax == 0 ? -1 : (skipMax ?? s.effectiveSkipAdsRemaining)
             skipRegenLeft = 0
         } else if skipMax == 0 {

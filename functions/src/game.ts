@@ -100,7 +100,7 @@ function applyAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
 
 /** Apply timed +1 Skip charge regen up to skipAdsPerCycle (same interval as boost ads). */
 function applySkipAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
-  // 0 = unlimited — no bank / regen.
+  // <= 0: disabled (-1) or unlimited (0) — no bank / regen.
   if (t.skipAdsPerCycle <= 0) {
     g.skipAdCharges = 0;
     return;
@@ -160,8 +160,20 @@ function regenPublic(g: GameStateDoc, t: Tunables, now: Date): {
     nextAdChargeAt = new Date(nextMs).toISOString();
   }
 
+  // Disabled: no Skip Time surface.
+  if (t.skipAdsPerCycle < 0) {
+    return {
+      adsRemaining,
+      adRegenSecondsLeft,
+      nextAdChargeAt,
+      skipAdsRemaining: 0,
+      skipAdRegenSecondsLeft: 0,
+      nextSkipAdChargeAt: null,
+    };
+  }
+
   // Unlimited skip bank.
-  if (t.skipAdsPerCycle <= 0) {
+  if (t.skipAdsPerCycle === 0) {
     return {
       adsRemaining,
       adRegenSecondsLeft,
@@ -400,6 +412,9 @@ function applySkipTimeInMemory(
   const autoUntil = parseIso(g.autoFillUntil);
   if (!autoUntil || autoUntil <= at) {
     throw Object.assign(new Error("Auto is not running"), { code: "failed-precondition" });
+  }
+  if (t.skipAdsPerCycle < 0) {
+    throw Object.assign(new Error("Skip Time is disabled"), { code: "failed-precondition" });
   }
   applyAdRegen(g, t, at);
   applySkipAdRegen(g, t, at);

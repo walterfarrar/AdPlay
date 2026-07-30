@@ -17,7 +17,7 @@ Live values: Firestore `config/tunables`
 | `adsPerCycle` | **10** | Max **banked** ad charges |
 | `adRegenSeconds` | **1200** | Seconds between +1 charge (20 min). **0 = no regen** |
 | `skipTimeSeconds` | 60 | Skip Time: seconds of auto to skip |
-| `skipAdsPerCycle` | 10 | Skip ads after charges empty; 0 = unlimited |
+| `skipAdsPerCycle` | 10 | Skip ads after charges empty; **0 = unlimited**, **-1 = disabled** |
 | `dailySatsEarnCap` | 0 | Max sats/day; **0 = unlimited** |
 | `minWithdrawSats` | 100 | Min redeem request |
 

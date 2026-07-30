@@ -13,6 +13,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,7 +28,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -49,15 +52,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
@@ -74,8 +85,14 @@ import com.adplay.app.UiState
 import com.adplay.app.data.Tunables
 import java.time.Instant
 import java.time.format.DateTimeParseException
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.hypot
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.delay
 
 private enum class BoostVisual {
@@ -180,7 +197,7 @@ fun HomeScreen(
                 var homeWidthPx by remember { mutableFloatStateOf(0f) }
                 var homeHeightPx by remember { mutableFloatStateOf(0f) }
                 var redeemCenter by remember { mutableStateOf(Offset.Zero) }
-                var barEnd by remember { mutableStateOf(Offset.Zero) }
+                var wheelTip by remember { mutableStateOf(Offset.Zero) }
                 val satParticles = remember { mutableStateListOf<SatParticle>() }
                 var redeemGlow by remember { mutableStateOf(false) }
                 var barFlash by remember { mutableFloatStateOf(0f) }
@@ -220,14 +237,14 @@ fun HomeScreen(
                     barFlash = 1f
 
                     val fallbackFrom = Offset(
-                        x = (homeWidthPx - with(density) { 36.dp.toPx() }).coerceAtLeast(0f),
-                        y = homeHeightPx * 0.42f,
+                        x = homeWidthPx * 0.38f,
+                        y = homeHeightPx * 0.38f,
                     )
                     val fallbackTo = Offset(
                         x = (homeWidthPx - with(density) { 56.dp.toPx() }).coerceAtLeast(0f),
                         y = with(density) { 36.dp.toPx() },
                     )
-                    val from = if (barEnd != Offset.Zero) barEnd else fallbackFrom
+                    val from = if (wheelTip != Offset.Zero) wheelTip else fallbackFrom
                     val to = if (redeemCenter != Offset.Zero) redeemCenter else fallbackTo
                     if (satParticles.size < 4 && homeWidthPx > 0f) {
                         satParticles.add(
@@ -268,7 +285,7 @@ fun HomeScreen(
                     }
                 }
 
-                // Smooth local fill between server polls — shared by BTC balance + progress bar.
+                // Smooth local fill between server polls — shared by BTC balance + wheel.
                 LaunchedEffect(state.progress, state.fillRate, state.autoFillActive, state.unitsPerSat) {
                     if (state.progress + 5.0 < displayProgress) {
                         // Bar completed (progress wrapped) or debug reset
@@ -384,16 +401,17 @@ fun HomeScreen(
                         displayProgress = displayProgress,
                         unitsPerSat = state.unitsPerSat,
                         autoActive = state.autoFillActive,
+                        autoFillUntil = state.autoFillUntil,
                         fillRate = state.fillRate,
                         tapPower = state.tapPower,
                         onTap = onTap,
-                        barFlash = barFlashAnimated,
-                        onBarPositioned = { coords ->
-                            barEnd = localInHome(
+                        wheelFlash = barFlashAnimated,
+                        onWheelTipPositioned = { coords ->
+                            wheelTip = localInHome(
                                 coords,
                                 Offset(
-                                    coords.size.width - with(density) { 10.dp.toPx() },
-                                    coords.size.height - with(density) { 15.dp.toPx() },
+                                    coords.size.width / 2f,
+                                    with(density) { 8.dp.toPx() },
                                 ),
                             )
                         },
@@ -403,7 +421,7 @@ fun HomeScreen(
                     Spacer(Modifier.height(14.dp))
                     Text(
                         if (state.tapsRemaining > 0) {
-                            "Tap the bar · ${state.tapsRemaining} taps left today"
+                            "Tap the wheel · ${state.tapsRemaining} taps left today"
                         } else {
                             "0 taps left today"
                         },
@@ -464,12 +482,6 @@ fun HomeScreen(
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    SharedAutoTimer(
-                        autoFillUntil = state.autoFillUntil,
-                        autoActive = state.autoFillActive,
-                    )
-
-                    Spacer(Modifier.height(10.dp))
 
                     ui.error?.let {
                         Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
@@ -481,11 +493,15 @@ fun HomeScreen(
                         cooldownLeft = state.adCooldownSecondsLeft,
                         regenLeft = state.adRegenSecondsLeft,
                         adsMax = t?.adsPerCycle ?: 10,
+                        adRegenSeconds = t?.adRegenSeconds ?: 0,
                     )
 
                     // Reserved height so layout never jumps when Skip appears.
                     Spacer(Modifier.height(8.dp))
-                    val skipVisible = state.adsRemainingToday <= 0 &&
+                    // skipAdsPerCycle < 0 disables Skip Time entirely.
+                    val skipEnabled = (t?.skipAdsPerCycle ?: 10) >= 0
+                    val skipVisible = skipEnabled &&
+                        state.adsRemainingToday <= 0 &&
                         state.autoFillActive &&
                         (state.skipAdsRemaining < 0 ||
                             state.skipAdsRemaining > 0 ||
@@ -560,9 +576,10 @@ private fun SharedAutoTimer(
     Text(
         if (left > 0L) "Auto ${formatCountdown(left)}" else " ",
         color = if (left > 0L) BrandTime else Color.Transparent,
-        fontSize = 14.sp,
+        fontSize = 13.sp,
         fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center,
+        maxLines = 1,
         modifier = Modifier.fillMaxWidth(),
     )
 }
@@ -573,11 +590,15 @@ private fun AdsFooter(
     cooldownLeft: Int,
     regenLeft: Int,
     adsMax: Int,
+    adRegenSeconds: Int,
 ) {
     val footer = when {
         adsRemaining <= 0 -> {
-            if (regenLeft > 0) "Next Boost Ad in ${formatCountdown(regenLeft.toLong())}"
-            else "No ads available"
+            when {
+                regenLeft > 0 -> "Next Boost Ad in ${formatCountdown(regenLeft.toLong())}"
+                adRegenSeconds <= 0 -> "Ads refill when Auto ends"
+                else -> "No ads available"
+            }
         }
         cooldownLeft > 0 -> "Next Boost Ad in ${cooldownLeft}s · $adsRemaining/$adsMax ads"
         adsRemaining < adsMax && regenLeft > 0 ->
@@ -608,7 +629,7 @@ internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat:
     return String.format("%.11f", btc)
 }
 
-/** Status above the bar: taps/s · power · fill/s — colored by Speed / Power. */
+/** Rate line under the wheel stage: taps/s · power · fill/s — colored by Speed / Power. */
 @Composable
 private fun BarRateStatus(
     autoActive: Boolean,
@@ -727,25 +748,53 @@ private data class SatParticle(
     val to: Offset,
 )
 
-/** BTC balance + progress bar; reports bar-end position for the sat-earn particle. */
+/** BTC balance + centered sat wheel + overlapping auto knocker. */
 @Composable
 private fun SatEarnStage(
     satsBalance: Int,
     displayProgress: Double,
     unitsPerSat: Int,
     autoActive: Boolean,
+    autoFillUntil: String?,
     fillRate: Double,
     tapPower: Double,
     onTap: () -> Unit,
-    barFlash: Float = 0f,
-    onBarPositioned: (LayoutCoordinates) -> Unit = {},
+    wheelFlash: Float = 0f,
+    onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+    val fraction = if (unitsPerSat > 0) {
+        (displayProgress / unitsPerSat).toFloat().coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val tapsPerSec = tapsPerSecond(fillRate, tapPower)
+    // Auto-only clock for the knocker — ignores manual tap progress jumps.
+    var knockerProgress by remember { mutableDoubleStateOf(displayProgress) }
+    LaunchedEffect(fillRate, tapPower, autoActive, unitsPerSat) {
+        knockerProgress = displayProgress
+        if (!autoActive || fillRate <= 0.0) return@LaunchedEffect
+        val start = knockerProgress
+        val startMs = System.currentTimeMillis()
+        while (true) {
+            delay(16)
+            val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
+            knockerProgress = start + fillRate * elapsed
+        }
+    }
+    val pose = knockerPose(
+        displayProgress = knockerProgress,
+        tapsPerSec = tapsPerSec,
+        tapPower = tapPower,
+        autoActive = autoActive,
+    )
+    val wheelSize = 220.dp
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 formatBtcAmount(
                     satsBalance = satsBalance,
@@ -774,19 +823,558 @@ private fun SatEarnStage(
             )
         }
 
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(20.dp))
 
-        ProgressBar(
-            displayProgress = displayProgress,
-            total = unitsPerSat,
-            autoActive = autoActive,
-            fillRate = fillRate,
-            tapPower = tapPower,
-            onTap = onTap,
-            flash = barFlash,
-            modifier = Modifier.onGloballyPositioned(onBarPositioned),
+        Text(
+            formatSatsPerHour(fillRate = fillRate, unitsPerSat = unitsPerSat, autoActive = autoActive),
+            fontWeight = FontWeight.Bold,
+            color = BrandAccent,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(wheelSize + 40.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Wheel and tapper are one machine, nudged left to make room for the arm.
+            Box(
+                modifier = Modifier.offset(x = (-22).dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SatWheelView(
+                    fraction = fraction,
+                    flash = wheelFlash,
+                    onTap = onTap,
+                    modifier = Modifier
+                        .size(wheelSize)
+                        .onGloballyPositioned(onWheelTipPositioned),
+                )
+                AutoKnockerView(pose = pose, active = autoActive)
+                Box(
+                    modifier = Modifier
+                        .offset(x = 153.dp, y = 74.dp)
+                        .width(92.dp),
+                ) {
+                    SharedAutoTimer(
+                        autoFillUntil = autoFillUntil,
+                        autoActive = autoActive,
+                    )
+                }
+            }
+        }
+
+        Text(
+            "${floor(displayProgress).toInt()} / $unitsPerSat taps",
+            fontWeight = FontWeight.SemiBold,
+            color = BrandInk,
+            fontSize = 15.sp,
+        )
+
+        Spacer(Modifier.height(12.dp))
+        BarRateStatus(autoActive = autoActive, fillRate = fillRate, tapPower = tapPower)
+    }
+}
+
+/** Where the auto tapper is within one strike cycle. */
+private data class KnockerPose(
+    /** 0 = cocked on the stop, 1 = head against the rim. Dips negative while winding up. */
+    val arm: Float = 0f,
+    /** 1 at the moment of contact, fading to 0 shortly after. */
+    val impact: Float = 0f,
+    /** 0…1 through the current tap, used to turn the drive gears. */
+    val phase: Float = 0f,
+)
+
+/** Seconds the hammer takes to swing from the cocked stop into the rim. */
+private fun knockerStrikeDuration(tapPower: Double): Double =
+    maxOf(0.07, 0.16 / tapPower.coerceAtLeast(0.01))
+
+/** How far the head rebounds off the rim, as a fraction of the full swing. */
+private const val KNOCKER_BOUNCE = 0.42
+/** Extra travel loaded past the stop just before release. */
+private const val KNOCKER_WIND_UP = 0.07
+/** Seconds the contact flash lasts. */
+private const val KNOCKER_IMPACT_FADE = 0.16
+
+/** Strike cycle for the auto tapper. Contact lands as floor(progress) increments. */
+private fun knockerPose(
+    displayProgress: Double,
+    tapsPerSec: Double,
+    tapPower: Double,
+    autoActive: Boolean,
+): KnockerPose {
+    if (!autoActive || tapsPerSec <= 0.0) return KnockerPose()
+    val period = 1.0 / tapsPerSec
+    val phase = displayProgress - floor(displayProgress) // 0 = just struck
+
+    // Segments of one tap, as fractions of the period.
+    val strike = minOf(0.34, maxOf(0.06, knockerStrikeDuration(tapPower) / period))
+    val recoil = minOf(0.20, maxOf(0.05, 0.07 / period))
+    val windUp = maxOf(minOf(0.09, (1.0 - strike - recoil) * 0.2), 0.0001)
+    val reset = maxOf(1.0 - strike - recoil - windUp, 0.001)
+
+    val fadeSec = minOf(KNOCKER_IMPACT_FADE, period * 0.55)
+    val impact = maxOf(0.0, 1.0 - (phase * period) / fadeSec).pow(1.7)
+    val arm = when {
+        // Rebounds off the rim.
+        phase < recoil -> 1.0 - KNOCKER_BOUNCE * easeOutQuad(phase / recoil)
+        // Drive hauls the hammer back onto its stop.
+        phase < recoil + reset ->
+            (1.0 - KNOCKER_BOUNCE) * (1.0 - easeInOutCubic((phase - recoil) / reset))
+        // Held on the stop, loading a little extra travel.
+        phase < 1.0 - strike ->
+            -KNOCKER_WIND_UP * easeOutQuad((phase - recoil - reset) / windUp)
+        // Released: accelerates the whole way in, with no cushion at the end.
+        else -> {
+            val t = minOf(1.0, (phase - (1.0 - strike)) / strike)
+            -KNOCKER_WIND_UP + (1.0 + KNOCKER_WIND_UP) * t.pow(2.3)
+        }
+    }
+
+    return KnockerPose(arm = arm.toFloat(), impact = impact.toFloat(), phase = phase.toFloat())
+}
+
+@Composable
+private fun SatWheelView(
+    fraction: Float,
+    flash: Float,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .clickable(onClick = onTap),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val sizeMin = size.minDimension
+            val rim = sizeMin * 0.06f
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val radius = sizeMin / 2f - rim / 2f
+
+            drawCircle(
+                color = BrandInk.copy(alpha = 0.08f),
+                radius = radius,
+                center = center,
+                style = Stroke(width = rim),
+            )
+
+            val sweep = 360f * fraction
+            if (sweep > 0.1f) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        colors = if (flash > 0.3f) {
+                            listOf(BrandAccent, Color.White, BrandAccent)
+                        } else {
+                            listOf(BrandFill, BrandFillHot, BrandFill)
+                        },
+                        center = center,
+                    ),
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = Offset(center.x - radius, center.y - radius),
+                    size = Size(radius * 2f, radius * 2f),
+                    style = Stroke(width = rim, cap = StrokeCap.Round),
+                )
+            }
+
+            rotate(degrees = fraction * 360f, pivot = center) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            BrandInk.copy(alpha = 0.04f),
+                            BrandInk.copy(alpha = 0.10f),
+                        ),
+                        center = center,
+                        radius = sizeMin * 0.48f,
+                    ),
+                    radius = sizeMin * 0.42f,
+                    center = center,
+                )
+                for (i in 0 until 12) {
+                    val angleRad = Math.toRadians(i * 30.0 - 90.0)
+                    val outer = sizeMin * 0.38f
+                    val inner = outer - if (i % 3 == 0) 14f else 9f
+                    val cosA = cos(angleRad).toFloat()
+                    val sinA = sin(angleRad).toFloat()
+                    drawLine(
+                        color = BrandInk.copy(alpha = if (i % 3 == 0) 0.35f else 0.16f),
+                        start = Offset(center.x + cosA * inner, center.y + sinA * inner),
+                        end = Offset(center.x + cosA * outer, center.y + sinA * outer),
+                        strokeWidth = if (i % 3 == 0) 3f else 2f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+                // Hub peg at the wheel face "start" (top when fraction == 0)
+                drawCircle(
+                    color = BrandAccent.copy(alpha = 0.85f),
+                    radius = 4f,
+                    center = Offset(center.x, center.y - sizeMin * 0.30f),
+                )
+            }
+
+            // Fixed 12 o'clock pointer
+            val tipY = center.y - sizeMin * 0.5f + 4f
+            val pointer = Path().apply {
+                moveTo(center.x, tipY)
+                lineTo(center.x + 7f, tipY + 12f)
+                lineTo(center.x - 7f, tipY + 12f)
+                close()
+            }
+            drawPath(
+                path = pointer,
+                color = if (flash > 0.3f) BrandAccent else BrandInk.copy(alpha = 0.75f),
+            )
+
+            // Strike plate at 3 o'clock — where the auto tapper lands.
+            val plateUnit = 1.dp.toPx()
+            drawRoundRect(
+                color = BrandInk.copy(alpha = 0.30f),
+                topLeft = Offset(
+                    center.x + sizeMin * 0.5f - 4.5f * plateUnit,
+                    center.y - 13f * plateUnit,
+                ),
+                size = Size(9f * plateUnit, 26f * plateUnit),
+                cornerRadius = CornerRadius(3f * plateUnit, 3f * plateUnit),
+            )
+            drawRoundRect(
+                color = BrandInk.copy(alpha = 0.35f),
+                topLeft = Offset(
+                    center.x + sizeMin * 0.5f - 4.5f * plateUnit,
+                    center.y - 13f * plateUnit,
+                ),
+                size = Size(9f * plateUnit, 26f * plateUnit),
+                cornerRadius = CornerRadius(3f * plateUnit, 3f * plateUnit),
+                style = Stroke(width = plateUnit),
+            )
+
+            drawCircle(
+                brush = Brush.verticalGradient(
+                    colors = listOf(BrandInk.copy(alpha = 0.12f), BrandInk.copy(alpha = 0.06f)),
+                ),
+                radius = sizeMin * 0.14f,
+                center = center,
+            )
+            drawCircle(
+                color = BrandInk.copy(alpha = 0.12f),
+                radius = sizeMin * 0.14f,
+                center = center,
+                style = Stroke(width = 1f),
+            )
+            drawCircle(
+                color = BrandAccent.copy(alpha = if (flash > 0.3f) 0.55f else 0.2f),
+                radius = sizeMin * 0.04f,
+                center = center,
+            )
+
+            if (flash > 0.3f) {
+                drawCircle(
+                    color = BrandAccent.copy(alpha = 0.85f * flash),
+                    radius = sizeMin / 2f - 1f,
+                    center = center,
+                    style = Stroke(width = 2f),
+                )
+            }
+        }
+    }
+}
+
+/** Fixed tapper geometry, in dp relative to the wheel centre. */
+private object KnockerGeometry {
+    /** Hammer pivot, up and to the right of the wheel. */
+    const val PIVOT_X = 150f
+    const val PIVOT_Y = -72f
+    /** Head centre at contact — one HEAD_HALF_LENGTH back from the strike point. */
+    const val CONTACT_X = 117.1f
+    const val CONTACT_Y = -9.7f
+    /** The spot on the rim the face lands on (3 o'clock, wheel radius 110). */
+    const val STRIKE_X = 112f
+    const val STRIKE_Y = 0f
+    /** Degrees travelled between the cocked stop and contact. */
+    const val SWEEP_DEGREES = 42f
+    const val HEAD_HALF_LENGTH = 11f
+    const val HEAD_HALF_WIDTH = 15f
+
+    /** Housing the pivot and drive gears are bolted to. */
+    const val PLATE_X = 128f
+    const val PLATE_Y = -110f
+    const val PLATE_W = 50f
+    const val PLATE_H = 56f
+    const val WINDOW_X = 133f
+    const val WINDOW_Y = -105f
+    const val WINDOW_W = 40f
+    const val WINDOW_H = 26f
+    const val DRIVE_X = 146f
+    const val DRIVE_Y = -92f
+    const val IDLER_X = 164f
+    const val IDLER_Y = -92f
+    const val DRIVE_RADIUS = 11f
+    const val IDLER_RADIUS = 7f
+
+    /** Bumper the arm rests against while cocked. */
+    const val STOP_X = 163f
+    const val STOP_Y = -53f
+    const val STOP_W = 8f
+    const val STOP_H = 14f
+
+    val armLength = hypot(CONTACT_X - PIVOT_X, CONTACT_Y - PIVOT_Y)
+    val strikeAngle = atan2(CONTACT_Y - PIVOT_Y, CONTACT_X - PIVOT_X)
+
+    /** Arm angle in radians for a pose value. */
+    fun angle(arm: Float): Float =
+        strikeAngle - (SWEEP_DEGREES * PI.toFloat() / 180f) * (1f - arm)
+}
+
+/**
+ * Side-mounted auto tapper: a geared hammer that swings onto the wheel rim.
+ * Driven only by Auto fill progress — manual taps do not move it.
+ */
+@Composable
+private fun AutoKnockerView(pose: KnockerPose, active: Boolean) {
+    Canvas(Modifier.requiredSize(400.dp, 300.dp)) {
+        drawTapper(pose = pose, active = active)
+    }
+}
+
+private fun DrawScope.drawTapper(pose: KnockerPose, active: Boolean) {
+    val g = KnockerGeometry
+    val u = 1.dp.toPx()
+    val origin = Offset(size.width / 2f, size.height / 2f)
+    val impact = if (active) pose.impact else 0f
+    val fade = if (active) 1f else 0.4f
+
+    val angle = g.angle(pose.arm)
+    // Contact shoves the whole mount back along the strike axis.
+    val kick = Offset(
+        -cos(g.strikeAngle) * impact * 3f * u,
+        -sin(g.strikeAngle) * impact * 3f * u,
+    )
+    fun mounted(x: Float, y: Float) =
+        Offset(origin.x + x * u + kick.x, origin.y + y * u + kick.y)
+
+    // Housing.
+    val plateTopLeft = mounted(g.PLATE_X, g.PLATE_Y)
+    val plateSize = Size(g.PLATE_W * u, g.PLATE_H * u)
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                BrandInk.copy(alpha = 0.21f * fade),
+                BrandInk.copy(alpha = 0.07f * fade),
+            ),
+            start = plateTopLeft,
+            end = Offset(plateTopLeft.x + plateSize.width, plateTopLeft.y + plateSize.height),
+        ),
+        topLeft = plateTopLeft,
+        size = plateSize,
+        cornerRadius = CornerRadius(8f * u, 8f * u),
+    )
+    drawRoundRect(
+        color = BrandInk.copy(alpha = 0.22f * fade),
+        topLeft = plateTopLeft,
+        size = plateSize,
+        cornerRadius = CornerRadius(8f * u, 8f * u),
+        style = Stroke(width = u),
+    )
+    drawRoundRect(
+        color = BrandInk.copy(alpha = 0.10f * fade),
+        topLeft = Offset(plateTopLeft.x + 5f * u, plateTopLeft.y + 5f * u),
+        size = Size(plateSize.width - 10f * u, plateSize.height - 10f * u),
+        cornerRadius = CornerRadius(5f * u, 5f * u),
+        style = Stroke(width = u),
+    )
+
+    // Gear window, then the drive train — one turn per tap, so the machine reads
+    // as the thing swinging the arm.
+    drawRoundRect(
+        color = Color.Black.copy(alpha = 0.35f * fade),
+        topLeft = mounted(g.WINDOW_X, g.WINDOW_Y),
+        size = Size(g.WINDOW_W * u, g.WINDOW_H * u),
+        cornerRadius = CornerRadius(13f * u, 13f * u),
+    )
+    val turn = pose.phase * 2f * PI.toFloat()
+    drawGear(
+        center = mounted(g.DRIVE_X, g.DRIVE_Y),
+        radius = g.DRIVE_RADIUS * u,
+        teeth = 9,
+        rotation = turn,
+        color = BrandInk.copy(alpha = 0.34f * fade),
+        hub = BrandInk.copy(alpha = 0.5f * fade),
+    )
+    drawGear(
+        center = mounted(g.IDLER_X, g.IDLER_Y),
+        radius = g.IDLER_RADIUS * u,
+        teeth = 6,
+        rotation = -turn * (g.DRIVE_RADIUS / g.IDLER_RADIUS) + PI.toFloat() / 6f,
+        color = BrandInk.copy(alpha = 0.28f * fade),
+        hub = BrandInk.copy(alpha = 0.44f * fade),
+    )
+
+    for (boltX in listOf(g.PLATE_X + 9f, g.PLATE_X + g.PLATE_W - 9f)) {
+        val bolt = mounted(boltX, g.PLATE_Y + g.PLATE_H - 9f)
+        drawCircle(BrandInk.copy(alpha = 0.26f * fade), radius = 3f * u, center = bolt)
+        drawCircle(BrandInk.copy(alpha = 0.5f * fade), radius = 1.2f * u, center = bolt)
+    }
+
+    drawRoundRect(
+        color = BrandInk.copy(alpha = 0.30f * fade),
+        topLeft = mounted(g.STOP_X, g.STOP_Y),
+        size = Size(g.STOP_W * u, g.STOP_H * u),
+        cornerRadius = CornerRadius(3f * u, 3f * u),
+    )
+
+    // Arm and head, drawn along +x from the pivot.
+    val pivot = mounted(g.PIVOT_X, g.PIVOT_Y)
+    val length = g.armLength * u
+    withTransform({
+        translate(pivot.x, pivot.y)
+        rotate(angle * 180f / PI.toFloat(), Offset.Zero)
+    }) {
+        val bar = Path().apply {
+            fillType = PathFillType.EvenOdd
+            moveTo(-11f * u, -9f * u)
+            lineTo(length - 8f * u, -5.5f * u)
+            lineTo(length - 8f * u, 5.5f * u)
+            lineTo(-11f * u, 9f * u)
+            close()
+            for (at in listOf(length * 0.34f, length * 0.56f)) {
+                addOval(
+                    Rect(
+                        left = at - 3.2f * u,
+                        top = -3.2f * u,
+                        right = at + 3.2f * u,
+                        bottom = 3.2f * u,
+                    ),
+                )
+            }
+        }
+        drawPath(
+            path = bar,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    BrandInk.copy(alpha = 0.58f * fade),
+                    BrandInk.copy(alpha = 0.22f * fade),
+                ),
+                startY = -9f * u,
+                endY = 9f * u,
+            ),
+        )
+        drawLine(
+            color = BrandInk.copy(alpha = 0.72f * fade),
+            start = Offset(-8f * u, -7f * u),
+            end = Offset(length - 8f * u, -4f * u),
+            strokeWidth = 1.5f * u,
+        )
+
+        withTransform({
+            translate(length, 0f)
+            // Impact squashes the head into the rim.
+            scale(1f - 0.18f * impact, 1f + 0.16f * impact, Offset.Zero)
+        }) {
+            val halfLength = g.HEAD_HALF_LENGTH * u
+            val halfWidth = g.HEAD_HALF_WIDTH * u
+            drawRoundRect(
+                color = BrandInk.copy(alpha = 0.45f * fade),
+                topLeft = Offset(-14f * u, -9f * u),
+                size = Size(8f * u, 18f * u),
+                cornerRadius = CornerRadius(2.5f * u, 2.5f * u),
+            )
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        BrandAccentHot.copy(alpha = fade),
+                        BrandAccent.copy(alpha = fade),
+                    ),
+                    startY = -halfWidth,
+                    endY = halfWidth,
+                ),
+                topLeft = Offset(-halfLength, -halfWidth),
+                size = Size(halfLength * 2f, halfWidth * 2f),
+                cornerRadius = CornerRadius(5f * u, 5f * u),
+            )
+            drawRoundRect(
+                color = Color.White.copy(alpha = (0.28f + 0.55f * impact) * fade),
+                topLeft = Offset(halfLength - 6f * u, -halfWidth + 3f * u),
+                size = Size(6f * u, halfWidth * 2f - 6f * u),
+                cornerRadius = CornerRadius(3f * u, 3f * u),
+            )
+            drawCircle(Color.Black.copy(alpha = 0.18f * fade), radius = 2.5f * u, center = Offset.Zero)
+        }
+    }
+
+    // Pivot boss on top of the arm root.
+    drawCircle(BrandInk.copy(alpha = 0.34f * fade), radius = 9f * u, center = pivot)
+    drawCircle(
+        BrandInk.copy(alpha = 0.3f * fade),
+        radius = 9f * u,
+        center = pivot,
+        style = Stroke(width = u),
+    )
+    drawCircle(BrandInk.copy(alpha = 0.55f * fade), radius = 3.5f * u, center = pivot)
+
+    if (impact <= 0.01f) return
+
+    // Contact flash on the rim.
+    val hit = Offset(origin.x + g.STRIKE_X * u, origin.y + g.STRIKE_Y * u)
+    drawCircle(
+        color = BrandAccent.copy(alpha = 0.6f * impact),
+        radius = (10f + 24f * (1f - impact)) * u,
+        center = hit,
+        style = Stroke(width = 2f * u),
+    )
+    for (i in 0 until 4) {
+        val a = (45f + i * 90f) * PI.toFloat() / 180f
+        val near = (10f + 8f * (1f - impact)) * u
+        val far = near + (8f + 14f * (1f - impact)) * u
+        drawLine(
+            color = BrandAccent.copy(alpha = 0.85f * impact),
+            start = Offset(hit.x + cos(a) * near, hit.y + sin(a) * near),
+            end = Offset(hit.x + cos(a) * far, hit.y + sin(a) * far),
+            strokeWidth = 2f * u,
+            cap = StrokeCap.Round,
         )
     }
+    drawCircle(
+        color = Color.White.copy(alpha = 0.75f * impact),
+        radius = (4f + 7f * impact) * u,
+        center = hit,
+    )
+}
+
+private fun DrawScope.drawGear(
+    center: Offset,
+    radius: Float,
+    teeth: Int,
+    rotation: Float,
+    color: Color,
+    hub: Color,
+) {
+    val root = radius * 0.72f
+    val path = Path()
+    for (i in 0 until teeth * 2) {
+        val r = if (i % 2 == 0) radius else root
+        val a = rotation + i * PI.toFloat() / teeth
+        val x = center.x + cos(a) * r
+        val y = center.y + sin(a) * r
+        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    drawPath(path, color)
+    drawCircle(hub, radius = radius * 0.26f, center = center)
+}
+
+private fun easeOutQuad(t: Double): Double {
+    val x = t.coerceIn(0.0, 1.0)
+    return 1.0 - (1.0 - x) * (1.0 - x)
+}
+
+private fun easeInOutCubic(t: Double): Double {
+    val x = t.coerceIn(0.0, 1.0)
+    return if (x < 0.5) 4.0 * x * x * x else 1.0 - (-2.0 * x + 2.0).pow(3) / 2.0
 }
 
 private object SatParticleMotion {
@@ -814,7 +1402,7 @@ private fun FlyingSatParticle(
     val orbPx = with(density) { 44.dp.toPx() }
 
     LaunchedEffect(particle.id) {
-        // 1) Pop out of the bar
+        // 1) Pop out of the wheel tip
         popT.animateTo(
             1f,
             animationSpec = spring(
@@ -934,73 +1522,6 @@ private fun playSatTick() {
         Handler(Looper.getMainLooper()).postDelayed({ tg.release() }, 100)
     } catch (_: Exception) {
         // ToneGenerator can fail on some emulators — haptic still fires.
-    }
-}
-
-@Composable
-private fun ProgressBar(
-    displayProgress: Double,
-    total: Int,
-    autoActive: Boolean,
-    fillRate: Double,
-    tapPower: Double,
-    onTap: () -> Unit,
-    flash: Float = 0f,
-    modifier: Modifier = Modifier,
-) {
-    val fraction by animateFloatAsState(
-        targetValue = if (total > 0) (displayProgress / total).toFloat().coerceIn(0f, 1f) else 0f,
-        label = "bar",
-    )
-    Column(modifier.fillMaxWidth()) {
-        Text(
-            formatSatsPerHour(fillRate = fillRate, unitsPerSat = total, autoActive = autoActive),
-            fontWeight = FontWeight.Bold,
-            color = BrandAccent,
-            fontSize = 14.sp,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                "${floor(displayProgress).toInt()} / $total taps",
-                fontWeight = FontWeight.SemiBold,
-                color = BrandInk,
-                fontSize = 15.sp,
-            )
-            BarRateStatus(autoActive = autoActive, fillRate = fillRate, tapPower = tapPower)
-        }
-        Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(30.dp)
-                .clip(RoundedCornerShape(50))
-                .background(BrandInk.copy(alpha = 0.06f))
-                .border(
-                    1.dp,
-                    BrandAccent.copy(alpha = 0.10f + 0.75f * flash),
-                    RoundedCornerShape(50),
-                )
-                .clickable(onClick = onTap),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction.coerceAtLeast(0.04f))
-                    .height(30.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(
-                                androidx.compose.ui.graphics.lerp(BrandFill, BrandAccent, flash * 0.85f),
-                                androidx.compose.ui.graphics.lerp(BrandFillHot, Color.White, flash * 0.65f),
-                            ),
-                        ),
-                    )
-                    .border(1.dp, BrandFillHot.copy(alpha = 0.5f + 0.5f * flash), RoundedCornerShape(50)),
-            )
-        }
     }
 }
 

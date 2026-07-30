@@ -53,6 +53,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
      * this anchor, so we only hit Firebase on real changes — not on a timer.
      */
     private var serverState: GameState = GameState()
+    /** Last fully-acked server snapshot (excludes optimistic taps still in flight). */
+    private var confirmedState: GameState = GameState()
+    /** Manual taps shown locally but not yet confirmed by `gameTap`. */
+    private var unackedTaps = 0
+    private var tapFlushJob: Job? = null
+    private var tapFlushGeneration = 0
     private var anchorMs: Long = System.currentTimeMillis()
     private var windowEndHandled = false
     private var foreground = false
@@ -123,13 +129,51 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(error = null) }
     }
 
+    /** Instant local feedback; Firebase catch-up is serialized in the background. */
     fun tap() {
-        if (_ui.value.state.tapsRemaining <= 0) return
-        viewModelScope.launch {
-            try {
-                applyState(api.tap(), force = true)
-            } catch (_: Exception) {
-                // Out of taps / transient — stay quiet
+        if (skipAnimating) return
+        var probe = confirmedState
+        repeat(unackedTaps) { probe = probe.applyingManualTap() }
+        if (probe.tapsRemaining <= 0) return
+
+        unackedTaps += 1
+        publishOptimisticTaps()
+        ensureTapFlush()
+    }
+
+    /** Recompute display from confirmed server state + unacked optimistic taps. */
+    private fun publishOptimisticTaps() {
+        var s = confirmedState
+        repeat(unackedTaps) { s = s.applyingManualTap() }
+        // Keep the auto-fill clock; only progress / taps change.
+        serverState = s
+        _ui.update { it.copy(state = project(s, System.currentTimeMillis())) }
+    }
+
+    private fun ensureTapFlush() {
+        if (tapFlushJob?.isActive == true) return
+        val generation = tapFlushGeneration
+        tapFlushJob = viewModelScope.launch {
+            while (unackedTaps > 0) {
+                if (generation != tapFlushGeneration) return@launch
+                try {
+                    val next = api.tap()
+                    if (generation != tapFlushGeneration) return@launch
+                    next.updatedAt?.let { lastUpdatedAt = it }
+                    confirmedState = next
+                    unackedTaps = (unackedTaps - 1).coerceAtLeast(0)
+                    // Confirmed snapshot already includes auto catch-up through now.
+                    anchorMs = System.currentTimeMillis()
+                    windowEndHandled = false
+                    publishOptimisticTaps()
+                    GameReminderScheduler.sync(appContext, _ui.value.state)
+                    ensureTicker()
+                } catch (_: Exception) {
+                    if (generation != tapFlushGeneration) return@launch
+                    unackedTaps = 0
+                    runCatching { refresh(force = true) }
+                    return@launch
+                }
             }
         }
     }
@@ -162,6 +206,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
         val incoming = to.updatedAt
         if (incoming != null) lastUpdatedAt = incoming
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        confirmedState = to
         serverState = to
         GameReminderScheduler.sync(appContext, to)
 
@@ -301,6 +348,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             return // stale response lost a race with a newer tap/boost
         }
         if (incoming != null) lastUpdatedAt = incoming
+        // Invalidate any in-flight optimistic tap flush; those responses are stale
+        // relative to this authoritative snapshot (boost / refresh / reset).
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        confirmedState = state
         serverState = state
         anchorMs = System.currentTimeMillis()
         windowEndHandled = false
@@ -365,6 +417,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         }
         val skipMax = _ui.value.tunables?.skipAdsPerCycle
         val (skipLeft, skipRegenLeft) = when {
+            skipMax != null && skipMax < 0 -> 0 to 0 // disabled
             windowExpired -> when {
                 skipMax == null -> s.skipAdsRemaining to 0
                 skipMax == 0 -> -1 to 0

@@ -28,7 +28,7 @@ export type Tunables = {
   skipTimeSeconds: number;
   /**
    * Max Skip Time ads per run after regular ads are exhausted.
-   * 0 = unlimited.
+   * 0 = unlimited. -1 = disabled (Skip Time hidden / rejected).
    */
   skipAdsPerCycle: number;
   /** Max sats from bars per UTC day. 0 = unlimited. */
@@ -76,7 +76,7 @@ export type GameStateDoc = {
    * Skip Time ads used this run.
    */
   skipAdsUsed: number;
-  /** Remaining Skip Time charges (0…skipAdsPerCycle). Unused when skipAdsPerCycle === 0. */
+  /** Remaining Skip Time charges (0…skipAdsPerCycle). Unused when skipAdsPerCycle <= 0. */
   skipAdCharges: number;
   /** Anchor for Skip Time timed regen (ISO). */
   skipAdChargesAt: string;
@@ -105,7 +105,8 @@ export type PublicGameState = {
   /** ISO when the next charge lands; null if full / no regen. */
   nextAdChargeAt: string | null;
   /**
-   * Skip Time ads left this run. -1 means unlimited (skipAdsPerCycle === 0).
+   * Skip Time ads left this run.
+   * -1 = unlimited (skipAdsPerCycle === 0). 0 with skipAdsPerCycle < 0 = disabled.
    */
   skipAdsRemaining: number;
   /** Seconds until the next regenerated Skip charge. 0 if full / unlimited / no regen. */

@@ -30,6 +30,12 @@ const callWithdraw = httpsCallable(functions, "requestWithdrawal");
 
 /** @type {any} */
 let serverState = null;
+/** Last fully-acked server snapshot (excludes optimistic taps still in flight). */
+let confirmedState = null;
+/** Manual taps shown locally but not yet confirmed by `gameTap`. */
+let unackedTaps = 0;
+let tapFlushPromise = null;
+let tapFlushGeneration = 0;
 /** @type {any} */
 let tunables = null;
 let anchorMs = 0;
@@ -186,7 +192,11 @@ function project(s, nowMs) {
   const skipMax = tunables?.skipAdsPerCycle;
   let skipLeft;
   let skipRegenLeft;
-  if (windowExpired) {
+  if (typeof skipMax === "number" && skipMax < 0) {
+    // Disabled
+    skipLeft = 0;
+    skipRegenLeft = 0;
+  } else if (windowExpired) {
     skipLeft = skipMax === 0 ? -1 : skipMax ?? s.skipAdsRemaining;
     skipRegenLeft = 0;
   } else if (skipMax === 0) {
@@ -263,10 +273,80 @@ function project(s, nowMs) {
   };
 }
 
+function applyingManualTap(s) {
+  if (!s || s.tapsRemaining <= 0) return s;
+  const units = Math.max(1, s.unitsPerSat || 1);
+  const power = s.tapPower > 0 ? s.tapPower : 1;
+  let progress = s.progress + power;
+  let earned = 0;
+  const cap = s.dailySatsEarnCap || 0;
+  while (progress >= units) {
+    if (cap > 0 && s.satsEarnedToday + earned >= cap) {
+      progress = units - 0.0001;
+      break;
+    }
+    progress -= units;
+    earned += 1;
+  }
+  return {
+    ...s,
+    tapsRemaining: s.tapsRemaining - 1,
+    progress,
+    satsBalance: s.satsBalance + earned,
+    satsEarnedToday: s.satsEarnedToday + earned,
+  };
+}
+
+function publishOptimisticTaps() {
+  if (!confirmedState) return;
+  let s = confirmedState;
+  for (let i = 0; i < unackedTaps; i++) s = applyingManualTap(s);
+  serverState = s;
+  render(project(s, Date.now()));
+}
+
+async function ensureTapFlush() {
+  if (tapFlushPromise) return tapFlushPromise;
+  const generation = tapFlushGeneration;
+  tapFlushPromise = (async () => {
+    while (unackedTaps > 0) {
+      if (generation !== tapFlushGeneration) return;
+      try {
+        const result = await callTap();
+        if (generation !== tapFlushGeneration) return;
+        const next = result.data.state;
+        if (next.updatedAt) lastUpdatedAt = next.updatedAt;
+        confirmedState = next;
+        unackedTaps = Math.max(0, unackedTaps - 1);
+        // Confirmed snapshot already includes auto catch-up through now.
+        anchorMs = Date.now();
+        windowEndHandled = false;
+        publishOptimisticTaps();
+        ensureTicker();
+      } catch {
+        if (generation !== tapFlushGeneration) return;
+        unackedTaps = 0;
+        try {
+          await refresh(true);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+    }
+  })().finally(() => {
+    tapFlushPromise = null;
+  });
+  return tapFlushPromise;
+}
+
 function applyState(state, force = false) {
   const incoming = state.updatedAt ?? null;
   if (!force && incoming && lastUpdatedAt && incoming < lastUpdatedAt) return;
   if (incoming) lastUpdatedAt = incoming;
+  tapFlushGeneration += 1;
+  unackedTaps = 0;
+  confirmedState = state;
   serverState = state;
   anchorMs = Date.now();
   windowEndHandled = false;
@@ -365,9 +445,17 @@ function render(state) {
       : 0;
   $("auto-timer").textContent = left > 0 ? `Auto ${formatCountdown(left)}` : "\u00a0";
 
+  const regenLeft = state.adRegenSecondsLeft ?? 0;
+  const adRegenSeconds = t?.adRegenSeconds ?? 0;
   let footer;
   if (state.adsRemainingToday <= 0) {
-    footer = state.autoFillActive ? "Ads refill when auto ends" : "More ads soon…";
+    if (regenLeft > 0) {
+      footer = `Next Boost Ad in ${formatCountdown(regenLeft)}`;
+    } else if (adRegenSeconds <= 0) {
+      footer = "Ads refill when Auto ends";
+    } else {
+      footer = "No ads available";
+    }
   } else if (state.adCooldownSecondsLeft > 0) {
     footer = `Next Boost Ad in ${state.adCooldownSecondsLeft}s · ${state.adsRemainingToday} ads left`;
   } else {
@@ -376,7 +464,10 @@ function render(state) {
   $("ads-footer").textContent = footer;
 
   const skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0;
+  // skipAdsPerCycle < 0 disables Skip Time entirely.
+  const skipEnabled = (t?.skipAdsPerCycle ?? 10) >= 0;
   const skipVisible =
+    skipEnabled &&
     state.adsRemainingToday <= 0 &&
     state.autoFillActive &&
     (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0 || skipRegenLeft > 0);
@@ -431,14 +522,14 @@ async function withBusy(fn) {
   }
 }
 
-$("progress-bar").addEventListener("click", async () => {
-  if (!serverState || serverState.tapsRemaining <= 0 || loading) return;
-  try {
-    const result = await callTap();
-    applyState(result.data.state, true);
-  } catch {
-    /* out of taps / transient */
-  }
+$("progress-bar").addEventListener("click", () => {
+  if (!confirmedState) return;
+  let probe = confirmedState;
+  for (let i = 0; i < unackedTaps; i++) probe = applyingManualTap(probe);
+  if (probe.tapsRemaining <= 0) return;
+  unackedTaps += 1;
+  publishOptimisticTaps();
+  void ensureTapFlush();
 });
 
 async function watchBoost(boostType) {

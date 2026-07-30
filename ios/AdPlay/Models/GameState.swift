@@ -45,6 +45,29 @@ struct GameState: Codable, Equatable {
 
     var effectiveSkipAdsRemaining: Int { skipAdsRemaining ?? 0 }
 
+    /// Local preview of one manual tap (matches server `applyManualTapInMemory`).
+    func applyingManualTap() -> GameState {
+        var g = self
+        guard g.tapsRemaining > 0 else { return g }
+        g.tapsRemaining -= 1
+        let units = max(1, g.unitsPerSat)
+        var progress = g.progress + g.effectiveTapPower
+        var earned = 0
+        let cap = g.dailySatsEarnCap
+        while progress >= Double(units) {
+            if cap > 0 && g.satsEarnedToday + earned >= cap {
+                progress = Double(units) - 0.0001
+                break
+            }
+            progress -= Double(units)
+            earned += 1
+        }
+        g.progress = progress
+        g.satsBalance += earned
+        g.satsEarnedToday += earned
+        return g
+    }
+
     var longerBoostActive: Bool { durationBoostActive ?? false }
 
     var longerBoostCount: Int { durationBoostCount ?? 0 }
@@ -99,7 +122,7 @@ struct Tunables: Codable, Equatable {
     /** Seconds between +1 ad charge. 0 = no timed regen. */
     var adRegenSeconds: Int?
     var skipTimeSeconds: Int?
-    /** 0 = unlimited skip ads after regular ads are out. */
+    /** 0 = unlimited; -1 = disabled (Skip Time hidden). */
     var skipAdsPerCycle: Int?
     var dailySatsEarnCap: Int
     var minWithdrawSats: Int
