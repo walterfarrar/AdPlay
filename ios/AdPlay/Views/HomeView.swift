@@ -355,8 +355,9 @@ private func displayedBarProgress(
     return min(Double(total), anchorProgress + fillRate * elapsed)
 }
 
-/// Wheel / tap-count progress: advances only when the auto knocker lands a hit.
-/// Manual taps still appear immediately (continuous progress ahead of the knocker clock).
+/// Wheel / tap-count / BTC progress: advances only on whole knocker (or manual) hits.
+/// Both clocks are quantized to the tapPower lattice so dual-timer drift can't jitter
+/// the last BTC digit between frames.
 private func struckSyncedProgress(
     continuous: Double,
     knockerProgress: Double,
@@ -371,22 +372,31 @@ private func struckSyncedProgress(
     if knockerProgress > continuous + max(power * 2, 5) {
         return continuous
     }
-    let struck = floor(knockerProgress / power) * power
-    let manualAhead = max(0, continuous - knockerProgress)
-    return min(Double(total), struck + manualAhead)
+    // Epsilon keeps float edges from flickering across a hit boundary.
+    let knockerHits = floor(knockerProgress / power + 1e-9)
+    let continuousHits = floor(continuous / power + 1e-9)
+    // Manual taps bump `continuous` by ~power; take the lead without raw float residue.
+    let hits = max(knockerHits, continuousHits)
+    return min(Double(total), hits * power)
 }
 
-/// Fixed-point 1e-12 BTC quanta. 1 sat = 1e-8 BTC = 10_000 quanta.
+/// Fixed-point 1e-13 BTC quanta. 1 sat = 1e-8 BTC = 100_000 quanta.
+/// Uses fractional bar progress (not floor) so 1.5-power hits advance evenly.
 func btcQuanta(satsBalance: Int, barProgress: Double, unitsPerSat: Int) -> Int64 {
     let units = max(1, unitsPerSat)
-    let progressed = min(units, max(0, Int(barProgress.rounded(.down))))
-    return Int64(satsBalance) * 10_000 + (Int64(progressed) * 10_000) / Int64(units)
+    // Milli-units keep tapPower like 1.5 exact; avoid floor() which alternates +1/+2.
+    let progressMilli = Int64((min(Double(units), max(0, barProgress)) * 1000.0).rounded())
+    let clamped = min(Int64(units) * 1000, max(0, progressMilli))
+    let denom = Int64(units) * 1000
+    // Round-to-nearest quanta — truncating division fluttered the last digit.
+    let fracQuanta = (clamped * 100_000 + denom / 2) / denom
+    return Int64(satsBalance) * 100_000 + fracQuanta
 }
 
 func formatBtcQuanta(_ quanta: Int64) -> String {
-    let whole = quanta / 1_000_000_000_000
-    let frac = quanta % 1_000_000_000_000
-    return String(format: "%lld.%012lld", whole, frac)
+    let whole = quanta / 10_000_000_000_000
+    let frac = quanta % 10_000_000_000_000
+    return String(format: "%lld.%013lld", whole, frac)
 }
 
 /// BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat).
@@ -1298,54 +1308,47 @@ private struct RollingDigitSlot: View {
     let rollId: Int64
     let font: Font
 
+    /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
     @State private var displayed: Int = 0
     @State private var primed = false
     @State private var rollTask: Task<Void, Never>?
 
     var body: some View {
-        // Slide transition (no clipped strip). `steps` includes full-turn carries.
-        ZStack {
-            Text("\(displayed)")
-                .font(font)
-                .foregroundStyle(Color("BrandInk"))
-                .monospacedDigit()
-                .id(displayed)
-                .transition(.asymmetric(
-                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                    removal: .move(edge: .top).combined(with: .opacity)
-                ))
-        }
-        .animation(.easeOut(duration: 0.07), value: displayed)
-        .onAppear {
-            guard !primed else { return }
-            displayed = max(0, min(9, digit))
-            primed = true
-        }
-        .onChange(of: rollId) { _, _ in
-            let target = max(0, min(9, digit))
-            let n = max(0, steps)
-            rollTask?.cancel()
-            rollTask = Task { @MainActor in
-                if n == 0 {
-                    displayed = target
-                    return
-                }
-                let tickNs: UInt64 = n >= 20 ? 35_000_000 : n >= 10 ? 50_000_000 : 75_000_000
-                for _ in 0..<n {
-                    if Task.isCancelled { return }
-                    withAnimation(.easeOut(duration: 0.07)) {
-                        displayed = (displayed + 1) % 10
+        Text("\(displayed)")
+            .font(font)
+            .foregroundStyle(Color("BrandInk"))
+            .monospacedDigit()
+            .onAppear {
+                guard !primed else { return }
+                displayed = max(0, min(9, digit))
+                primed = true
+            }
+            .onChange(of: rollId) { _, _ in
+                let target = max(0, min(9, digit))
+                let n = max(0, steps)
+                rollTask?.cancel()
+                rollTask = Task { @MainActor in
+                    defer {
+                        if Task.isCancelled { displayed = target }
                     }
-                    try? await Task.sleep(nanoseconds: tickNs)
-                }
-                if !Task.isCancelled {
-                    displayed = target
+                    if n == 0 {
+                        displayed = target
+                        return
+                    }
+                    let tickNs: UInt64 = n >= 20 ? 20_000_000 : n >= 10 ? 30_000_000 : 45_000_000
+                    for _ in 0..<n {
+                        if Task.isCancelled { return }
+                        displayed = (displayed + 1) % 10
+                        try? await Task.sleep(nanoseconds: tickNs)
+                    }
+                    if !Task.isCancelled {
+                        displayed = target
+                    }
                 }
             }
-        }
-        .onDisappear {
-            rollTask?.cancel()
-        }
+            .onDisappear {
+                rollTask?.cancel()
+            }
     }
 }
 

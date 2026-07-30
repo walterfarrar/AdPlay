@@ -5,8 +5,6 @@ import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -14,11 +12,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -627,11 +620,19 @@ private fun AdsFooter(
     )
 }
 
-/** Fixed-point 1e-12 BTC quanta. 1 sat = 1e-8 BTC = 10_000 quanta. */
+/**
+ * Fixed-point 1e-13 BTC quanta. 1 sat = 1e-8 BTC = 100_000 quanta.
+ * Uses fractional bar progress (not floor) so 1.5-power hits advance evenly.
+ */
 internal fun btcQuanta(satsBalance: Int, barProgress: Double, unitsPerSat: Int): Long {
     val units = unitsPerSat.coerceAtLeast(1)
-    val progressed = floor(barProgress).toInt().coerceIn(0, units)
-    return satsBalance.toLong() * 10_000L + (progressed.toLong() * 10_000L) / units
+    // Milli-units keep tapPower like 1.5 exact; avoid floor() which alternates +1/+2.
+    val progressMilli = kotlin.math.round(barProgress.coerceIn(0.0, units.toDouble()) * 1000.0).toLong()
+        .coerceIn(0L, units.toLong() * 1000L)
+    val denom = units.toLong() * 1000L
+    // Round-to-nearest quanta — truncating division fluttered the last digit.
+    val fracQuanta = (progressMilli * 100_000L + denom / 2) / denom
+    return satsBalance.toLong() * 100_000L + fracQuanta
 }
 
 /** BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat). */
@@ -639,9 +640,9 @@ internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat:
     formatBtcQuanta(btcQuanta(satsBalance, barProgress, unitsPerSat))
 
 internal fun formatBtcQuanta(quanta: Long): String {
-    val whole = quanta / 1_000_000_000_000L
-    val frac = quanta % 1_000_000_000_000L
-    return String.format("%d.%012d", whole, frac)
+    val whole = quanta / 10_000_000_000_000L
+    val frac = quanta % 10_000_000_000_000L
+    return String.format("%d.%013d", whole, frac)
 }
 
 /**
@@ -753,10 +754,10 @@ private fun RollingDigitSlot(
     textStyle: TextStyle,
 ) {
     val target = digit.coerceIn(0, 9)
+    // No slide — just tick the glyph through intermediates (incl. full-turn carries).
     var displayed by remember { mutableIntStateOf(target) }
     var primed by remember { mutableStateOf(false) }
 
-    // rollId + steps: full-turn carries (e.g. +10) still spin even when the glyph ends the same.
     LaunchedEffect(rollId) {
         if (!primed) {
             displayed = target
@@ -769,32 +770,27 @@ private fun RollingDigitSlot(
             return@LaunchedEffect
         }
         val tickMs = when {
-            n >= 20 -> 35L
-            n >= 10 -> 50L
-            else -> 75L
+            n >= 20 -> 20L
+            n >= 10 -> 30L
+            else -> 45L
         }
-        repeat(n) {
-            displayed = (displayed + 1) % 10
-            delay(tickMs)
+        try {
+            repeat(n) {
+                displayed = (displayed + 1) % 10
+                delay(tickMs)
+            }
+            displayed = target
+        } finally {
+            // Cancelled mid-sequence (rapid quanta updates): snap to latest.
+            displayed = target
         }
-        displayed = target
     }
 
-    AnimatedContent(
-        targetState = displayed,
-        transitionSpec = {
-            (slideInVertically(animationSpec = tween(70)) { it } + fadeIn(tween(70))) togetherWith
-                (slideOutVertically(animationSpec = tween(70)) { -it } + fadeOut(tween(70))) using
-                SizeTransform(clip = false)
-        },
-        label = "btcDigit",
-    ) { d ->
-        Text(
-            text = "$d",
-            style = textStyle,
-            modifier = Modifier.padding(horizontal = 0.5.dp),
-        )
-    }
+    Text(
+        text = "$displayed",
+        style = textStyle,
+        modifier = Modifier.padding(horizontal = 0.5.dp),
+    )
 }
 
 
@@ -895,7 +891,11 @@ internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
     return fillRate / power
 }
 
-/** Wheel / tap-count progress: advances only when the auto knocker lands a hit. */
+/**
+ * Wheel / tap-count / BTC progress: advances only on whole knocker (or manual) hits.
+ * Both clocks are quantized to the tapPower lattice so dual-timer drift can't jitter
+ * the last BTC digit between frames.
+ */
 internal fun struckSyncedProgress(
     continuous: Double,
     knockerProgress: Double,
@@ -910,9 +910,12 @@ internal fun struckSyncedProgress(
     if (knockerProgress > continuous + maxOf(power * 2, 5.0)) {
         return continuous
     }
-    val struck = floor(knockerProgress / power) * power
-    val manualAhead = maxOf(0.0, continuous - knockerProgress)
-    return minOf(total.toDouble(), struck + manualAhead)
+    // Epsilon keeps float edges from flickering across a hit boundary.
+    val knockerHits = floor(knockerProgress / power + 1e-9)
+    val continuousHits = floor(continuous / power + 1e-9)
+    // Manual taps bump `continuous` by ~power; take the lead without raw float residue.
+    val hits = maxOf(knockerHits, continuousHits)
+    return minOf(total.toDouble(), hits * power)
 }
 
 /** Sats earned per hour from the current auto fill rate (0 when idle). */
