@@ -355,12 +355,83 @@ private func displayedBarProgress(
     return min(Double(total), anchorProgress + fillRate * elapsed)
 }
 
+/// Wheel / tap-count progress: advances only when the auto knocker lands a hit.
+/// Manual taps still appear immediately (continuous progress ahead of the knocker clock).
+private func struckSyncedProgress(
+    continuous: Double,
+    knockerProgress: Double,
+    tapPower: Double,
+    autoActive: Bool,
+    fillRate: Double,
+    total: Int
+) -> Double {
+    guard autoActive, fillRate > 0 else { return continuous }
+    let power = max(tapPower, 0.01)
+    // Bar wrap / reset left the knocker clock on the previous bar.
+    if knockerProgress > continuous + max(power * 2, 5) {
+        return continuous
+    }
+    let struck = floor(knockerProgress / power) * power
+    let manualAhead = max(0, continuous - knockerProgress)
+    return min(Double(total), struck + manualAhead)
+}
+
+/// Fixed-point 1e-12 BTC quanta. 1 sat = 1e-8 BTC = 10_000 quanta.
+func btcQuanta(satsBalance: Int, barProgress: Double, unitsPerSat: Int) -> Int64 {
+    let units = max(1, unitsPerSat)
+    let progressed = min(units, max(0, Int(barProgress.rounded(.down))))
+    return Int64(satsBalance) * 10_000 + (Int64(progressed) * 10_000) / Int64(units)
+}
+
+func formatBtcQuanta(_ quanta: Int64) -> String {
+    let whole = quanta / 1_000_000_000_000
+    let frac = quanta % 1_000_000_000_000
+    return String(format: "%lld.%012lld", whole, frac)
+}
+
 /// BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat).
 func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) -> String {
-    let fraction = unitsPerSat > 0 ? min(1, max(0, barProgress / Double(unitsPerSat))) : 0
-    let btc = (Double(satsBalance) + fraction) * 1e-8
-    // 11 dp: 1 sat = 1e-8 BTC; with ~1000 units/sat each unit is visible as 1e-11.
-    return String(format: "%.11f", btc)
+    formatBtcQuanta(btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: unitsPerSat))
+}
+
+/// Upward odometer ticks for place 10^power (carries spin lower wheels a full turn).
+private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> Int {
+    var place: Int64 = 1
+    if power > 0 {
+        for _ in 0..<power { place *= 10 }
+    }
+    if to >= from {
+        let raw = to / place - from / place
+        return Int(min(max(raw, 0), 40))
+    }
+    let fromDigit = Int((from / place) % 10)
+    return (toDigit - fromDigit + 10) % 10
+}
+
+private struct BtcGlyph: Identifiable {
+    let id: String
+    let digit: Int?
+    let steps: Int
+    let literal: String?
+}
+
+private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
+    let text = formatBtcQuanta(to)
+    let digitCount = text.filter(\.isNumber).count
+    var power = digitCount - 1
+    return text.map { ch in
+        if ch.isWholeNumber, let d = ch.wholeNumberValue {
+            let p = power
+            power -= 1
+            return BtcGlyph(
+                id: "p\(p)",
+                digit: d,
+                steps: odometerSteps(from: from, to: to, power: p, toDigit: d),
+                literal: nil
+            )
+        }
+        return BtcGlyph(id: "lit-\(ch)", digit: nil, steps: 0, literal: String(ch))
+    }
 }
 
 // MARK: - Sat earn celebration
@@ -406,18 +477,8 @@ struct SatEarnStage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BtcBalanceView(
-                satsBalance: satsBalance,
-                progress: progress,
-                total: total,
-                fillRate: fillRate,
-                autoActive: autoActive
-            )
-
-            Spacer(minLength: 20)
-
             TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { context in
-                let display = displayedBarProgress(
+                let continuous = displayedBarProgress(
                     progress: progress,
                     total: total,
                     fillRate: fillRate,
@@ -426,11 +487,19 @@ struct SatEarnStage: View {
                     anchorDate: anchorDate,
                     now: context.date
                 )
-                let fraction = total > 0 ? min(1, display / Double(total)) : 0
                 let tapsPerSec = tapsPerSecond(fillRate: fillRate, tapPower: tapPower)
                 let knockerProgress = autoActive && fillRate > 0
                     ? knockerAnchorProgress + fillRate * context.date.timeIntervalSince(knockerAnchorDate)
                     : knockerAnchorProgress
+                let display = struckSyncedProgress(
+                    continuous: continuous,
+                    knockerProgress: knockerProgress,
+                    tapPower: tapPower,
+                    autoActive: autoActive,
+                    fillRate: fillRate,
+                    total: total
+                )
+                let fraction = total > 0 ? min(1, display / Double(total)) : 0
                 let pose = knockerPose(
                     displayProgress: knockerProgress,
                     tapsPerSec: tapsPerSec,
@@ -438,47 +507,62 @@ struct SatEarnStage: View {
                     autoActive: autoActive
                 )
 
-                VStack(spacing: 8) {
-                    Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color("BrandAccent"))
-                        .monospacedDigit()
+                VStack(spacing: 0) {
+                    BtcBalanceView(
+                        satsBalance: satsBalance,
+                        barProgress: display,
+                        total: total
+                    )
 
-                    // Wheel and tapper are one machine, nudged left to make room for the arm.
-                    ZStack {
-                        SatWheelView(fraction: fraction, flash: wheelFlash)
-                            .frame(width: wheelSize, height: wheelSize)
-                            .contentShape(Circle())
-                            .onTapGesture {
-                                Task { await session.tap() }
-                            }
-                            .background(wheelTipReporter)
+                    Spacer(minLength: 20)
 
-                        AutoKnockerView(pose: pose, active: autoActive)
+                    VStack(spacing: 8) {
+                        Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color("BrandAccent"))
+                            .monospacedDigit()
 
-                        SharedAutoTimerView(
-                            autoFillUntil: autoFillUntil,
-                            autoActive: autoActive
-                        )
-                        .frame(width: 92)
-                        .offset(x: 153, y: 74)
+                        // Wheel and tapper are one machine, nudged left to make room for the arm.
+                        ZStack {
+                            SatWheelView(fraction: fraction, flash: wheelFlash)
+                                .frame(width: wheelSize, height: wheelSize)
+                                .contentShape(Circle())
+                                .onTapGesture {
+                                    Task { await session.tap() }
+                                }
+                                .background(wheelTipReporter)
+
+                            AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+
+                            SharedAutoTimerView(
+                                autoFillUntil: autoFillUntil,
+                                autoActive: autoActive
+                            )
+                            .frame(width: 92)
+                            .offset(x: 153, y: 74)
+                        }
+                        .offset(x: -22)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: wheelSize + 40)
+
+                        Text("\(Int(display.rounded(.down))) / \(total) taps")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color("BrandInk"))
+                            .monospacedDigit()
                     }
-                    .offset(x: -22)
                     .frame(maxWidth: .infinity)
-                    .frame(height: wheelSize + 40)
-
-                    Text("\(Int(display.rounded(.down))) / \(total) taps")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color("BrandInk"))
-                        .monospacedDigit()
+                    .padding(.horizontal, 16)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 16)
             .onChange(of: progress) { _, newValue in
-                // Wheel / BTC follow taps; knocker keeps its auto-only clock.
+                // Wheel / BTC follow taps; knocker keeps its auto-only clock
+                // unless the bar wrapped (progress rewound).
                 anchorProgress = newValue
                 anchorDate = .now
+                if newValue + 5 < knockerAnchorProgress {
+                    knockerAnchorProgress = newValue
+                    knockerAnchorDate = .now
+                }
             }
             .onChange(of: fillRate) { _, _ in
                 anchorProgress = progress
@@ -542,6 +626,12 @@ private func knockerStrikeDuration(tapPower: Double) -> Double {
     max(0.07, 0.16 / max(tapPower, 0.01))
 }
 
+/// Impact VFX scale from tap power. Power 1 = baseline size; capped at power 10 (~2.25×).
+private func knockerImpactScale(tapPower: Double) -> CGFloat {
+    let p = min(max(tapPower, 1), 10)
+    return CGFloat(1 + (p - 1) / 9 * 1.25)
+}
+
 /// How far the head rebounds off the rim, as a fraction of the full swing.
 private let knockerBounce: Double = 0.42
 /// Extra travel loaded past the stop just before release.
@@ -549,7 +639,9 @@ private let knockerWindUp: Double = 0.07
 /// Seconds the contact flash lasts.
 private let knockerImpactFade: Double = 0.16
 
-/// Strike cycle for the auto tapper. Contact lands as `floor(progress)` increments.
+/// Strike cycle for the auto tapper.
+/// One strike per tap. Progress is in units (`taps/s × power`), so divide by
+/// `tapPower` — Stronger hits harder (snappier swing), Faster raises frequency.
 private func knockerPose(
     displayProgress: Double,
     tapsPerSec: Double,
@@ -557,8 +649,10 @@ private func knockerPose(
     autoActive: Bool
 ) -> KnockerPose {
     guard autoActive, tapsPerSec > 0 else { return KnockerPose() }
+    let power = max(tapPower, 0.01)
+    let tapIndex = displayProgress / power
     let period = 1.0 / tapsPerSec
-    let phase = displayProgress - floor(displayProgress) // 0 = just struck
+    let phase = tapIndex - floor(tapIndex) // 0 = just struck
 
     // Segments of one tap, as fractions of the period.
     let strike = min(0.34, max(0.06, knockerStrikeDuration(tapPower: tapPower) / period))
@@ -753,6 +847,7 @@ private enum KnockerGeometry {
 /// Driven only by Auto fill progress — manual taps do not move it.
 struct AutoKnockerView: View {
     let pose: KnockerPose
+    var tapPower: Double = 1
     var active: Bool = true
 
     var body: some View {
@@ -761,6 +856,7 @@ struct AutoKnockerView: View {
                 into: &context,
                 origin: CGPoint(x: size.width / 2, y: size.height / 2),
                 pose: pose,
+                tapPower: tapPower,
                 active: active
             )
         }
@@ -773,19 +869,21 @@ private func drawTapper(
     into ctx: inout GraphicsContext,
     origin: CGPoint,
     pose: KnockerPose,
+    tapPower: Double,
     active: Bool
 ) {
     let ink = Color("BrandInk")
     let accent = Color("BrandAccent")
     let accentHot = Color("BrandAccentHot")
     let impact = active ? pose.impact : 0
+    let hitScale = active ? knockerImpactScale(tapPower: tapPower) : 1
     let fade = active ? 1.0 : 0.4
 
     let angle = KnockerGeometry.angle(arm: pose.arm)
     // Contact shoves the whole mount back along the strike axis.
     let kick = CGPoint(
-        x: -cos(KnockerGeometry.strikeAngle) * impact * 3,
-        y: -sin(KnockerGeometry.strikeAngle) * impact * 3
+        x: -cos(KnockerGeometry.strikeAngle) * impact * 3 * hitScale,
+        y: -sin(KnockerGeometry.strikeAngle) * impact * 3 * hitScale
     )
     func mounted(_ p: CGPoint) -> CGPoint {
         CGPoint(x: origin.x + p.x + kick.x, y: origin.y + p.y + kick.y)
@@ -945,31 +1043,32 @@ private func drawTapper(
 
     guard impact > 0.01 else { return }
 
-    // Contact flash on the rim.
+    // Contact flash on the rim — grows with Stronger (capped at power 10).
     let hit = CGPoint(
         x: origin.x + KnockerGeometry.strikePoint.x,
         y: origin.y + KnockerGeometry.strikePoint.y
     )
-    let ring = 10 + 24 * (1 - impact)
+    let ring = (10 + 24 * (1 - impact)) * hitScale
     ctx.stroke(
         Path(ellipseIn: CGRect(x: hit.x - ring, y: hit.y - ring, width: ring * 2, height: ring * 2)),
         with: .color(accent.opacity(0.6 * Double(impact))),
-        lineWidth: 2
+        lineWidth: 1.5 + 0.5 * hitScale
     )
     var sparks = Path()
-    for i in 0..<4 {
-        let a = CGFloat((45 + Double(i) * 90) * .pi / 180)
-        let near = 10 + 8 * (1 - impact)
-        let far = near + 8 + 14 * (1 - impact)
+    let sparkCount = 4 + Int(((hitScale - 1) / 1.25) * 4) // 4…8
+    for i in 0..<sparkCount {
+        let a = CGFloat((45 + Double(i) * (360.0 / Double(sparkCount))) * .pi / 180)
+        let near = (10 + 8 * (1 - impact)) * hitScale
+        let far = near + (8 + 14 * (1 - impact)) * hitScale
         sparks.move(to: CGPoint(x: hit.x + cos(a) * near, y: hit.y + sin(a) * near))
         sparks.addLine(to: CGPoint(x: hit.x + cos(a) * far, y: hit.y + sin(a) * far))
     }
     ctx.stroke(
         sparks,
         with: .color(accent.opacity(0.85 * Double(impact))),
-        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+        style: StrokeStyle(lineWidth: 1.5 + 0.5 * hitScale, lineCap: .round)
     )
-    let flash = 4 + 7 * impact
+    let flash = (4 + 7 * impact) * hitScale
     ctx.fill(
         Path(ellipseIn: CGRect(x: hit.x - flash, y: hit.y - flash, width: flash * 2, height: flash * 2)),
         with: .color(.white.opacity(0.75 * Double(impact)))
@@ -1126,51 +1225,126 @@ private struct FlyingSatParticleView: View {
 
 struct BtcBalanceView: View {
     let satsBalance: Int
-    let progress: Double
+    let barProgress: Double
     let total: Int
-    let fillRate: Double
-    let autoActive: Bool
-
-    @State private var anchorProgress: Double = 0
-    @State private var anchorDate: Date = .now
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.05)) { context in
-            let display = displayedBarProgress(
-                progress: progress,
-                total: total,
-                fillRate: fillRate,
-                autoActive: autoActive,
-                anchorProgress: anchorProgress,
-                anchorDate: anchorDate,
-                now: context.date
+        VStack(spacing: 8) {
+            RollingDigitsLabel(
+                quanta: btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: total),
+                fontSize: 42
             )
-            VStack(spacing: 8) {
-                Text(formatBtcAmount(satsBalance: satsBalance, barProgress: display, unitsPerSat: total))
-                    .font(.system(size: 42, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color("BrandInk"))
-                    .monospacedDigit()
-                    .minimumScaleFactor(0.45)
-                    .lineLimit(1)
-                    .shadow(color: Color("BrandAccent").opacity(0.35), radius: 22, y: 6)
-                Text("BTC")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .tracking(3)
-                    .foregroundStyle(Color("BrandAccent"))
+            .shadow(color: Color("BrandAccent").opacity(0.28), radius: 14, y: 4)
+            Text("BTC")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .tracking(3)
+                .foregroundStyle(Color("BrandAccent"))
+        }
+        .padding(.horizontal, 16)
+    }
+}
+
+/// Odometer-style label: each digit always rolls upward; punctuation stays put.
+struct RollingDigitsLabel: View {
+    let quanta: Int64
+    var fontSize: CGFloat = 42
+
+    @State private var fromQuanta: Int64?
+
+    private var digitFont: Font {
+        .system(size: fontSize, weight: .heavy, design: .rounded)
+    }
+
+    private var glyphs: [BtcGlyph] {
+        btcGlyphs(from: fromQuanta ?? quanta, to: quanta)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(glyphs) { glyph in
+                if let digit = glyph.digit {
+                    RollingDigitSlot(
+                        digit: digit,
+                        steps: glyph.steps,
+                        rollId: quanta,
+                        font: digitFont
+                    )
+                } else if let lit = glyph.literal {
+                    Text(lit)
+                        .font(digitFont)
+                        .foregroundStyle(Color("BrandInk"))
+                        .monospacedDigit()
+                }
             }
-            .padding(.horizontal, 16)
         }
-        .onChange(of: progress) { _, newValue in
-            anchorProgress = newValue
-            anchorDate = .now
-        }
-        .onChange(of: fillRate) { _, _ in
-            anchorProgress = progress
-            anchorDate = .now
-        }
+        .frame(maxWidth: .infinity)
+        .minimumScaleFactor(0.45)
+        .lineLimit(1)
         .onAppear {
-            anchorProgress = progress
-            anchorDate = .now
+            if fromQuanta == nil { fromQuanta = quanta }
+        }
+        .onChange(of: quanta) { _, newValue in
+            // Body already rendered glyphs against the previous baseline; advance after.
+            Task { @MainActor in
+                fromQuanta = newValue
+            }
+        }
+    }
+}
+
+private struct RollingDigitSlot: View {
+    let digit: Int
+    let steps: Int
+    let rollId: Int64
+    let font: Font
+
+    @State private var displayed: Int = 0
+    @State private var primed = false
+    @State private var rollTask: Task<Void, Never>?
+
+    var body: some View {
+        // Slide transition (no clipped strip). `steps` includes full-turn carries.
+        ZStack {
+            Text("\(displayed)")
+                .font(font)
+                .foregroundStyle(Color("BrandInk"))
+                .monospacedDigit()
+                .id(displayed)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)
+                ))
+        }
+        .animation(.easeOut(duration: 0.07), value: displayed)
+        .onAppear {
+            guard !primed else { return }
+            displayed = max(0, min(9, digit))
+            primed = true
+        }
+        .onChange(of: rollId) { _, _ in
+            let target = max(0, min(9, digit))
+            let n = max(0, steps)
+            rollTask?.cancel()
+            rollTask = Task { @MainActor in
+                if n == 0 {
+                    displayed = target
+                    return
+                }
+                let tickNs: UInt64 = n >= 20 ? 35_000_000 : n >= 10 ? 50_000_000 : 75_000_000
+                for _ in 0..<n {
+                    if Task.isCancelled { return }
+                    withAnimation(.easeOut(duration: 0.07)) {
+                        displayed = (displayed + 1) % 10
+                    }
+                    try? await Task.sleep(nanoseconds: tickNs)
+                }
+                if !Task.isCancelled {
+                    displayed = target
+                }
+            }
+        }
+        .onDisappear {
+            rollTask?.cancel()
         }
     }
 }

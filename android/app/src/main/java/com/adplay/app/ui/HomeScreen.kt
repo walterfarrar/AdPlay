@@ -5,6 +5,8 @@ import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -12,6 +14,11 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -19,6 +26,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +69,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -73,6 +81,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -90,6 +99,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -617,17 +627,176 @@ private fun AdsFooter(
     )
 }
 
-/** BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat). */
-internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int): String {
-    val fraction = if (unitsPerSat > 0) {
-        (barProgress / unitsPerSat).coerceIn(0.0, 1.0)
-    } else {
-        0.0
-    }
-    val btc = (satsBalance + fraction) * 1e-8
-    // 11 dp: 1 sat = 1e-8 BTC; with ~1000 units/sat each unit is visible as 1e-11.
-    return String.format("%.11f", btc)
+/** Fixed-point 1e-12 BTC quanta. 1 sat = 1e-8 BTC = 10_000 quanta. */
+internal fun btcQuanta(satsBalance: Int, barProgress: Double, unitsPerSat: Int): Long {
+    val units = unitsPerSat.coerceAtLeast(1)
+    val progressed = floor(barProgress).toInt().coerceIn(0, units)
+    return satsBalance.toLong() * 10_000L + (progressed.toLong() * 10_000L) / units
 }
+
+/** BTC for completed sats plus the in-progress fraction of the current bar (1 full bar = 1 sat). */
+internal fun formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int): String =
+    formatBtcQuanta(btcQuanta(satsBalance, barProgress, unitsPerSat))
+
+internal fun formatBtcQuanta(quanta: Long): String {
+    val whole = quanta / 1_000_000_000_000L
+    val frac = quanta % 1_000_000_000_000L
+    return String.format("%d.%012d", whole, frac)
+}
+
+/**
+ * Upward odometer ticks for place 10^power.
+ * Carries count: +10 on the value → ones place ticks 10 (full turn) even if the glyph ends the same.
+ */
+private fun odometerSteps(fromQuanta: Long, toQuanta: Long, power: Int, toDigit: Int): Int {
+    var place = 1L
+    repeat(power.coerceAtLeast(0)) { place *= 10L }
+    return if (toQuanta >= fromQuanta) {
+        val raw = toQuanta / place - fromQuanta / place
+        raw.coerceIn(0L, 40L).toInt()
+    } else {
+        val fromDigit = ((fromQuanta / place) % 10L).toInt()
+        (toDigit - fromDigit + 10) % 10
+    }
+}
+
+private data class BtcGlyph(
+    val key: String,
+    val digit: Int?,
+    val steps: Int,
+    val literal: String?,
+)
+
+private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
+    val text = formatBtcQuanta(toQuanta)
+    val digitCount = text.count { it.isDigit() }
+    var power = digitCount - 1
+    return text.map { ch ->
+        if (ch.isDigit()) {
+            val p = power
+            power -= 1
+            val d = ch - '0'
+            BtcGlyph(
+                key = "p$p",
+                digit = d,
+                steps = odometerSteps(fromQuanta, toQuanta, p, d),
+                literal = null,
+            )
+        } else {
+            BtcGlyph(key = "lit-$ch", digit = null, steps = 0, literal = ch.toString())
+        }
+    }
+}
+
+/** Odometer-style label: each digit slides vertically; punctuation stays put. */
+@Composable
+private fun RollingDigitsLabel(
+    quanta: Long,
+    fontSizeSp: Float = 42f,
+    modifier: Modifier = Modifier,
+) {
+    var fromQuanta by remember { mutableLongStateOf(quanta) }
+    val glyphs = remember(quanta, fromQuanta) { btcGlyphs(fromQuanta, quanta) }
+    LaunchedEffect(quanta) {
+        // Slots already captured steps for this roll via rollId=quanta.
+        fromQuanta = quanta
+    }
+
+    val text = formatBtcQuanta(quanta)
+    val digitStyle = TextStyle(
+        fontSize = fontSizeSp.sp,
+        fontWeight = FontWeight.Black,
+        color = BrandInk,
+        textAlign = TextAlign.Center,
+    )
+    val measurer = rememberTextMeasurer()
+    val measured = remember(text, digitStyle) { measurer.measure(text, style = digitStyle) }
+
+    BoxWithConstraints(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        val maxPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val scale = min(1f, maxPx / measured.size.width.toFloat().coerceAtLeast(1f))
+        Row(
+            modifier = Modifier.graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            glyphs.forEach { glyph ->
+                key(glyph.key) {
+                    val d = glyph.digit
+                    if (d != null) {
+                        RollingDigitSlot(
+                            digit = d,
+                            steps = glyph.steps,
+                            rollId = quanta,
+                            textStyle = digitStyle,
+                        )
+                    } else {
+                        Text(glyph.literal.orEmpty(), style = digitStyle)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RollingDigitSlot(
+    digit: Int,
+    steps: Int,
+    rollId: Long,
+    textStyle: TextStyle,
+) {
+    val target = digit.coerceIn(0, 9)
+    var displayed by remember { mutableIntStateOf(target) }
+    var primed by remember { mutableStateOf(false) }
+
+    // rollId + steps: full-turn carries (e.g. +10) still spin even when the glyph ends the same.
+    LaunchedEffect(rollId) {
+        if (!primed) {
+            displayed = target
+            primed = true
+            return@LaunchedEffect
+        }
+        val n = steps.coerceAtLeast(0)
+        if (n == 0) {
+            displayed = target
+            return@LaunchedEffect
+        }
+        val tickMs = when {
+            n >= 20 -> 35L
+            n >= 10 -> 50L
+            else -> 75L
+        }
+        repeat(n) {
+            displayed = (displayed + 1) % 10
+            delay(tickMs)
+        }
+        displayed = target
+    }
+
+    AnimatedContent(
+        targetState = displayed,
+        transitionSpec = {
+            (slideInVertically(animationSpec = tween(70)) { it } + fadeIn(tween(70))) togetherWith
+                (slideOutVertically(animationSpec = tween(70)) { -it } + fadeOut(tween(70))) using
+                SizeTransform(clip = false)
+        },
+        label = "btcDigit",
+    ) { d ->
+        Text(
+            text = "$d",
+            style = textStyle,
+            modifier = Modifier.padding(horizontal = 0.5.dp),
+        )
+    }
+}
+
 
 /** Rate line under the wheel stage: taps/s · power · fill/s — colored by Speed / Power. */
 @Composable
@@ -726,6 +895,26 @@ internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
     return fillRate / power
 }
 
+/** Wheel / tap-count progress: advances only when the auto knocker lands a hit. */
+internal fun struckSyncedProgress(
+    continuous: Double,
+    knockerProgress: Double,
+    tapPower: Double,
+    autoActive: Boolean,
+    fillRate: Double,
+    total: Int,
+): Double {
+    if (!autoActive || fillRate <= 0.0) return continuous
+    val power = tapPower.coerceAtLeast(0.01)
+    // Bar wrap / reset left the knocker clock on the previous bar.
+    if (knockerProgress > continuous + maxOf(power * 2, 5.0)) {
+        return continuous
+    }
+    val struck = floor(knockerProgress / power) * power
+    val manualAhead = maxOf(0.0, continuous - knockerProgress)
+    return minOf(total.toDouble(), struck + manualAhead)
+}
+
 /** Sats earned per hour from the current auto fill rate (0 when idle). */
 internal fun satsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: Boolean): Double {
     if (!autoActive || fillRate <= 0.0 || unitsPerSat <= 0) return 0.0
@@ -763,14 +952,15 @@ private fun SatEarnStage(
     onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val fraction = if (unitsPerSat > 0) {
-        (displayProgress / unitsPerSat).toFloat().coerceIn(0f, 1f)
-    } else {
-        0f
-    }
     val tapsPerSec = tapsPerSecond(fillRate, tapPower)
     // Auto-only clock for the knocker — ignores manual tap progress jumps.
     var knockerProgress by remember { mutableDoubleStateOf(displayProgress) }
+    LaunchedEffect(displayProgress) {
+        // Bar wrap / big rewind — resync so strikes track the new bar.
+        if (displayProgress + 5.0 < knockerProgress) {
+            knockerProgress = displayProgress
+        }
+    }
     LaunchedEffect(fillRate, tapPower, autoActive, unitsPerSat) {
         knockerProgress = displayProgress
         if (!autoActive || fillRate <= 0.0) return@LaunchedEffect
@@ -781,6 +971,20 @@ private fun SatEarnStage(
             val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
             knockerProgress = start + fillRate * elapsed
         }
+    }
+    // Wheel / tap count: step on knocker hits; manual taps still show immediately.
+    val visualProgress = struckSyncedProgress(
+        continuous = displayProgress,
+        knockerProgress = knockerProgress,
+        tapPower = tapPower,
+        autoActive = autoActive,
+        fillRate = fillRate,
+        total = unitsPerSat,
+    )
+    val fraction = if (unitsPerSat > 0) {
+        (visualProgress / unitsPerSat).toFloat().coerceIn(0f, 1f)
+    } else {
+        0f
     }
     val pose = knockerPose(
         displayProgress = knockerProgress,
@@ -795,23 +999,13 @@ private fun SatEarnStage(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                formatBtcAmount(
+            RollingDigitsLabel(
+                quanta = btcQuanta(
                     satsBalance = satsBalance,
-                    barProgress = displayProgress,
+                    barProgress = visualProgress,
                     unitsPerSat = unitsPerSat,
                 ),
-                fontSize = 42.sp,
-                fontWeight = FontWeight.Black,
-                color = BrandInk,
-                maxLines = 1,
-                style = TextStyle(
-                    shadow = Shadow(
-                        color = BrandAccent.copy(alpha = 0.5f),
-                        offset = Offset(0f, 6f),
-                        blurRadius = 34f,
-                    ),
-                ),
+                fontSizeSp = 42f,
             )
             Spacer(Modifier.height(2.dp))
             Text(
@@ -852,7 +1046,7 @@ private fun SatEarnStage(
                         .size(wheelSize)
                         .onGloballyPositioned(onWheelTipPositioned),
                 )
-                AutoKnockerView(pose = pose, active = autoActive)
+                AutoKnockerView(pose = pose, active = autoActive, tapPower = tapPower)
                 Box(
                     modifier = Modifier
                         .offset(x = 153.dp, y = 74.dp)
@@ -867,7 +1061,7 @@ private fun SatEarnStage(
         }
 
         Text(
-            "${floor(displayProgress).toInt()} / $unitsPerSat taps",
+            "${floor(visualProgress).toInt()} / $unitsPerSat taps",
             fontWeight = FontWeight.SemiBold,
             color = BrandInk,
             fontSize = 15.sp,
@@ -892,6 +1086,12 @@ private data class KnockerPose(
 private fun knockerStrikeDuration(tapPower: Double): Double =
     maxOf(0.07, 0.16 / tapPower.coerceAtLeast(0.01))
 
+/** Impact VFX scale from tap power. Power 1 = baseline size; capped at power 10 (~2.25×). */
+private fun knockerImpactScale(tapPower: Double): Float {
+    val p = tapPower.coerceIn(1.0, 10.0)
+    return (1.0 + (p - 1.0) / 9.0 * 1.25).toFloat()
+}
+
 /** How far the head rebounds off the rim, as a fraction of the full swing. */
 private const val KNOCKER_BOUNCE = 0.42
 /** Extra travel loaded past the stop just before release. */
@@ -907,8 +1107,10 @@ private fun knockerPose(
     autoActive: Boolean,
 ): KnockerPose {
     if (!autoActive || tapsPerSec <= 0.0) return KnockerPose()
+    val power = tapPower.coerceAtLeast(0.01)
+    val tapIndex = displayProgress / power
     val period = 1.0 / tapsPerSec
-    val phase = displayProgress - floor(displayProgress) // 0 = just struck
+    val phase = tapIndex - floor(tapIndex) // 0 = just struck
 
     // Segments of one tap, as fractions of the period.
     val strike = minOf(0.34, maxOf(0.06, knockerStrikeDuration(tapPower) / period))
@@ -1135,24 +1337,25 @@ private object KnockerGeometry {
  * Driven only by Auto fill progress — manual taps do not move it.
  */
 @Composable
-private fun AutoKnockerView(pose: KnockerPose, active: Boolean) {
+private fun AutoKnockerView(pose: KnockerPose, active: Boolean, tapPower: Double = 1.0) {
     Canvas(Modifier.requiredSize(400.dp, 300.dp)) {
-        drawTapper(pose = pose, active = active)
+        drawTapper(pose = pose, tapPower = tapPower, active = active)
     }
 }
 
-private fun DrawScope.drawTapper(pose: KnockerPose, active: Boolean) {
+private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Boolean) {
     val g = KnockerGeometry
     val u = 1.dp.toPx()
     val origin = Offset(size.width / 2f, size.height / 2f)
     val impact = if (active) pose.impact else 0f
+    val hitScale = if (active) knockerImpactScale(tapPower) else 1f
     val fade = if (active) 1f else 0.4f
 
     val angle = g.angle(pose.arm)
     // Contact shoves the whole mount back along the strike axis.
     val kick = Offset(
-        -cos(g.strikeAngle) * impact * 3f * u,
-        -sin(g.strikeAngle) * impact * 3f * u,
+        -cos(g.strikeAngle) * impact * 3f * hitScale * u,
+        -sin(g.strikeAngle) * impact * 3f * hitScale * u,
     )
     fun mounted(x: Float, y: Float) =
         Offset(origin.x + x * u + kick.x, origin.y + y * u + kick.y)
@@ -1318,29 +1521,31 @@ private fun DrawScope.drawTapper(pose: KnockerPose, active: Boolean) {
 
     if (impact <= 0.01f) return
 
-    // Contact flash on the rim.
+    // Contact flash on the rim — grows with Stronger (capped at power 10).
     val hit = Offset(origin.x + g.STRIKE_X * u, origin.y + g.STRIKE_Y * u)
+    val strokeW = (1.5f + 0.5f * hitScale) * u
     drawCircle(
         color = BrandAccent.copy(alpha = 0.6f * impact),
-        radius = (10f + 24f * (1f - impact)) * u,
+        radius = (10f + 24f * (1f - impact)) * hitScale * u,
         center = hit,
-        style = Stroke(width = 2f * u),
+        style = Stroke(width = strokeW),
     )
-    for (i in 0 until 4) {
-        val a = (45f + i * 90f) * PI.toFloat() / 180f
-        val near = (10f + 8f * (1f - impact)) * u
-        val far = near + (8f + 14f * (1f - impact)) * u
+    val sparkCount = 4 + (((hitScale - 1f) / 1.25f) * 4f).toInt() // 4…8
+    for (i in 0 until sparkCount) {
+        val a = (45f + i * (360f / sparkCount)) * PI.toFloat() / 180f
+        val near = (10f + 8f * (1f - impact)) * hitScale * u
+        val far = near + (8f + 14f * (1f - impact)) * hitScale * u
         drawLine(
             color = BrandAccent.copy(alpha = 0.85f * impact),
             start = Offset(hit.x + cos(a) * near, hit.y + sin(a) * near),
             end = Offset(hit.x + cos(a) * far, hit.y + sin(a) * far),
-            strokeWidth = 2f * u,
+            strokeWidth = strokeW,
             cap = StrokeCap.Round,
         )
     }
     drawCircle(
         color = Color.White.copy(alpha = 0.75f * impact),
-        radius = (4f + 7f * impact) * u,
+        radius = (4f + 7f * impact) * hitScale * u,
         center = hit,
     )
 }
