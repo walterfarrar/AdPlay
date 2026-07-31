@@ -9,6 +9,7 @@ struct RedeemView: View {
     @State private var history: [Withdrawal] = []
     @State private var didSubmit = false
     @State private var localError: String?
+    @State private var showHowTo = false
 
     private let pageBg = Color(red: 0.055, green: 0.059, blue: 0.102) // #0E0F1A
     private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149) // #171826
@@ -39,6 +40,18 @@ struct RedeemView: View {
                     Button("Close") { dismiss() }
                         .foregroundStyle(Color("BrandInk"))
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showHowTo = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .accessibilityLabel("How to redeem")
+                    .foregroundStyle(Color("BrandInk"))
+                }
+            }
+            .sheet(isPresented: $showHowTo) {
+                RedeemHowToView()
             }
             .task { await loadHistory() }
         }
@@ -218,6 +231,91 @@ struct RedeemView: View {
 
     private func loadHistory() async {
         history = (try? await session.api.myWithdrawals()) ?? []
+    }
+}
+
+/// Player-facing guide for Lightning redeem (shared copy with Android / web).
+struct RedeemHowToView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let pageBg = Color(red: 0.055, green: 0.059, blue: 0.102)
+    private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149)
+    private let panelBorder = Color(red: 0.169, green: 0.176, blue: 0.239)
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    howToSection(
+                        title: "What you need",
+                        body: "AdPlay pays Bitcoin over the Lightning Network. " +
+                            "You’ll need a Lightning wallet that can create a receive invoice " +
+                            "(a BOLT11 string starting with lnbc)."
+                    )
+                    howToSection(
+                        title: "Steps",
+                        body: "1. Earn sats by filling the progress bar completely on the home screen.\n" +
+                            "2. Open a Lightning wallet and create a receive invoice for the exact amount you want.\n" +
+                            "3. Copy the BOLT11 invoice from your wallet.\n" +
+                            "4. In AdPlay Redeem, enter that amount, paste the invoice, and submit.\n" +
+                            "5. We pay invoices manually. Watch History for pending → paid " +
+                            "(or rejected / refunded)."
+                    )
+                    howToSection(
+                        title: "Apps you can use",
+                        body: "Any Lightning wallet that creates BOLT11 invoices works. Popular options:\n" +
+                            "• Wallet of Satoshi — simple, good for beginners\n" +
+                            "• Phoenix — self-custodial Lightning wallet\n" +
+                            "• Zeus — full-featured Lightning wallet\n" +
+                            "• Alby — browser and mobile Lightning wallet\n" +
+                            "• Muun — Bitcoin + Lightning\n" +
+                            "• Strike — Bitcoin payments with Lightning\n" +
+                            "• Cash App — Lightning receive where available"
+                    )
+                    howToSection(
+                        title: "Tips",
+                        body: "Match the invoice amount to what you enter here. " +
+                            "Invoices expire, so create a fresh one when you’re ready to submit. " +
+                            "Only one pending withdrawal is allowed at a time."
+                    )
+                }
+                .padding(20)
+            }
+            .background(AtmosphereBackground())
+            .navigationTitle("How to redeem")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(pageBg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .tint(Color("BrandInk"))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Got it") { dismiss() }
+                        .foregroundStyle(Color("BrandInk"))
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func howToSection(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(Color("BrandInk"))
+            Text(body)
+                .font(.subheadline)
+                .foregroundStyle(Color("BrandMuted"))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(panelBg)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(panelBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
 

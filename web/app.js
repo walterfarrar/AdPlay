@@ -561,6 +561,14 @@ $("btn-redeem").addEventListener("click", () => {
   $("redeem-dialog").showModal();
 });
 
+$("btn-redeem-howto").addEventListener("click", () => {
+  $("redeem-howto-dialog").showModal();
+});
+
+$("btn-redeem-howto-close").addEventListener("click", () => {
+  $("redeem-howto-dialog").close();
+});
+
 $("redeem-form").addEventListener("submit", async (ev) => {
   const submitter = ev.submitter;
   if (submitter?.value === "cancel") return;
