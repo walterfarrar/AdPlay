@@ -59,6 +59,7 @@ final class SessionStore: ObservableObject {
     /// App came to the foreground: re-sync once, then animate locally.
     func onForeground() {
         foreground = true
+        GameReminderScheduler.clearBadge()
         guard isReady else { return }
         configureAdMobUnit()
         Task { try? await refresh(force: true) }

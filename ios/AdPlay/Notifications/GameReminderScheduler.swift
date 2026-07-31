@@ -15,6 +15,11 @@ enum GameReminderScheduler {
         }
     }
 
+    /// Clear the app-icon badge when the player opens AdPlay.
+    static func clearBadge() {
+        UNUserNotificationCenter.current().setBadgeCount(0)
+    }
+
     /// Reschedule from latest authoritative game state.
     static func sync(_ state: GameState) {
         let center = UNUserNotificationCenter.current()
@@ -70,6 +75,7 @@ enum GameReminderScheduler {
         content.title = title
         content.body = body
         content.sound = .default
+        content.badge = 1
 
         let interval = max(1, date.timeIntervalSinceNow)
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
