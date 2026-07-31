@@ -10,12 +10,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
@@ -33,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,8 +96,13 @@ fun RedeemScreen(
     var invoice by remember { mutableStateOf("") }
     var submitted by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
+    var showHowTo by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { onLoadHistory() }
+
+    if (showHowTo) {
+        RedeemHowToDialog(onDismiss = { showHowTo = false })
+    }
 
     Box(
         Modifier
@@ -113,7 +124,31 @@ fun RedeemScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Redeem", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Redeem", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
+                    TextButton(
+                        onClick = { showHowTo = true },
+                        modifier = Modifier.semantics { contentDescription = "How to redeem" },
+                    ) {
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .border(1.5.dp, BrandInk, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "i",
+                                color = BrandInk,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
                 TextButton(onClick = onClose) {
                     Text("Close", color = BrandMuted, fontWeight = FontWeight.SemiBold)
                 }
@@ -295,3 +330,71 @@ private fun redeemFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedLabelColor = BrandMuted,
     cursorColor = BrandAccent,
 )
+
+/** Player-facing guide for Lightning redeem (shared copy with iOS / web). */
+@Composable
+private fun RedeemHowToDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        titleContentColor = BrandInk,
+        textContentColor = BrandMuted,
+        title = {
+            Text("How to redeem", fontWeight = FontWeight.Bold, color = BrandInk)
+        },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                HowToBlock(
+                    title = "What you need",
+                    body = "AdPlay pays Bitcoin over the Lightning Network. " +
+                        "You’ll need a Lightning wallet that can create a receive invoice " +
+                        "(a BOLT11 string starting with lnbc).",
+                )
+                HowToBlock(
+                    title = "Steps",
+                    body = "1. Earn sats by filling the progress bar completely on the home screen.\n" +
+                        "2. Open a Lightning wallet and create a receive invoice for the exact amount you want.\n" +
+                        "3. Copy the BOLT11 invoice from your wallet.\n" +
+                        "4. In AdPlay Redeem, enter that amount, paste the invoice, and submit.\n" +
+                        "5. We pay invoices manually. Watch History for pending → paid " +
+                        "(or rejected / refunded).",
+                )
+                HowToBlock(
+                    title = "Apps you can use",
+                    body = "Any Lightning wallet that creates BOLT11 invoices works. Popular options:\n" +
+                        "• Wallet of Satoshi — simple, good for beginners\n" +
+                        "• Phoenix — self-custodial Lightning wallet\n" +
+                        "• Zeus — full-featured Lightning wallet\n" +
+                        "• Alby — browser and mobile Lightning wallet\n" +
+                        "• Muun — Bitcoin + Lightning\n" +
+                        "• Strike — Bitcoin payments with Lightning\n" +
+                        "• Cash App — Lightning receive where available",
+                )
+                HowToBlock(
+                    title = "Tips",
+                    body = "Match the invoice amount to what you enter here. " +
+                        "Invoices expire, so create a fresh one when you’re ready to submit. " +
+                        "Only one pending withdrawal is allowed at a time.",
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got it", color = BrandAccent, fontWeight = FontWeight.SemiBold)
+            }
+        },
+    )
+}
+
+@Composable
+private fun HowToBlock(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = BrandInk)
+        Text(body, fontSize = 13.sp, lineHeight = 18.sp, color = BrandMuted)
+    }
+}

@@ -80,7 +80,18 @@
 
     <dialog id="redeem-dialog">
       <form method="dialog" id="redeem-form">
-        <h2>Redeem</h2>
+        <div class="dialog-title-row">
+          <h2>Redeem</h2>
+          <button
+            type="button"
+            id="btn-redeem-howto"
+            class="info-btn"
+            aria-label="How to redeem"
+            title="How to redeem"
+          >
+            i
+          </button>
+        </div>
         <p class="muted">
           Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.
         </p>
@@ -98,6 +109,58 @@
           <button type="submit" value="submit" id="redeem-submit" class="primary">Request</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="redeem-howto-dialog">
+      <div class="dialog-title-row">
+        <h2>How to redeem</h2>
+      </div>
+      <div class="howto-scroll">
+        <section class="howto-block">
+          <h3>What you need</h3>
+          <p>
+            AdPlay pays Bitcoin over the Lightning Network. You’ll need a Lightning wallet that can
+            create a receive invoice (a BOLT11 string starting with lnbc).
+          </p>
+        </section>
+        <section class="howto-block">
+          <h3>Steps</h3>
+          <ol>
+            <li>Earn sats by filling the progress bar completely on the home screen.</li>
+            <li>
+              Open a Lightning wallet and create a receive invoice for the exact amount you want.
+            </li>
+            <li>Copy the BOLT11 invoice from your wallet.</li>
+            <li>In AdPlay Redeem, enter that amount, paste the invoice, and submit.</li>
+            <li>
+              We pay invoices manually. Watch History for pending → paid (or rejected / refunded).
+            </li>
+          </ol>
+        </section>
+        <section class="howto-block">
+          <h3>Apps you can use</h3>
+          <p>Any Lightning wallet that creates BOLT11 invoices works. Popular options:</p>
+          <ul>
+            <li>Wallet of Satoshi — simple, good for beginners</li>
+            <li>Phoenix — self-custodial Lightning wallet</li>
+            <li>Zeus — full-featured Lightning wallet</li>
+            <li>Alby — browser and mobile Lightning wallet</li>
+            <li>Muun — Bitcoin + Lightning</li>
+            <li>Strike — Bitcoin payments with Lightning</li>
+            <li>Cash App — Lightning receive where available</li>
+          </ul>
+        </section>
+        <section class="howto-block">
+          <h3>Tips</h3>
+          <p>
+            Match the invoice amount to what you enter here. Invoices expire, so create a fresh one
+            when you’re ready to submit. Only one pending withdrawal is allowed at a time.
+          </p>
+        </section>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-redeem-howto-close" class="primary">Got it</button>
+      </div>
     </dialog>
 
     <script type="module" src="app.js"></script>
