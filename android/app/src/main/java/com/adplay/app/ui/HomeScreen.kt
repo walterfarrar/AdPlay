@@ -762,10 +762,10 @@ private fun RollingDigitsLabel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             glyphs.forEach { glyph ->
-                val d = glyph.digit
-                val highlight = d != null && isSatoshiHighlightDigit(glyph.power, highlightSats)
-                key("${glyph.key}-${if (highlight) "sat" else "dim"}") {
+                key(glyph.key) {
+                    val d = glyph.digit
                     if (d != null) {
+                        val highlight = isSatoshiHighlightDigit(glyph.power, highlightSats)
                         RollingDigitSlot(
                             digit = d,
                             steps = glyph.steps,
