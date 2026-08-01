@@ -665,6 +665,10 @@ internal fun isSatoshiHighlightDigit(power: Int, satsBalance: Int): Boolean {
     return power in 5..maxPower
 }
 
+/** Prefer completed sats; if the bar just filled, quanta may already include the next sat. */
+internal fun satoshiHighlightSats(satsBalance: Int, quanta: Long): Int =
+    maxOf(satsBalance, (quanta / 100_000L).toInt().coerceAtLeast(0))
+
 /**
  * Upward odometer ticks for place 10^power.
  * Carries count: +10 on the value → ones place ticks 10 (full turn) even if the glyph ends the same.
@@ -726,11 +730,12 @@ private fun RollingDigitsLabel(
         fromQuanta = quanta
     }
 
+    val highlightSats = satoshiHighlightSats(satsBalance, quanta)
     val text = formatBtcQuanta(quanta)
     val digitStyle = TextStyle(
         fontSize = fontSizeSp.sp,
         fontWeight = FontWeight.Black,
-        color = BrandInk,
+        color = BrandMuted,
         textAlign = TextAlign.Center,
     )
     val measurer = rememberTextMeasurer()
@@ -751,19 +756,17 @@ private fun RollingDigitsLabel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             glyphs.forEach { glyph ->
-                key(glyph.key) {
-                    val d = glyph.digit
+                val d = glyph.digit
+                val highlight = d != null && isSatoshiHighlightDigit(glyph.power, highlightSats)
+                key("${glyph.key}-${if (highlight) "sat" else "dim"}") {
                     if (d != null) {
-                        val color = if (isSatoshiHighlightDigit(glyph.power, satsBalance)) {
-                            BrandAccent
-                        } else {
-                            BrandInk
-                        }
                         RollingDigitSlot(
                             digit = d,
                             steps = glyph.steps,
                             rollId = quanta,
-                            textStyle = digitStyle.copy(color = color),
+                            textStyle = digitStyle.copy(
+                                color = if (highlight) BrandAccent else BrandMuted,
+                            ),
                         )
                     } else {
                         Text(glyph.literal.orEmpty(), style = digitStyle)
