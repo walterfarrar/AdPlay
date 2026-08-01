@@ -1,4 +1,9 @@
-export type BoostType = "duration" | "speed" | "tap_strength" | "skip_time";
+export type BoostType =
+  | "activate"
+  | "duration"
+  | "speed"
+  | "tap_strength"
+  | "skip_time";
 export type Tunables = {
   unitsPerSat: number;
   tapUnits: number;
@@ -123,7 +128,7 @@ export type PublicGameState = {
   speedBoostUntil: string | null;
   /** True only after the player watched a Longer ad this cycle. */
   durationBoostActive: boolean;
-  /** Longer ads completed this run (0 while idle / before first Longer). */
+  /** Longer ads completed this run (0 while idle / after Activate before first Longer). */
   durationBoostCount: number;
   /** Faster ads completed this run. */
   speedBoostCount: number;

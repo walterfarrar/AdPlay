@@ -588,40 +588,49 @@ export async function applyBoost(
       return toPublic(g, t, now);
     }
 
-    // After a cycle reset / idle start, Longer must be watched before Faster or Stronger.
-    if (
-      (boostType === "speed" || boostType === "tap_strength") &&
-      (g.durationBoostCount || 0) <= 0
-    ) {
-      throw Object.assign(new Error("Watch Longer first"), { code: "failed-precondition" });
+    const autoUntil = parseIso(g.autoFillUntil);
+    const idle = !autoUntil || autoUntil <= now;
+
+    // Free starter ad: start Auto Tapper without spending the boost bank or counting as Longer.
+    if (boostType === "activate") {
+      if (!idle) {
+        throw Object.assign(new Error("Auto Tapper already active"), {
+          code: "failed-precondition",
+        });
+      }
+      g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
+      g.speedBoostAmount = t.speedBoostAmount;
+      g.speedBoostUntil = null;
+      g.lastAdAt = nowIso(now);
+      g.lastBoostType = boostType;
+      g.fillRate = effectiveFillRate(g, t, now);
+      g.lastTickAt = nowIso(now);
+      writeCredits(tx, uid, tickCredits.credits);
+      tx.set(eventRef, { boostType, appliedAt: nowIso(now) });
+      tx.set(ref, g);
+      return toPublic(g, t, now);
+    }
+
+    // Faster / Stronger require an active Auto Tapper (via Activate or Longer).
+    if ((boostType === "speed" || boostType === "tap_strength") && idle) {
+      throw Object.assign(new Error("Activate Auto Tapper first"), {
+        code: "failed-precondition",
+      });
     }
 
     spendAdCharge(g, t, now);
 
-    const autoUntil = parseIso(g.autoFillUntil);
-    const idle = !autoUntil || autoUntil <= now;
-
     if (boostType === "tap_strength") {
-      // Like Faster: if auto is empty, start the shared window + base rate
-      if (idle) {
-        g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
-        g.speedBoostAmount = t.speedBoostAmount;
-        g.speedBoostUntil = null;
-      }
       g.tapStrengthBoostAmount = (g.tapStrengthBoostAmount || 0) + t.tapStrengthBoostAmount;
       g.tapStrengthBoostCount = (g.tapStrengthBoostCount || 0) + 1;
       // Stronger uses the shared auto clock (no separate timer)
       g.tapStrengthBoostUntil = g.autoFillUntil;
     } else if (idle) {
-      // First Longer/Faster: start shared auto window + base Faster rate
+      // First Longer (legacy / API): start shared auto window + base Faster rate
       g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
       g.speedBoostAmount = t.speedBoostAmount;
       g.speedBoostUntil = null;
-      if (boostType === "duration") {
-        g.durationBoostCount = (g.durationBoostCount || 0) + 1;
-      } else {
-        g.speedBoostCount = (g.speedBoostCount || 0) + 1;
-      }
+      g.durationBoostCount = (g.durationBoostCount || 0) + 1;
     } else if (boostType === "duration") {
       // Longer: extend the shared auto timer only
       g.autoFillUntil = extendIsoBySeconds(g.autoFillUntil, t.durationBoostSeconds, now);

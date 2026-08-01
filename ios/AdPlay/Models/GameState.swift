@@ -132,6 +132,7 @@ struct Tunables: Codable, Equatable {
 }
 
 enum BoostType: String, Codable {
+    case activate
     case duration
     case speed
     case tapStrength = "tap_strength"

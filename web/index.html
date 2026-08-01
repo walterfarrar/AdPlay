@@ -46,8 +46,8 @@
       </section>
 
       <section class="boosts">
-        <p class="muted center boost-caption">Watch an Ad for a Boost</p>
-        <div class="boost-row">
+        <p class="muted center boost-caption" id="boost-caption">Watch an Ad for a Boost</p>
+        <div class="boost-row" id="boost-row-active">
           <button type="button" class="boost" data-boost="duration" id="boost-longer">
             <span class="boost-title">Longer</span>
             <span class="boost-action" id="action-longer">Add 30 min</span>
@@ -62,6 +62,12 @@
             <span class="boost-title">Stronger</span>
             <span class="boost-action" id="action-stronger">+0.25 power/tap</span>
             <span class="boost-count" id="count-stronger">(0)</span>
+          </button>
+        </div>
+        <div class="boost-row boost-row-activate hidden" id="boost-row-idle">
+          <button type="button" class="boost" data-boost="activate" id="boost-activate">
+            <span class="boost-title">Activate Auto Tapper</span>
+            <span class="boost-action" id="action-activate">Add 30 min</span>
           </button>
         </div>
         <p class="auto-timer" id="auto-timer">&nbsp;</p>

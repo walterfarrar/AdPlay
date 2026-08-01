@@ -27,7 +27,7 @@ function verifySig(payload: string, sig: string): boolean {
 
 const s2sSchema = z.object({
   userId: z.string().min(1),
-  boostType: z.enum(["duration", "speed", "tap_strength"]),
+  boostType: z.enum(["activate", "duration", "speed", "tap_strength"]),
   eventId: z.string().min(1),
   ts: z.number().int(),
   sig: z.string().min(1),
@@ -72,7 +72,7 @@ export async function adRoutes(app: FastifyInstance) {
     if (!user) return reply.code(401).send({ error: "Unauthorized" });
 
     const body = z
-      .object({ boostType: z.enum(["duration", "speed", "tap_strength"]) })
+      .object({ boostType: z.enum(["activate", "duration", "speed", "tap_strength"]) })
       .safeParse(req.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });

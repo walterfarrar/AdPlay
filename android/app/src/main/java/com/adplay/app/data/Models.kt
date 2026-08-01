@@ -95,6 +95,7 @@ data class Withdrawal(
     val sats: Int get() = amountSats ?: amount_sats ?: 0
 }
 enum class BoostType(val apiValue: String) {
+    ACTIVATE("activate"),
     DURATION("duration"),
     SPEED("speed"),
     TAP_STRENGTH("tap_strength"),

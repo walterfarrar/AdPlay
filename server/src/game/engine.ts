@@ -343,6 +343,7 @@ function toPublic(userId: string, row: GameRow, now: Date): PublicGameState {
     tapPower: effectiveTapPower(row, now),
     adCooldownSecondsLeft: cooldownLeft,
     lastBoostType:
+      lastBoost?.boost_type === "activate" ||
       lastBoost?.boost_type === "duration" ||
       lastBoost?.boost_type === "speed" ||
       lastBoost?.boost_type === "tap_strength"
@@ -416,36 +417,14 @@ export function applyBoost(
     }
   }
 
-  // After a cycle reset / idle start, Longer must be watched before Faster or Stronger.
-  if (
-    (boostType === "speed" || boostType === "tap_strength") &&
-    (row.duration_boost_count || 0) <= 0
-  ) {
-    throw Object.assign(new Error("Watch Longer first"), { statusCode: 400 });
-  }
-
-  spendAdCharge(row, now);
-
   const autoUntil = parseIso(row.auto_fill_until);
   const idle = !autoUntil || autoUntil <= now;
 
-  if (boostType === "tap_strength") {
-    // Like Faster: if auto is empty, start the shared window + base rate
-    if (idle) {
-      row.auto_fill_until = extendIsoBySeconds(
-        null,
-        gameConfig.durationBoostSeconds,
-        now,
-      );
-      row.speed_boost_amount = gameConfig.speedBoostAmount;
-      row.speed_boost_until = null;
+  // Free starter ad: start Auto Tapper without spending the boost bank or counting as Longer.
+  if (boostType === "activate") {
+    if (!idle) {
+      throw Object.assign(new Error("Auto Tapper already active"), { statusCode: 400 });
     }
-    row.tap_strength_boost_amount =
-      (row.tap_strength_boost_amount || 0) + gameConfig.tapStrengthBoostAmount;
-    row.tap_strength_boost_count = (row.tap_strength_boost_count || 0) + 1;
-    row.tap_strength_boost_until = row.auto_fill_until;
-  } else if (idle) {
-    // First Longer/Faster: shared auto window + base Faster rate
     row.auto_fill_until = extendIsoBySeconds(
       null,
       gameConfig.durationBoostSeconds,
@@ -453,11 +432,38 @@ export function applyBoost(
     );
     row.speed_boost_amount = gameConfig.speedBoostAmount;
     row.speed_boost_until = null;
-    if (boostType === "duration") {
-      row.duration_boost_count = (row.duration_boost_count || 0) + 1;
-    } else {
-      row.speed_boost_count = (row.speed_boost_count || 0) + 1;
-    }
+    row.last_ad_at = nowIso(now);
+    row.fill_rate = effectiveFillRate(row, now);
+    row.last_tick_at = nowIso(now);
+    saveRow(row);
+    db.prepare(
+      "INSERT INTO ad_events (id, user_id, event_id, boost_type, applied_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(nanoid(), userId, eventId, boostType, nowIso(now));
+    return toPublic(userId, row, now);
+  }
+
+  // Faster / Stronger require an active Auto Tapper (via Activate or Longer).
+  if ((boostType === "speed" || boostType === "tap_strength") && idle) {
+    throw Object.assign(new Error("Activate Auto Tapper first"), { statusCode: 400 });
+  }
+
+  spendAdCharge(row, now);
+
+  if (boostType === "tap_strength") {
+    row.tap_strength_boost_amount =
+      (row.tap_strength_boost_amount || 0) + gameConfig.tapStrengthBoostAmount;
+    row.tap_strength_boost_count = (row.tap_strength_boost_count || 0) + 1;
+    row.tap_strength_boost_until = row.auto_fill_until;
+  } else if (idle) {
+    // First Longer (legacy / API): shared auto window + base Faster rate
+    row.auto_fill_until = extendIsoBySeconds(
+      null,
+      gameConfig.durationBoostSeconds,
+      now,
+    );
+    row.speed_boost_amount = gameConfig.speedBoostAmount;
+    row.speed_boost_until = null;
+    row.duration_boost_count = (row.duration_boost_count || 0) + 1;
   } else if (boostType === "duration") {
     row.auto_fill_until = extendIsoBySeconds(
       row.auto_fill_until,

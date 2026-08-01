@@ -113,6 +113,7 @@ private enum class BoostVisual {
 fun HomeScreen(
     ui: UiState,
     onTap: () -> Unit,
+    onActivate: () -> Unit,
     onLonger: () -> Unit,
     onFaster: () -> Unit,
     onStronger: () -> Unit,
@@ -193,8 +194,12 @@ fun HomeScreen(
                 val canWatch = !ui.loading &&
                     state.adsRemainingToday > 0 &&
                     state.adCooldownSecondsLeft == 0
-                // Faster / Stronger stay locked until Longer has been watched this auto cycle.
-                val canWatchSecondary = canWatch && state.durationBoostCount > 0
+                // Free starter ad while idle — does not spend from the boost bank.
+                val canActivate = !ui.loading &&
+                    !state.autoFillActive &&
+                    state.adCooldownSecondsLeft == 0
+                // Faster / Stronger unlock once Auto Tapper is running.
+                val canWatchSecondary = canWatch && state.autoFillActive
                 var displayProgress by remember { mutableDoubleStateOf(state.progress) }
                 val view = LocalView.current
                 val density = LocalDensity.current
@@ -440,7 +445,11 @@ fun HomeScreen(
 
                     val t = ui.tunables
                     Text(
-                        "Watch an Ad for a Boost",
+                        if (state.autoFillActive) {
+                            "Watch an Ad for a Boost"
+                        } else {
+                            "Watch an Ad to activate Auto Tapper"
+                        },
                         color = BrandMuted,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -454,36 +463,48 @@ fun HomeScreen(
                             .height(88.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        BoostButton(
-                            title = "Longer",
-                            actionLabel = formatLongerAction(t),
-                            theme = BrandTime,
-                            running = state.durationBoostActive,
-                            applyCount = state.durationBoostCount,
-                            enabled = canWatch,
-                            onClick = onLonger,
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                        )
-                        BoostButton(
-                            title = "Faster",
-                            actionLabel = formatFasterAction(t),
-                            theme = BrandSpeed,
-                            running = state.speedBoostActive,
-                            applyCount = state.speedBoostCount,
-                            enabled = canWatchSecondary,
-                            onClick = onFaster,
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                        )
-                        BoostButton(
-                            title = "Stronger",
-                            actionLabel = formatStrongerAction(t),
-                            theme = BrandPower,
-                            running = state.tapStrengthActive,
-                            applyCount = state.tapStrengthBoostCount,
-                            enabled = canWatchSecondary,
-                            onClick = onStronger,
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                        )
+                        if (state.autoFillActive) {
+                            BoostButton(
+                                title = "Longer",
+                                actionLabel = formatLongerAction(t),
+                                theme = BrandTime,
+                                running = state.durationBoostActive,
+                                applyCount = state.durationBoostCount,
+                                enabled = canWatch,
+                                onClick = onLonger,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                            BoostButton(
+                                title = "Faster",
+                                actionLabel = formatFasterAction(t),
+                                theme = BrandSpeed,
+                                running = state.speedBoostActive,
+                                applyCount = state.speedBoostCount,
+                                enabled = canWatchSecondary,
+                                onClick = onFaster,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                            BoostButton(
+                                title = "Stronger",
+                                actionLabel = formatStrongerAction(t),
+                                theme = BrandPower,
+                                running = state.tapStrengthActive,
+                                applyCount = state.tapStrengthBoostCount,
+                                enabled = canWatchSecondary,
+                                onClick = onStronger,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        } else {
+                            BoostButton(
+                                title = "Activate Auto Tapper",
+                                actionLabel = formatLongerAction(t),
+                                theme = BrandTime,
+                                showCount = false,
+                                enabled = canActivate,
+                                onClick = onActivate,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(10.dp))
@@ -1794,6 +1815,7 @@ private fun BoostButton(
     modifier: Modifier = Modifier,
     running: Boolean = false,
     applyCount: Int = 0,
+    showCount: Boolean = true,
 ) {
     val visual = when {
         running && enabled -> BoostVisual.RunningReady
@@ -1862,7 +1884,8 @@ private fun BoostButton(
             fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
             color = titleColor,
-            maxLines = 1,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
         )
         Text(
             actionLabel,
@@ -1872,14 +1895,16 @@ private fun BoostButton(
             textAlign = TextAlign.Center,
             maxLines = 1,
         )
-        Text(
-            "($applyCount)",
-            fontSize = 11.sp,
-            color = countColor,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-        )
+        if (showCount) {
+            Text(
+                "($applyCount)",
+                fontSize = 11.sp,
+                color = countColor,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+            )
+        }
     }
 }
 

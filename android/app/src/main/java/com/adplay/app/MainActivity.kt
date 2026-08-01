@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
                     HomeScreen(
                         ui = ui,
                         onTap = { vm.tap() },
+                        onActivate = { vm.watch(BoostType.ACTIVATE) },
                         onLonger = { vm.watch(BoostType.DURATION) },
                         onFaster = { vm.watch(BoostType.SPEED) },
                         onStronger = { vm.watch(BoostType.TAP_STRENGTH) },

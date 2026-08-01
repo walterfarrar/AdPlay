@@ -101,42 +101,60 @@ struct HomeView: View {
 
                 Spacer(minLength: 36)
 
-                Text("Watch an Ad for a Boost")
+                Text(
+                    state.autoFillActive
+                        ? "Watch an Ad for a Boost"
+                        : "Watch an Ad to activate Auto Tapper"
+                )
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color("BrandMuted"))
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 8)
 
-                HStack(spacing: 10) {
-                    BoostButton(
-                        title: "Longer",
-                        actionLabel: formatLongerAction(session.tunables),
-                        theme: Color("BrandTime"),
-                        running: state.longerBoostActive,
-                        applyCount: state.longerBoostCount,
-                        disabled: !canWatch
-                    ) {
-                        Task { await session.watch(boost: .duration) }
-                    }
-                    BoostButton(
-                        title: "Faster",
-                        actionLabel: formatFasterAction(session.tunables),
-                        theme: Color("BrandAccent"),
-                        running: state.speedBoostActive,
-                        applyCount: state.fasterBoostCount,
-                        disabled: !canWatchSecondary
-                    ) {
-                        Task { await session.watch(boost: .speed) }
-                    }
-                    BoostButton(
-                        title: "Stronger",
-                        actionLabel: formatStrongerAction(session.tunables),
-                        theme: Color("BrandPower"),
-                        running: state.tapStrengthActive ?? false,
-                        applyCount: state.strongerBoostCount,
-                        disabled: !canWatchSecondary
-                    ) {
-                        Task { await session.watch(boost: .tapStrength) }
+                Group {
+                    if state.autoFillActive {
+                        HStack(spacing: 10) {
+                            BoostButton(
+                                title: "Longer",
+                                actionLabel: formatLongerAction(session.tunables),
+                                theme: Color("BrandTime"),
+                                running: state.longerBoostActive,
+                                applyCount: state.longerBoostCount,
+                                disabled: !canWatch
+                            ) {
+                                Task { await session.watch(boost: .duration) }
+                            }
+                            BoostButton(
+                                title: "Faster",
+                                actionLabel: formatFasterAction(session.tunables),
+                                theme: Color("BrandAccent"),
+                                running: state.speedBoostActive,
+                                applyCount: state.fasterBoostCount,
+                                disabled: !canWatchSecondary
+                            ) {
+                                Task { await session.watch(boost: .speed) }
+                            }
+                            BoostButton(
+                                title: "Stronger",
+                                actionLabel: formatStrongerAction(session.tunables),
+                                theme: Color("BrandPower"),
+                                running: state.tapStrengthActive ?? false,
+                                applyCount: state.strongerBoostCount,
+                                disabled: !canWatchSecondary
+                            ) {
+                                Task { await session.watch(boost: .tapStrength) }
+                            }
+                        }
+                    } else {
+                        BoostButton(
+                            title: "Activate Auto Tapper",
+                            actionLabel: formatLongerAction(session.tunables),
+                            theme: Color("BrandTime"),
+                            showCount: false,
+                            disabled: !canActivate
+                        ) {
+                            Task { await session.watch(boost: .activate) }
+                        }
                     }
                 }
                 .frame(height: 88)
@@ -226,9 +244,16 @@ struct HomeView: View {
             && session.state.adCooldownSecondsLeft == 0
     }
 
-    /// Faster / Stronger stay locked until Longer has been watched this auto cycle.
+    /// Free starter ad while idle — does not spend from the boost bank.
+    private var canActivate: Bool {
+        !session.isLoading
+            && !session.state.autoFillActive
+            && session.state.adCooldownSecondsLeft == 0
+    }
+
+    /// Faster / Stronger unlock once Auto Tapper is running.
     private var canWatchSecondary: Bool {
-        canWatch && session.state.longerBoostCount > 0
+        canWatch && session.state.autoFillActive
     }
 
     private func celebrateSatEarn(gained: Int) {
@@ -1506,6 +1531,7 @@ struct BoostButton: View {
     let theme: Color
     var running: Bool = false
     var applyCount: Int = 0
+    var showCount: Bool = true
     let disabled: Bool
     let action: () -> Void
 
@@ -1526,16 +1552,20 @@ struct BoostButton: View {
                 Text(title)
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundStyle(titleColor(visual))
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                    .multilineTextAlignment(.center)
                 Text(actionLabel)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(detailColor(visual))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                Text("(\(applyCount))")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(countColor(visual))
-                    .lineLimit(1)
+                if showCount {
+                    Text("(\(applyCount))")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(countColor(visual))
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, 10)

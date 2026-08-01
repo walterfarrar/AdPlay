@@ -149,6 +149,7 @@ export const mockCompleteBoost = onCall(async (request) => {
   const uid = requireAuth(request.auth?.uid);
   const boostType = request.data?.boostType as BoostType;
   if (
+    boostType !== "activate" &&
     boostType !== "duration" &&
     boostType !== "speed" &&
     boostType !== "tap_strength" &&
@@ -156,7 +157,7 @@ export const mockCompleteBoost = onCall(async (request) => {
   ) {
     throw new HttpsError(
       "invalid-argument",
-      "boostType must be duration|speed|tap_strength|skip_time",
+      "boostType must be activate|duration|speed|tap_strength|skip_time",
     );
   }
   const eventId = `mock_${db.collection("_").doc().id}`;

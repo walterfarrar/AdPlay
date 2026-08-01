@@ -173,6 +173,10 @@ body {
   height: 88px;
 }
 
+.boost-row.boost-row-activate {
+  grid-template-columns: 1fr;
+}
+
 .boost {
   display: flex;
   flex-direction: column;
@@ -188,6 +192,7 @@ body {
   background: linear-gradient(180deg, rgba(244, 245, 250, 0.06), rgba(244, 245, 250, 0.05));
 }
 
+.boost[data-boost="activate"],
 .boost[data-boost="duration"] {
   --theme: var(--time);
 }

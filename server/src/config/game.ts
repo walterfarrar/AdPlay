@@ -63,4 +63,4 @@ export const gameConfig = {
     "Throttle via adsPerCycle bank + adRegenSeconds. dailySatsEarnCap=0 means unlimited daily sats.",
 } as const;
 
-export type BoostType = "duration" | "speed" | "tap_strength";
+export type BoostType = "activate" | "duration" | "speed" | "tap_strength";

@@ -393,8 +393,11 @@ function render(state) {
   const t = tunables;
   const canWatch =
     !loading && state.adsRemainingToday > 0 && state.adCooldownSecondsLeft === 0;
-  // Faster / Stronger stay locked until Longer has been watched this auto cycle.
-  const canWatchSecondary = canWatch && (state.durationBoostCount ?? 0) > 0;
+  // Free starter ad while idle — does not spend from the boost bank.
+  const canActivate =
+    !loading && !state.autoFillActive && state.adCooldownSecondsLeft === 0;
+  // Faster / Stronger unlock once Auto Tapper is running.
+  const canWatchSecondary = canWatch && state.autoFillActive;
 
   $("balance").textContent = `${state.satsBalance} sats`;
   $("sats-per-hour").textContent = formatSatsPerHour(
@@ -421,9 +424,16 @@ function render(state) {
       ? `Tap the bar · ${state.tapsRemaining} taps left today`
       : "0 taps left today";
 
+  $("boost-caption").textContent = state.autoFillActive
+    ? "Watch an Ad for a Boost"
+    : "Watch an Ad to activate Auto Tapper";
+  $("boost-row-active").classList.toggle("hidden", !state.autoFillActive);
+  $("boost-row-idle").classList.toggle("hidden", state.autoFillActive);
+
   $("action-longer").textContent = formatLongerAction(t);
   $("action-faster").textContent = formatFasterAction(t);
   $("action-stronger").textContent = formatStrongerAction(t);
+  $("action-activate").textContent = formatLongerAction(t);
   $("count-longer").textContent = `(${state.durationBoostCount ?? 0})`;
   $("count-faster").textContent = `(${state.speedBoostCount ?? 0})`;
   $("count-stronger").textContent = `(${state.tapStrengthBoostCount ?? 0})`;
@@ -431,6 +441,7 @@ function render(state) {
   const longer = $("boost-longer");
   const faster = $("boost-faster");
   const stronger = $("boost-stronger");
+  const activate = $("boost-activate");
   for (const [btn, running, enabled] of [
     [longer, state.durationBoostActive, canWatch],
     [faster, state.speedBoostActive, canWatchSecondary],
@@ -439,6 +450,8 @@ function render(state) {
     btn.className = `boost ${boostVisual(running, enabled)}`;
     btn.disabled = !enabled;
   }
+  activate.className = `boost ${boostVisual(false, canActivate)}`;
+  activate.disabled = !canActivate;
 
   const untilMs = parseMs(state.autoFillUntil);
   const left =
@@ -542,7 +555,7 @@ async function watchBoost(boostType) {
   });
 }
 
-for (const id of ["boost-longer", "boost-faster", "boost-stronger"]) {
+for (const id of ["boost-activate", "boost-longer", "boost-faster", "boost-stronger"]) {
   $(id).addEventListener("click", () => {
     const boost = $(id).dataset.boost;
     watchBoost(boost);
