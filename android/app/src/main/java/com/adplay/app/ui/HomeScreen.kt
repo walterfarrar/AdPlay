@@ -646,6 +646,26 @@ internal fun formatBtcQuanta(quanta: Long): String {
 }
 
 /**
+ * 1 sat = 100_000 quanta → ones place is power 5.
+ * Highlight powers 5…floor(log10(sats·1e5)). Example: 80 sats → “80” in 0.00000080…
+ */
+internal fun satoshiDigitMaxPower(satsBalance: Int): Int? {
+    if (satsBalance <= 0) return null
+    var q = satsBalance.toLong() * 100_000L
+    var power = 0
+    while (q >= 10L) {
+        q /= 10L
+        power += 1
+    }
+    return power
+}
+
+internal fun isSatoshiHighlightDigit(power: Int, satsBalance: Int): Boolean {
+    val maxPower = satoshiDigitMaxPower(satsBalance) ?: return false
+    return power in 5..maxPower
+}
+
+/**
  * Upward odometer ticks for place 10^power.
  * Carries count: +10 on the value → ones place ticks 10 (full turn) even if the glyph ends the same.
  */
@@ -664,6 +684,7 @@ private fun odometerSteps(fromQuanta: Long, toQuanta: Long, power: Int, toDigit:
 private data class BtcGlyph(
     val key: String,
     val digit: Int?,
+    val power: Int,
     val steps: Int,
     val literal: String?,
 )
@@ -680,11 +701,12 @@ private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
             BtcGlyph(
                 key = "p$p",
                 digit = d,
+                power = p,
                 steps = odometerSteps(fromQuanta, toQuanta, p, d),
                 literal = null,
             )
         } else {
-            BtcGlyph(key = "lit-$ch", digit = null, steps = 0, literal = ch.toString())
+            BtcGlyph(key = "lit-$ch", digit = null, power = -1, steps = 0, literal = ch.toString())
         }
     }
 }
@@ -693,6 +715,7 @@ private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
 @Composable
 private fun RollingDigitsLabel(
     quanta: Long,
+    satsBalance: Int = 0,
     fontSizeSp: Float = 42f,
     modifier: Modifier = Modifier,
 ) {
@@ -731,11 +754,16 @@ private fun RollingDigitsLabel(
                 key(glyph.key) {
                     val d = glyph.digit
                     if (d != null) {
+                        val color = if (isSatoshiHighlightDigit(glyph.power, satsBalance)) {
+                            BrandAccent
+                        } else {
+                            BrandInk
+                        }
                         RollingDigitSlot(
                             digit = d,
                             steps = glyph.steps,
                             rollId = quanta,
-                            textStyle = digitStyle,
+                            textStyle = digitStyle.copy(color = color),
                         )
                     } else {
                         Text(glyph.literal.orEmpty(), style = digitStyle)
@@ -1008,6 +1036,7 @@ private fun SatEarnStage(
                     barProgress = visualProgress,
                     unitsPerSat = unitsPerSat,
                 ),
+                satsBalance = satsBalance,
                 fontSizeSp = 42f,
             )
             Spacer(Modifier.height(2.dp))

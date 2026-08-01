@@ -404,6 +404,24 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
     formatBtcQuanta(btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: unitsPerSat))
 }
 
+/// 1 sat = 100_000 quanta → ones place is power 5. Highlight powers 5…floor(log10(sats·1e5)).
+/// Example: 80 sats → powers 6 and 5 (“80” in 0.00000080…).
+func satoshiDigitMaxPower(satsBalance: Int) -> Int? {
+    guard satsBalance > 0 else { return nil }
+    var q = Int64(satsBalance) * 100_000
+    var power = 0
+    while q >= 10 {
+        q /= 10
+        power += 1
+    }
+    return power
+}
+
+func isSatoshiHighlightDigit(power: Int, satsBalance: Int) -> Bool {
+    guard let maxPower = satoshiDigitMaxPower(satsBalance: satsBalance) else { return false }
+    return power >= 5 && power <= maxPower
+}
+
 /// Upward odometer ticks for place 10^power (carries spin lower wheels a full turn).
 private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> Int {
     var place: Int64 = 1
@@ -421,6 +439,7 @@ private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> 
 private struct BtcGlyph: Identifiable {
     let id: String
     let digit: Int?
+    let power: Int
     let steps: Int
     let literal: String?
 }
@@ -436,11 +455,12 @@ private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
             return BtcGlyph(
                 id: "p\(p)",
                 digit: d,
+                power: p,
                 steps: odometerSteps(from: from, to: to, power: p, toDigit: d),
                 literal: nil
             )
         }
-        return BtcGlyph(id: "lit-\(ch)", digit: nil, steps: 0, literal: String(ch))
+        return BtcGlyph(id: "lit-\(ch)", digit: nil, power: -1, steps: 0, literal: String(ch))
     }
 }
 
@@ -1242,6 +1262,7 @@ struct BtcBalanceView: View {
         VStack(spacing: 8) {
             RollingDigitsLabel(
                 quanta: btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: total),
+                satsBalance: satsBalance,
                 fontSize: 42
             )
             .shadow(color: Color("BrandAccent").opacity(0.28), radius: 14, y: 4)
@@ -1257,6 +1278,7 @@ struct BtcBalanceView: View {
 /// Odometer-style label: each digit always rolls upward; punctuation stays put.
 struct RollingDigitsLabel: View {
     let quanta: Int64
+    var satsBalance: Int = 0
     var fontSize: CGFloat = 42
 
     @State private var fromQuanta: Int64?
@@ -1277,7 +1299,10 @@ struct RollingDigitsLabel: View {
                         digit: digit,
                         steps: glyph.steps,
                         rollId: quanta,
-                        font: digitFont
+                        font: digitFont,
+                        color: isSatoshiHighlightDigit(power: glyph.power, satsBalance: satsBalance)
+                            ? Color("BrandAccent")
+                            : Color("BrandInk")
                     )
                 } else if let lit = glyph.literal {
                     Text(lit)
@@ -1307,6 +1332,7 @@ private struct RollingDigitSlot: View {
     let steps: Int
     let rollId: Int64
     let font: Font
+    var color: Color = Color("BrandInk")
 
     /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
     @State private var displayed: Int = 0
@@ -1316,7 +1342,7 @@ private struct RollingDigitSlot: View {
     var body: some View {
         Text("\(displayed)")
             .font(font)
-            .foregroundStyle(Color("BrandInk"))
+            .foregroundStyle(color)
             .monospacedDigit()
             .onAppear {
                 guard !primed else { return }
