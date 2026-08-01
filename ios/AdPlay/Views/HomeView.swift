@@ -405,13 +405,16 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
 }
 
 /// Bitcoin orange — same sRGB as BrandAccent asset (explicit so digit slots can’t miss the catalog color).
-private let btcSatoshiDigitColor = Color(red: 0.969, green: 0.580, blue: 0.102)
+let btcSatoshiDigitColor = Color(red: 0.969, green: 0.580, blue: 0.102)
 
-/// 1 sat = 100_000 quanta → ones place is power 5. Highlight powers 5…floor(log10(sats·1e5)).
-/// Example: 80 sats → powers 6 and 5 (“80” in 0.00000080…).
-func satoshiDigitMaxPower(satsBalance: Int) -> Int? {
-    guard satsBalance > 0 else { return nil }
-    var q = Int64(satsBalance) * 100_000
+/// Highest place power occupied by `satsBalance` when 1 sat = 10^satOnesPower.
+/// Home odometer uses satOnesPower 5 (1e-13 quanta); 8-dp BTC strings use 0.
+func satoshiDigitMaxPower(satsBalance: Int, satOnesPower: Int = 5) -> Int? {
+    guard satsBalance > 0, satOnesPower >= 0 else { return nil }
+    var q = Int64(satsBalance)
+    for _ in 0..<satOnesPower {
+        q *= 10
+    }
     var power = 0
     while q >= 10 {
         q /= 10
@@ -420,9 +423,13 @@ func satoshiDigitMaxPower(satsBalance: Int) -> Int? {
     return power
 }
 
-func isSatoshiHighlightDigit(power: Int, satsBalance: Int) -> Bool {
-    guard let maxPower = satoshiDigitMaxPower(satsBalance: satsBalance) else { return false }
-    return power >= 5 && power <= maxPower
+/// Example (8-dp, satOnesPower 0): 80 sats → powers 1 and 0 (“80” in 0.00000080).
+/// Example (odometer, satOnesPower 5): 80 sats → powers 6 and 5 (“80” in 0.00000080…).
+func isSatoshiHighlightDigit(power: Int, satsBalance: Int, satOnesPower: Int = 5) -> Bool {
+    guard let maxPower = satoshiDigitMaxPower(satsBalance: satsBalance, satOnesPower: satOnesPower) else {
+        return false
+    }
+    return power >= satOnesPower && power <= maxPower
 }
 
 /// Prefer completed sats; if the bar just filled, quanta may already include the next sat.

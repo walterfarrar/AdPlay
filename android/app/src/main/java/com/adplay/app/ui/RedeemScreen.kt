@@ -39,7 +39,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
@@ -52,6 +56,40 @@ private val FieldBg = Color(0xFF0B0C14)
 /** Whole-sat balances as BTC (8 dp — 1 sat = 0.00000001). */
 internal fun formatSatsAsBtc(sats: Int): String =
     String.format("%.8f", sats * 1e-8)
+
+/** Static 8-dp BTC amount with satoshi integer digits in BrandAccent (matches home odometer). */
+@Composable
+internal fun ColoredSatsBtcText(
+    sats: Int,
+    fontSize: TextUnit = 32.sp,
+    fontWeight: FontWeight = FontWeight.Bold,
+) {
+    val text = formatSatsAsBtc(sats)
+    val annotated = remember(sats) {
+        val digitCount = text.count { it.isDigit() }
+        var power = digitCount - 1
+        buildAnnotatedString {
+            for (ch in text) {
+                if (ch.isDigit()) {
+                    val p = power
+                    power -= 1
+                    val highlight = isSatoshiHighlightDigit(p, sats, satOnesPower = 0)
+                    withStyle(SpanStyle(color = if (highlight) BrandAccent else BrandMuted)) {
+                        append(ch)
+                    }
+                } else {
+                    withStyle(SpanStyle(color = BrandMuted)) { append(ch) }
+                }
+            }
+        }
+    }
+    Text(
+        text = annotated,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        modifier = Modifier.semantics { contentDescription = text },
+    )
+}
 
 /** Parse a BTC string into whole sats (nearest sat). */
 internal fun parseBtcToSats(text: String): Int? {
@@ -164,11 +202,10 @@ fun RedeemScreen(
                     .border(1.dp, PanelBorder, RoundedCornerShape(16.dp))
                     .padding(16.dp),
             ) {
-                Text(
-                    formatSatsAsBtc(ui.state.satsBalance),
+                ColoredSatsBtcText(
+                    sats = ui.state.satsBalance,
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
-                    color = BrandInk,
                 )
                 Text(
                     "BTC available to redeem",
@@ -184,12 +221,25 @@ fun RedeemScreen(
                     lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(10.dp))
-                Text(
-                    "Minimum withdrawal: ${formatSatsAsBtc(ui.state.minWithdrawSats)} BTC",
-                    color = BrandInk,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Minimum withdrawal: ",
+                        color = BrandInk,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    ColoredSatsBtcText(
+                        sats = ui.state.minWithdrawSats,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        " BTC",
+                        color = BrandInk,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.",
