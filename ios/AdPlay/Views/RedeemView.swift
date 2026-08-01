@@ -60,10 +60,10 @@ struct RedeemView: View {
 
     private var balancePanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(formatSatsAsBtc(session.state.satsBalance))
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundStyle(Color("BrandInk"))
-                .monospacedDigit()
+            ColoredSatsBtcText(
+                sats: session.state.satsBalance,
+                font: .system(size: 32, weight: .bold, design: .rounded)
+            )
             Text("BTC available to redeem")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
@@ -73,10 +73,18 @@ struct RedeemView: View {
             )
             .font(.footnote)
             .foregroundStyle(Color("BrandMuted"))
-            Text("Minimum withdrawal: \(formatSatsAsBtc(session.state.minWithdrawSats)) BTC")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color("BrandInk"))
-                .monospacedDigit()
+            HStack(spacing: 0) {
+                Text("Minimum withdrawal: ")
+                    .foregroundStyle(Color("BrandInk"))
+                ColoredSatsBtcText(
+                    sats: session.state.minWithdrawSats,
+                    font: .subheadline.weight(.medium)
+                )
+                Text(" BTC")
+                    .foregroundStyle(Color("BrandInk"))
+            }
+            .font(.subheadline.weight(.medium))
+            .monospacedDigit()
             Text("Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
@@ -322,6 +330,49 @@ struct RedeemHowToView: View {
 /// Whole-sat balances as BTC (8 dp — 1 sat = 0.00000001).
 func formatSatsAsBtc(_ sats: Int) -> String {
     String(format: "%.8f", Double(sats) * 1e-8)
+}
+
+/// Static 8-dp BTC amount with satoshi integer digits in BrandAccent (matches home odometer).
+struct ColoredSatsBtcText: View {
+    let sats: Int
+    var font: Font = .system(size: 32, weight: .bold, design: .rounded)
+
+    private var text: String { formatSatsAsBtc(sats) }
+    private var glyphs: [ColoredBtcGlyph] { coloredSatsBtcGlyphs(sats: sats) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(glyphs.enumerated()), id: \.offset) { _, glyph in
+                Text(glyph.character)
+                    .font(font)
+                    .foregroundStyle(glyph.highlight ? btcSatoshiDigitColor : Color("BrandMuted"))
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityLabel(text)
+    }
+}
+
+private struct ColoredBtcGlyph {
+    let character: String
+    let highlight: Bool
+}
+
+/// 8-dp BTC: rightmost digit is 1 sat (satOnesPower 0).
+private func coloredSatsBtcGlyphs(sats: Int) -> [ColoredBtcGlyph] {
+    let text = formatSatsAsBtc(sats)
+    var power = text.filter(\.isNumber).count - 1
+    return text.map { ch in
+        if ch.isWholeNumber {
+            let p = power
+            power -= 1
+            return ColoredBtcGlyph(
+                character: String(ch),
+                highlight: isSatoshiHighlightDigit(power: p, satsBalance: sats, satOnesPower: 0)
+            )
+        }
+        return ColoredBtcGlyph(character: String(ch), highlight: false)
+    }
 }
 
 /// Parse a BTC string into whole sats (nearest sat).

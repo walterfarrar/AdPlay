@@ -646,12 +646,13 @@ internal fun formatBtcQuanta(quanta: Long): String {
 }
 
 /**
- * 1 sat = 100_000 quanta → ones place is power 5.
- * Highlight powers 5…floor(log10(sats·1e5)). Example: 80 sats → “80” in 0.00000080…
+ * Highest place power occupied by [satsBalance] when 1 sat = 10^[satOnesPower].
+ * Home odometer uses satOnesPower 5 (1e-13 quanta); 8-dp BTC strings use 0.
  */
-internal fun satoshiDigitMaxPower(satsBalance: Int): Int? {
-    if (satsBalance <= 0) return null
-    var q = satsBalance.toLong() * 100_000L
+internal fun satoshiDigitMaxPower(satsBalance: Int, satOnesPower: Int = 5): Int? {
+    if (satsBalance <= 0 || satOnesPower < 0) return null
+    var q = satsBalance.toLong()
+    repeat(satOnesPower) { q *= 10L }
     var power = 0
     while (q >= 10L) {
         q /= 10L
@@ -660,9 +661,14 @@ internal fun satoshiDigitMaxPower(satsBalance: Int): Int? {
     return power
 }
 
-internal fun isSatoshiHighlightDigit(power: Int, satsBalance: Int): Boolean {
-    val maxPower = satoshiDigitMaxPower(satsBalance) ?: return false
-    return power in 5..maxPower
+/** Example (8-dp, satOnesPower 0): 80 sats → “80” in 0.00000080. */
+internal fun isSatoshiHighlightDigit(
+    power: Int,
+    satsBalance: Int,
+    satOnesPower: Int = 5,
+): Boolean {
+    val maxPower = satoshiDigitMaxPower(satsBalance, satOnesPower) ?: return false
+    return power in satOnesPower..maxPower
 }
 
 /** Prefer completed sats; if the bar just filled, quanta may already include the next sat. */
