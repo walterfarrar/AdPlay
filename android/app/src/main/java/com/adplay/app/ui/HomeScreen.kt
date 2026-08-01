@@ -193,6 +193,8 @@ fun HomeScreen(
                 val canWatch = !ui.loading &&
                     state.adsRemainingToday > 0 &&
                     state.adCooldownSecondsLeft == 0
+                // Faster / Stronger stay locked until Longer has been watched this auto cycle.
+                val canWatchSecondary = canWatch && state.durationBoostCount > 0
                 var displayProgress by remember { mutableDoubleStateOf(state.progress) }
                 val view = LocalView.current
                 val density = LocalDensity.current
@@ -468,7 +470,7 @@ fun HomeScreen(
                             theme = BrandSpeed,
                             running = state.speedBoostActive,
                             applyCount = state.speedBoostCount,
-                            enabled = canWatch,
+                            enabled = canWatchSecondary,
                             onClick = onFaster,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -478,7 +480,7 @@ fun HomeScreen(
                             theme = BrandPower,
                             running = state.tapStrengthActive,
                             applyCount = state.tapStrengthBoostCount,
-                            enabled = canWatch,
+                            enabled = canWatchSecondary,
                             onClick = onStronger,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )

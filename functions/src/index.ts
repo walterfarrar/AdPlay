@@ -39,6 +39,9 @@ function mapErr(e: unknown): never {
   if (err.code === "resource-exhausted") {
     throw new HttpsError("resource-exhausted", err.message);
   }
+  if (err.code === "failed-precondition") {
+    throw new HttpsError("failed-precondition", err.message);
+  }
   throw new HttpsError("internal", err.message || "Error");
 }
 

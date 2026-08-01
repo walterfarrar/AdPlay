@@ -416,6 +416,14 @@ export function applyBoost(
     }
   }
 
+  // After a cycle reset / idle start, Longer must be watched before Faster or Stronger.
+  if (
+    (boostType === "speed" || boostType === "tap_strength") &&
+    (row.duration_boost_count || 0) <= 0
+  ) {
+    throw Object.assign(new Error("Watch Longer first"), { statusCode: 400 });
+  }
+
   spendAdCharge(row, now);
 
   const autoUntil = parseIso(row.auto_fill_until);

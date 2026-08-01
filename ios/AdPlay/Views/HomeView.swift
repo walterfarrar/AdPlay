@@ -124,7 +124,7 @@ struct HomeView: View {
                         theme: Color("BrandAccent"),
                         running: state.speedBoostActive,
                         applyCount: state.fasterBoostCount,
-                        disabled: !canWatch
+                        disabled: !canWatchSecondary
                     ) {
                         Task { await session.watch(boost: .speed) }
                     }
@@ -134,7 +134,7 @@ struct HomeView: View {
                         theme: Color("BrandPower"),
                         running: state.tapStrengthActive ?? false,
                         applyCount: state.strongerBoostCount,
-                        disabled: !canWatch
+                        disabled: !canWatchSecondary
                     ) {
                         Task { await session.watch(boost: .tapStrength) }
                     }
@@ -224,6 +224,11 @@ struct HomeView: View {
         !session.isLoading
             && session.state.adsRemainingToday > 0
             && session.state.adCooldownSecondsLeft == 0
+    }
+
+    /// Faster / Stronger stay locked until Longer has been watched this auto cycle.
+    private var canWatchSecondary: Bool {
+        canWatch && session.state.longerBoostCount > 0
     }
 
     private func celebrateSatEarn(gained: Int) {

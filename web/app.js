@@ -393,6 +393,8 @@ function render(state) {
   const t = tunables;
   const canWatch =
     !loading && state.adsRemainingToday > 0 && state.adCooldownSecondsLeft === 0;
+  // Faster / Stronger stay locked until Longer has been watched this auto cycle.
+  const canWatchSecondary = canWatch && (state.durationBoostCount ?? 0) > 0;
 
   $("balance").textContent = `${state.satsBalance} sats`;
   $("sats-per-hour").textContent = formatSatsPerHour(
@@ -429,13 +431,13 @@ function render(state) {
   const longer = $("boost-longer");
   const faster = $("boost-faster");
   const stronger = $("boost-stronger");
-  for (const [btn, running] of [
-    [longer, state.durationBoostActive],
-    [faster, state.speedBoostActive],
-    [stronger, state.tapStrengthActive],
+  for (const [btn, running, enabled] of [
+    [longer, state.durationBoostActive, canWatch],
+    [faster, state.speedBoostActive, canWatchSecondary],
+    [stronger, state.tapStrengthActive, canWatchSecondary],
   ]) {
-    btn.className = `boost ${boostVisual(running, canWatch)}`;
-    btn.disabled = !canWatch;
+    btn.className = `boost ${boostVisual(running, enabled)}`;
+    btn.disabled = !enabled;
   }
 
   const untilMs = parseMs(state.autoFillUntil);

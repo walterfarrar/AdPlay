@@ -588,6 +588,14 @@ export async function applyBoost(
       return toPublic(g, t, now);
     }
 
+    // After a cycle reset / idle start, Longer must be watched before Faster or Stronger.
+    if (
+      (boostType === "speed" || boostType === "tap_strength") &&
+      (g.durationBoostCount || 0) <= 0
+    ) {
+      throw Object.assign(new Error("Watch Longer first"), { code: "failed-precondition" });
+    }
+
     spendAdCharge(g, t, now);
 
     const autoUntil = parseIso(g.autoFillUntil);
