@@ -345,7 +345,7 @@ struct ColoredSatsBtcText: View {
             ForEach(Array(glyphs.enumerated()), id: \.offset) { _, glyph in
                 Text(glyph.character)
                     .font(font)
-                    .foregroundStyle(glyph.highlight ? btcSatoshiDigitColor : Color("BrandMuted"))
+                    .foregroundColor(glyph.highlight ? btcSatoshiDigitColor : btcDimDigitColor)
                     .monospacedDigit()
             }
         }
