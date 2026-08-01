@@ -404,6 +404,9 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
     formatBtcQuanta(btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: unitsPerSat))
 }
 
+/// Bitcoin orange — same sRGB as BrandAccent asset (explicit so digit slots can’t miss the catalog color).
+private let btcSatoshiDigitColor = Color(red: 0.969, green: 0.580, blue: 0.102)
+
 /// 1 sat = 100_000 quanta → ones place is power 5. Highlight powers 5…floor(log10(sats·1e5)).
 /// Example: 80 sats → powers 6 and 5 (“80” in 0.00000080…).
 func satoshiDigitMaxPower(satsBalance: Int) -> Int? {
@@ -420,6 +423,11 @@ func satoshiDigitMaxPower(satsBalance: Int) -> Int? {
 func isSatoshiHighlightDigit(power: Int, satsBalance: Int) -> Bool {
     guard let maxPower = satoshiDigitMaxPower(satsBalance: satsBalance) else { return false }
     return power >= 5 && power <= maxPower
+}
+
+/// Prefer completed sats; if the bar just filled, quanta may already include the next sat.
+func satoshiHighlightSats(satsBalance: Int, quanta: Int64) -> Int {
+    max(satsBalance, Int(quanta / 100_000))
 }
 
 /// Upward odometer ticks for place 10^power (carries spin lower wheels a full turn).
@@ -1287,6 +1295,10 @@ struct RollingDigitsLabel: View {
         .system(size: fontSize, weight: .heavy, design: .rounded)
     }
 
+    private var highlightSats: Int {
+        satoshiHighlightSats(satsBalance: satsBalance, quanta: quanta)
+    }
+
     private var glyphs: [BtcGlyph] {
         btcGlyphs(from: fromQuanta ?? quanta, to: quanta)
     }
@@ -1295,19 +1307,20 @@ struct RollingDigitsLabel: View {
         HStack(spacing: 0) {
             ForEach(glyphs) { glyph in
                 if let digit = glyph.digit {
+                    let highlight = isSatoshiHighlightDigit(power: glyph.power, satsBalance: highlightSats)
                     RollingDigitSlot(
                         digit: digit,
                         steps: glyph.steps,
                         rollId: quanta,
-                        font: digitFont,
-                        color: isSatoshiHighlightDigit(power: glyph.power, satsBalance: satsBalance)
-                            ? Color("BrandAccent")
-                            : Color("BrandInk")
+                        font: digitFont
                     )
+                    // Inherit into the slot Text — more reliable inside TimelineView than a Color param.
+                    .foregroundStyle(highlight ? btcSatoshiDigitColor : Color("BrandMuted"))
+                    .id("\(glyph.id)-\(highlight ? "sat" : "dim")")
                 } else if let lit = glyph.literal {
                     Text(lit)
                         .font(digitFont)
-                        .foregroundStyle(Color("BrandInk"))
+                        .foregroundStyle(Color("BrandMuted"))
                         .monospacedDigit()
                 }
             }
@@ -1332,7 +1345,6 @@ private struct RollingDigitSlot: View {
     let steps: Int
     let rollId: Int64
     let font: Font
-    var color: Color = Color("BrandInk")
 
     /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
     @State private var displayed: Int = 0
@@ -1342,7 +1354,6 @@ private struct RollingDigitSlot: View {
     var body: some View {
         Text("\(displayed)")
             .font(font)
-            .foregroundStyle(color)
             .monospacedDigit()
             .onAppear {
                 guard !primed else { return }
