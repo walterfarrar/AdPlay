@@ -1319,11 +1319,9 @@ struct RollingDigitsLabel: View {
                         digit: digit,
                         steps: glyph.steps,
                         rollId: quanta,
-                        font: digitFont
+                        font: digitFont,
+                        color: highlight ? btcSatoshiDigitColor : Color("BrandMuted")
                     )
-                    // Inherit into the slot Text — more reliable inside TimelineView than a Color param.
-                    .foregroundStyle(highlight ? btcSatoshiDigitColor : Color("BrandMuted"))
-                    .id("\(glyph.id)-\(highlight ? "sat" : "dim")")
                 } else if let lit = glyph.literal {
                     Text(lit)
                         .font(digitFont)
@@ -1352,6 +1350,7 @@ private struct RollingDigitSlot: View {
     let steps: Int
     let rollId: Int64
     let font: Font
+    var color: Color = Color("BrandInk")
 
     /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
     @State private var displayed: Int = 0
@@ -1361,6 +1360,7 @@ private struct RollingDigitSlot: View {
     var body: some View {
         Text("\(displayed)")
             .font(font)
+            .foregroundStyle(color)
             .monospacedDigit()
             .onAppear {
                 guard !primed else { return }
