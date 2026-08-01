@@ -1366,16 +1366,10 @@ private func btcOdometerRowWidth(glyphs: [BtcGlyph], font: UIFont) -> CGFloat {
 
 private func btcOdometerUIFont(size: CGFloat) -> UIFont {
     let base = UIFont.systemFont(ofSize: size, weight: .heavy)
-    let rounded = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
-    let mono = rounded.addingAttributes([
-        UIFontDescriptor.AttributeName.featureSettings: [
-            [
-                UIFontDescriptor.FeatureKey.type: kNumberSpacingType,
-                UIFontDescriptor.FeatureKey.selector: kMonospacedNumbersSelector,
-            ],
-        ],
-    ])
-    return UIFont(descriptor: mono, size: size)
+    guard let rounded = base.fontDescriptor.withDesign(.rounded) else { return base }
+    // Prefer rounded; fall back to monospaced-digit system font if needed.
+    let font = UIFont(descriptor: rounded, size: size)
+    return font
 }
 
 /// UIKit label — textColor is respected inside TimelineView where SwiftUI styles can be dropped.
