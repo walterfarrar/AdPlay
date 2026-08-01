@@ -404,42 +404,6 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
     formatBtcQuanta(btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: unitsPerSat))
 }
 
-/// Bitcoin orange — same sRGB as BrandAccent (UIColor so odometer digits can’t lose SwiftUI styles).
-let btcSatoshiDigitUIColor = UIColor(red: 0.969, green: 0.580, blue: 0.102, alpha: 1)
-let btcDimDigitUIColor = UIColor(red: 0.588, green: 0.612, blue: 0.690, alpha: 1) // BrandMuted
-let btcSatoshiDigitColor = Color(uiColor: btcSatoshiDigitUIColor)
-let btcDimDigitColor = Color(uiColor: btcDimDigitUIColor)
-
-/// Highest place power occupied by `satsBalance` when 1 sat = 10^satOnesPower.
-/// Home odometer uses satOnesPower 5 (1e-13 quanta); 8-dp BTC strings use 0.
-func satoshiDigitMaxPower(satsBalance: Int, satOnesPower: Int = 5) -> Int? {
-    guard satsBalance > 0, satOnesPower >= 0 else { return nil }
-    var q = Int64(satsBalance)
-    for _ in 0..<satOnesPower {
-        q *= 10
-    }
-    var power = 0
-    while q >= 10 {
-        q /= 10
-        power += 1
-    }
-    return power
-}
-
-/// Example (8-dp, satOnesPower 0): 80 sats → powers 1 and 0 (“80” in 0.00000080).
-/// Example (odometer, satOnesPower 5): 80 sats → powers 6 and 5 (“80” in 0.00000080…).
-func isSatoshiHighlightDigit(power: Int, satsBalance: Int, satOnesPower: Int = 5) -> Bool {
-    guard let maxPower = satoshiDigitMaxPower(satsBalance: satsBalance, satOnesPower: satOnesPower) else {
-        return false
-    }
-    return power >= satOnesPower && power <= maxPower
-}
-
-/// Prefer completed sats; if the bar just filled, quanta may already include the next sat.
-func satoshiHighlightSats(satsBalance: Int, quanta: Int64) -> Int {
-    max(satsBalance, Int(quanta / 100_000))
-}
-
 /// Upward odometer ticks for place 10^power (carries spin lower wheels a full turn).
 private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> Int {
     var place: Int64 = 1
@@ -457,7 +421,6 @@ private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> 
 private struct BtcGlyph: Identifiable {
     let id: String
     let digit: Int?
-    let power: Int
     let steps: Int
     let literal: String?
 }
@@ -473,12 +436,11 @@ private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
             return BtcGlyph(
                 id: "p\(p)",
                 digit: d,
-                power: p,
                 steps: odometerSteps(from: from, to: to, power: p, toDigit: d),
                 literal: nil
             )
         }
-        return BtcGlyph(id: "lit-\(ch)", digit: nil, power: -1, steps: 0, literal: String(ch))
+        return BtcGlyph(id: "lit-\(ch)", digit: nil, steps: 0, literal: String(ch))
     }
 }
 
@@ -1280,7 +1242,6 @@ struct BtcBalanceView: View {
         VStack(spacing: 8) {
             RollingDigitsLabel(
                 quanta: btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: total),
-                satsBalance: satsBalance,
                 fontSize: 42
             )
             .shadow(color: Color("BrandAccent").opacity(0.28), radius: 14, y: 4)
@@ -1296,35 +1257,39 @@ struct BtcBalanceView: View {
 /// Odometer-style label: each digit always rolls upward; punctuation stays put.
 struct RollingDigitsLabel: View {
     let quanta: Int64
-    var satsBalance: Int = 0
     var fontSize: CGFloat = 42
 
     @State private var fromQuanta: Int64?
 
-    private var highlightSats: Int {
-        satoshiHighlightSats(satsBalance: satsBalance, quanta: quanta)
+    private var digitFont: Font {
+        .system(size: fontSize, weight: .heavy, design: .rounded)
     }
 
     private var glyphs: [BtcGlyph] {
         btcGlyphs(from: fromQuanta ?? quanta, to: quanta)
     }
 
-    private var digitFont: UIFont {
-        btcOdometerUIFont(size: fontSize)
-    }
-
     var body: some View {
-        // Geometry scale like Android — avoid minimumScaleFactor (can flatten per-digit colors).
-        GeometryReader { geo in
-            let row = digitRow
-            let measured = btcOdometerRowWidth(glyphs: glyphs, font: digitFont)
-            let scale = min(1, geo.size.width / max(measured, 1))
-            row
-                .scaleEffect(scale, anchor: .center)
-                .frame(width: geo.size.width, height: fontSize * 1.15, alignment: .center)
+        HStack(spacing: 0) {
+            ForEach(glyphs) { glyph in
+                if let digit = glyph.digit {
+                    RollingDigitSlot(
+                        digit: digit,
+                        steps: glyph.steps,
+                        rollId: quanta,
+                        font: digitFont
+                    )
+                } else if let lit = glyph.literal {
+                    Text(lit)
+                        .font(digitFont)
+                        .foregroundStyle(Color("BrandInk"))
+                        .monospacedDigit()
+                }
+            }
         }
-        .frame(height: fontSize * 1.15)
         .frame(maxWidth: .infinity)
+        .minimumScaleFactor(0.45)
+        .lineLimit(1)
         .onAppear {
             if fromQuanta == nil { fromQuanta = quanta }
         }
@@ -1335,76 +1300,13 @@ struct RollingDigitsLabel: View {
             }
         }
     }
-
-    private var digitRow: some View {
-        HStack(spacing: 0) {
-            ForEach(glyphs) { glyph in
-                if let digit = glyph.digit {
-                    let highlight = isSatoshiHighlightDigit(power: glyph.power, satsBalance: highlightSats)
-                    RollingDigitSlot(
-                        digit: digit,
-                        steps: glyph.steps,
-                        rollId: quanta,
-                        font: digitFont,
-                        color: highlight ? btcSatoshiDigitUIColor : btcDimDigitUIColor
-                    )
-                } else if let lit = glyph.literal {
-                    BtcOdometerUILabel(text: lit, font: digitFont, color: btcDimDigitUIColor)
-                }
-            }
-        }
-    }
-}
-
-private func btcOdometerRowWidth(glyphs: [BtcGlyph], font: UIFont) -> CGFloat {
-    glyphs.reduce(0) { sum, glyph in
-        let text = glyph.literal ?? "0"
-        let w = (text as NSString).size(withAttributes: [.font: font]).width
-        return sum + ceil(w)
-    }
-}
-
-private func btcOdometerUIFont(size: CGFloat) -> UIFont {
-    let base = UIFont.systemFont(ofSize: size, weight: .heavy)
-    guard let rounded = base.fontDescriptor.withDesign(.rounded) else { return base }
-    // Prefer rounded; fall back to monospaced-digit system font if needed.
-    let font = UIFont(descriptor: rounded, size: size)
-    return font
-}
-
-/// UIKit label — textColor is respected inside TimelineView where SwiftUI styles can be dropped.
-private struct BtcOdometerUILabel: UIViewRepresentable {
-    var text: String
-    var font: UIFont
-    var color: UIColor
-
-    func makeUIView(context: Context) -> UILabel {
-        let label = UILabel()
-        label.textAlignment = .center
-        label.setContentHuggingPriority(.required, for: .horizontal)
-        label.setContentCompressionResistancePriority(.required, for: .horizontal)
-        label.setContentHuggingPriority(.required, for: .vertical)
-        label.setContentCompressionResistancePriority(.required, for: .vertical)
-        return label
-    }
-
-    func updateUIView(_ label: UILabel, context: Context) {
-        label.text = text
-        label.font = font
-        label.textColor = color
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
-        uiView.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
-    }
 }
 
 private struct RollingDigitSlot: View {
     let digit: Int
     let steps: Int
     let rollId: Int64
-    let font: UIFont
-    let color: UIColor
+    let font: Font
 
     /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
     @State private var displayed: Int = 0
@@ -1412,7 +1314,10 @@ private struct RollingDigitSlot: View {
     @State private var rollTask: Task<Void, Never>?
 
     var body: some View {
-        BtcOdometerUILabel(text: "\(displayed)", font: font, color: color)
+        Text("\(displayed)")
+            .font(font)
+            .foregroundStyle(Color("BrandInk"))
+            .monospacedDigit()
             .onAppear {
                 guard !primed else { return }
                 displayed = max(0, min(9, digit))

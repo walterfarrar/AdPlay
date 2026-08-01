@@ -646,36 +646,6 @@ internal fun formatBtcQuanta(quanta: Long): String {
 }
 
 /**
- * Highest place power occupied by [satsBalance] when 1 sat = 10^[satOnesPower].
- * Home odometer uses satOnesPower 5 (1e-13 quanta); 8-dp BTC strings use 0.
- */
-internal fun satoshiDigitMaxPower(satsBalance: Int, satOnesPower: Int = 5): Int? {
-    if (satsBalance <= 0 || satOnesPower < 0) return null
-    var q = satsBalance.toLong()
-    repeat(satOnesPower) { q *= 10L }
-    var power = 0
-    while (q >= 10L) {
-        q /= 10L
-        power += 1
-    }
-    return power
-}
-
-/** Example (8-dp, satOnesPower 0): 80 sats → “80” in 0.00000080. */
-internal fun isSatoshiHighlightDigit(
-    power: Int,
-    satsBalance: Int,
-    satOnesPower: Int = 5,
-): Boolean {
-    val maxPower = satoshiDigitMaxPower(satsBalance, satOnesPower) ?: return false
-    return power in satOnesPower..maxPower
-}
-
-/** Prefer completed sats; if the bar just filled, quanta may already include the next sat. */
-internal fun satoshiHighlightSats(satsBalance: Int, quanta: Long): Int =
-    maxOf(satsBalance, (quanta / 100_000L).toInt().coerceAtLeast(0))
-
-/**
  * Upward odometer ticks for place 10^power.
  * Carries count: +10 on the value → ones place ticks 10 (full turn) even if the glyph ends the same.
  */
@@ -694,7 +664,6 @@ private fun odometerSteps(fromQuanta: Long, toQuanta: Long, power: Int, toDigit:
 private data class BtcGlyph(
     val key: String,
     val digit: Int?,
-    val power: Int,
     val steps: Int,
     val literal: String?,
 )
@@ -711,12 +680,11 @@ private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
             BtcGlyph(
                 key = "p$p",
                 digit = d,
-                power = p,
                 steps = odometerSteps(fromQuanta, toQuanta, p, d),
                 literal = null,
             )
         } else {
-            BtcGlyph(key = "lit-$ch", digit = null, power = -1, steps = 0, literal = ch.toString())
+            BtcGlyph(key = "lit-$ch", digit = null, steps = 0, literal = ch.toString())
         }
     }
 }
@@ -725,7 +693,6 @@ private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
 @Composable
 private fun RollingDigitsLabel(
     quanta: Long,
-    satsBalance: Int = 0,
     fontSizeSp: Float = 42f,
     modifier: Modifier = Modifier,
 ) {
@@ -736,12 +703,11 @@ private fun RollingDigitsLabel(
         fromQuanta = quanta
     }
 
-    val highlightSats = satoshiHighlightSats(satsBalance, quanta)
     val text = formatBtcQuanta(quanta)
     val digitStyle = TextStyle(
         fontSize = fontSizeSp.sp,
         fontWeight = FontWeight.Black,
-        color = BrandMuted,
+        color = BrandInk,
         textAlign = TextAlign.Center,
     )
     val measurer = rememberTextMeasurer()
@@ -765,14 +731,11 @@ private fun RollingDigitsLabel(
                 key(glyph.key) {
                     val d = glyph.digit
                     if (d != null) {
-                        val highlight = isSatoshiHighlightDigit(glyph.power, highlightSats)
                         RollingDigitSlot(
                             digit = d,
                             steps = glyph.steps,
                             rollId = quanta,
-                            textStyle = digitStyle.copy(
-                                color = if (highlight) BrandAccent else BrandMuted,
-                            ),
+                            textStyle = digitStyle,
                         )
                     } else {
                         Text(glyph.literal.orEmpty(), style = digitStyle)
@@ -1045,7 +1008,6 @@ private fun SatEarnStage(
                     barProgress = visualProgress,
                     unitsPerSat = unitsPerSat,
                 ),
-                satsBalance = satsBalance,
                 fontSizeSp = 42f,
             )
             Spacer(Modifier.height(2.dp))
