@@ -44,7 +44,7 @@ targets:
         # Required by Google Mobile Ads (AppMeasurement categories) — missing this crashes at launch.
         OTHER_LDFLAGS: $(inherited) -ObjC
       configs:
-        # Optional local override; UI gate is tunables.debugReset (works in TestFlight too).
+        # Compile-gates Skip ads bypass. Release / TestFlight omit this flag.
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG_BYPASS_ADS
     info:

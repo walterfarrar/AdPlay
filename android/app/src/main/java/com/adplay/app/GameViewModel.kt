@@ -296,6 +296,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun debugReset() {
+        if (_ui.value.tunables?.debugReset != true) return
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {

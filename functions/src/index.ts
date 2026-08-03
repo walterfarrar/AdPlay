@@ -9,7 +9,7 @@ import {
   resetEverything,
   tap,
 } from "./game";
-import { validateBolt11, nowIso } from "./util";
+import { validateBolt11, nowIso, debugResetAllowed } from "./util";
 import { DEFAULT_TUNABLES, BoostType } from "./types";
 import { isAdminTokenValid, verifyAdminAction } from "./adminAuth";
 import { notifyWithdrawalRequest } from "./mail";
@@ -169,6 +169,9 @@ export const mockCompleteBoost = onCall(async (request) => {
 });
 
 export const debugReset = onCall(async (request) => {
+  if (!debugResetAllowed()) {
+    throw new HttpsError("failed-precondition", "Debug reset disabled");
+  }
   const uid = requireAuth(request.auth?.uid);
   try {
     return { state: await resetEverything(uid) };

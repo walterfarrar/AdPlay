@@ -31,7 +31,8 @@ struct HomeView: View {
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundStyle(session.bypassAds ? Color("BrandAccent") : Color("BrandMuted"))
                     }
-                    if session.tunables?.debugReset != false {
+                    // Fail-closed: only when server explicitly enables debug reset.
+                    if session.tunables?.debugReset == true {
                         Button("Reset") {
                             Task { await session.debugReset() }
                         }

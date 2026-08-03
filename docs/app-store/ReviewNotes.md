@@ -19,7 +19,7 @@ AdPlay is an idle progress game:
 ## Ads
 - Rewarded ads are optional and skippable via the ad UI (AdMob, with AdsBitvex fallback).
 - Boosts are applied only after our backend credits the completion (`mockCompleteBoost` / future S2S).
-- Reviewers can use the in-app ad bypass when `debugReset` is enabled, or builds can set `adProvider=mock` for simulated rewarded completion.
+- Release / TestFlight builds use production AdMob units. There is no in-app Skip ads / Reset control in store builds.
 
 ## Backend for review
 Provide a reachable API base URL in the build’s `ADPLAY_API_URL` (or default staging).  

@@ -48,7 +48,7 @@ final class NetworkAdService: AdServing {
     }
 
     func showBoostAd(type: BoostType) async throws -> GameState {
-        if DebugAdBypass.isEnabled {
+        if DebugAdBypass.available, DebugAdBypass.isEnabled {
             return try await MockAdService(api: api).showBoostAd(type: type)
         }
         switch await network.attempt() {
@@ -71,7 +71,7 @@ final class WaterfallAdService: AdServing {
     }
 
     func showBoostAd(type: BoostType) async throws -> GameState {
-        if DebugAdBypass.isEnabled {
+        if DebugAdBypass.available, DebugAdBypass.isEnabled {
             return try await MockAdService(api: api).showBoostAd(type: type)
         }
         for network in networks {
@@ -92,7 +92,15 @@ enum AdServiceFactory {
     static func make(api: APIClient, provider: String) -> AdServing {
         switch provider.lowercased() {
         case "mock":
+            #if DEBUG
             return MockAdService(api: api)
+            #else
+            // Never ship the mock provider in Release — fall through to waterfall.
+            return WaterfallAdService(
+                api: api,
+                networks: [AdMobNetwork(), AdsBitvexNetwork()],
+            )
+            #endif
         case "admob":
             return NetworkAdService(api: api, network: AdMobNetwork())
         case "adsbitvex_only":

@@ -1,5 +1,11 @@
 import type { Tunables } from "./types";
 
+/** Mock provider or explicit DEBUG_RESET=1 — off by default for production. */
+export function debugResetAllowed(): boolean {
+  const provider = process.env.AD_PROVIDER ?? "waterfall";
+  return provider === "mock" || process.env.DEBUG_RESET === "1";
+}
+
 export function utcDayKey(resetHourUtc: number, date = new Date()): string {
   const shifted = new Date(date.getTime() - resetHourUtc * 3600_000);
   const y = shifted.getUTCFullYear();

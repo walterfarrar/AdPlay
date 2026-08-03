@@ -103,7 +103,16 @@ object AdServiceFactory {
         val key = provider.lowercase()
         android.util.Log.i("AdPlayAds", "AdServiceFactory provider=$key")
         return when (key) {
-            "mock" -> MockAdService(api)
+            // Never ship the mock provider in release — fall through to waterfall.
+            "mock" -> if (BuildConfig.DEBUG) {
+                MockAdService(api)
+            } else {
+                WaterfallAdService(
+                    api,
+                    app,
+                    listOf(AdMobNetwork(), AdsBitvexNetwork(app)),
+                )
+            }
             "admob" -> NetworkAdService(api, app, AdMobNetwork())
             // Explicit Bitvex-only (skip AdMob). Prefer "waterfall" in production.
             "adsbitvex_only" -> NetworkAdService(api, app, AdsBitvexNetwork(app))

@@ -4,13 +4,13 @@ import UIKit
 
 enum AdMobConfig {
     static let appId = "ca-app-pub-1524015618608684~3874360461"
-    /// Google sample rewarded unit — safe for Debug / TestFlight while debugReset is on.
+    /// Google sample rewarded unit — Debug builds only.
     static let sampleRewardedUnitId = "ca-app-pub-3940256099942544/1712485313"
     static let productionRewardedUnitId = "ca-app-pub-1524015618608684/6403169508"
 
-    /// When true (DEBUG, or server `debugReset`), load Google's sample creatives.
-    /// Codemagic/TestFlight is Release, so we cannot rely on `#if DEBUG` alone.
-    static var useSampleAds: Bool = true
+    /// When true, load Google's sample creatives. Release / TestFlight always use
+    /// the production unit — sample ads are Debug-only.
+    static var useSampleAds: Bool = false
 
     static var rewardedUnitId: String {
         useSampleAds ? sampleRewardedUnitId : productionRewardedUnitId
@@ -142,12 +142,16 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
         }
 
         guard let ad else {
+            #if DEBUG
             print("AdPlayAds: AdMob load failed unit=\(unit)")
+            #endif
             finish(.unavailable)
             return
         }
         guard let root = Self.topViewController() else {
+            #if DEBUG
             print("AdPlayAds: AdMob present failed — no root VC")
+            #endif
             finish(.unavailable)
             return
         }
@@ -175,10 +179,14 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
                 with: unitId,
                 request: Request(),
             )
+            #if DEBUG
             print("AdPlayAds: AdMob loaded unit=\(unitId)")
+            #endif
             return ad
         } catch {
+            #if DEBUG
             print("AdPlayAds: AdMob load error unit=\(unitId) err=\(error.localizedDescription)")
+            #endif
             return nil
         }
     }
@@ -214,7 +222,9 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
         _ ad: FullScreenPresentingAd,
         didFailToPresentFullScreenContentWithError error: Error,
     ) {
+        #if DEBUG
         print("AdPlayAds: AdMob present error \(error.localizedDescription)")
+        #endif
         finish(.unavailable)
     }
 }

@@ -349,7 +349,8 @@ fun HomeScreen(
                                     )
                                 }
                             }
-                            if (ui.tunables?.debugReset != false) {
+                            // Fail-closed: only when server explicitly enables debug reset.
+                            if (ui.tunables?.debugReset == true) {
                                 TextButton(onClick = onDebugReset) {
                                     Text("Reset", color = BrandMuted, fontWeight = FontWeight.SemiBold)
                                 }

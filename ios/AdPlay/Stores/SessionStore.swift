@@ -33,9 +33,9 @@ final class SessionStore: ObservableObject {
     private var skipLerpTask: Task<Void, Never>?
     private static let skipLerpSeconds: TimeInterval = 3
 
-    /// Same gate as Reset — server `debugReset` (TestFlight/Release included).
+    /// Debug builds only (`DEBUG_BYPASS_ADS`). Never available in Release / TestFlight.
     var bypassAdsAvailable: Bool {
-        tunables?.debugReset != false
+        DebugAdBypass.available
     }
 
     func start() async {
@@ -93,13 +93,12 @@ final class SessionStore: ObservableObject {
         setServerState(s, force: force)
     }
 
-    /// TestFlight is Release (`#if DEBUG` is false). Use Google sample units while
-    /// `debugReset` is on so AdMob fills instead of falling through to AdsBitvex.
+    /// Sample creatives in Debug only. Release / TestFlight always use production units.
     private func configureAdMobUnit() {
         #if DEBUG
         let useSample = true
         #else
-        let useSample = tunables?.debugReset != false
+        let useSample = false
         #endif
         AdMobRewardedPresenter.shared.configure(useSampleAds: useSample)
     }
@@ -303,6 +302,7 @@ final class SessionStore: ObservableObject {
     }
 
     func debugReset() async {
+        guard tunables?.debugReset == true else { return }
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }

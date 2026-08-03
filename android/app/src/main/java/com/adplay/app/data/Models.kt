@@ -80,8 +80,8 @@ data class Tunables(
     val dailySatsEarnCap: Int = 0,
     val minWithdrawSats: Int = 100,
     val resetHourUtc: Int = 0,
-    val adProvider: String = "mock",
-    val debugReset: Boolean = true,
+    val adProvider: String = "waterfall",
+    val debugReset: Boolean = false,
 )
 data class Withdrawal(
     val id: String,

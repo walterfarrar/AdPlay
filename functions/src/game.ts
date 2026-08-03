@@ -7,6 +7,7 @@ import {
   DEFAULT_TUNABLES,
 } from "./types";
 import {
+  debugResetAllowed,
   extendIsoBySeconds,
   nowIso,
   parseIso,
@@ -532,7 +533,11 @@ export async function getPublicState(uid: string): Promise<{
   const t = await loadTunables();
   return {
     state,
-    tunables: { ...t, adProvider: "waterfall", debugReset: true },
+    tunables: {
+      ...t,
+      adProvider: process.env.AD_PROVIDER ?? "waterfall",
+      debugReset: debugResetAllowed(),
+    },
   };
 }
 
