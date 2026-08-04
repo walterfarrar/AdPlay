@@ -30,6 +30,8 @@ Admin payout tooling is **not** exposed in the iOS binary.
 - No real-money gambling or slots.
 - No get-rich claims in metadata.
 
-## Privacy
-Privacy policy URL: host `docs/app-store/privacy-policy.html` (or your production URL).  
-Account deletion: contact support / in-app request (v1: wipe via backend user delete endpoint to be exposed before launch).
+## Privacy / store URLs (hosted on fullyversed.com, unlinked from main site nav/footer)
+- Privacy: https://fullyversed.com/adplay/privacy  
+- Support: https://fullyversed.com/adplay/support  
+- Marketing: https://fullyversed.com/adplay  
+Account deletion: email support (see Support page) / in-app request when Settings ships.
