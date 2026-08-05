@@ -27,6 +27,7 @@ const callTap = httpsCallable(functions, "gameTap");
 const callBoost = httpsCallable(functions, "mockCompleteBoost");
 const callReset = httpsCallable(functions, "debugReset");
 const callWithdraw = httpsCallable(functions, "requestWithdrawal");
+const callMyWithdrawals = httpsCallable(functions, "myWithdrawals");
 
 /** @type {any} */
 let serverState = null;
@@ -41,8 +42,28 @@ let tunables = null;
 let anchorMs = 0;
 let lastUpdatedAt = null;
 let windowEndHandled = false;
-let tickerId = null;
+let rafId = 0;
+let refreshTimerId = null;
 let loading = false;
+let lastRenderedSats = null;
+let wheelFlashUntil = 0;
+let lastCelebrateAt = 0;
+
+/** Local continuous / knocker clocks (mirror iOS SatEarnStage). */
+let displayAnchorProgress = 0;
+let displayAnchorMs = 0;
+let knockerAnchorProgress = 0;
+let knockerAnchorMs = 0;
+
+const KNOCKER = {
+  pivot: { x: 350, y: 78 },
+  contact: { x: 317.1, y: 140.3 },
+  strikePoint: { x: 312, y: 150 },
+  sweepDeg: 42,
+  bounce: 0.42,
+  windUp: 0.07,
+  impactFade: 0.16,
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -126,6 +147,141 @@ function formatSatsPerHour(fillRate, unitsPerSat, autoActive) {
   return `${rate.toFixed(1)} sats/h`;
 }
 
+/** Fixed-point 1e-13 BTC quanta. 1 sat = 1e-8 BTC = 100_000 quanta. */
+function btcQuanta(satsBalance, barProgress, unitsPerSat) {
+  const units = Math.max(1, unitsPerSat | 0);
+  const progressMilli = Math.round(
+    Math.min(units, Math.max(0, barProgress)) * 1000,
+  );
+  const clamped = Math.min(units * 1000, Math.max(0, progressMilli));
+  const denom = units * 1000;
+  const fracQuanta = Math.floor((clamped * 100_000 + denom / 2) / denom);
+  return BigInt(satsBalance) * 100_000n + BigInt(fracQuanta);
+}
+
+function formatBtcQuanta(quanta) {
+  const whole = quanta / 10_000_000_000_000n;
+  const frac = quanta % 10_000_000_000_000n;
+  return `${whole}.${frac.toString().padStart(13, "0")}`;
+}
+
+function formatBtcAmount(satsBalance, barProgress, unitsPerSat) {
+  return formatBtcQuanta(btcQuanta(satsBalance, barProgress, unitsPerSat));
+}
+
+/** Whole-sat balances as BTC (8 dp). */
+function formatSatsAsBtc(sats) {
+  return (Number(sats) * 1e-8).toFixed(8);
+}
+
+function parseBtcToSats(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const btc = Number(raw);
+  if (!Number.isFinite(btc) || btc <= 0) return null;
+  const sats = Math.round(btc * 1e8);
+  if (sats <= 0 || !Number.isFinite(sats)) return null;
+  return sats;
+}
+
+function filterBtcInput(raw) {
+  let result = "";
+  let sawDot = false;
+  for (const ch of String(raw)) {
+    if (ch >= "0" && ch <= "9") result += ch;
+    else if (ch === "." && !sawDot) {
+      sawDot = true;
+      result += ch;
+    }
+  }
+  const dot = result.indexOf(".");
+  if (dot >= 0 && result.length - dot - 1 > 8) {
+    result = result.slice(0, dot + 1 + 8);
+  }
+  return result;
+}
+
+function easeOutQuad(t) {
+  const x = Math.min(1, Math.max(0, t));
+  return 1 - (1 - x) * (1 - x);
+}
+
+function easeInOutCubic(t) {
+  const x = Math.min(1, Math.max(0, t));
+  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+}
+
+function knockerStrikeDuration(tapPower) {
+  return Math.max(0.07, 0.16 / Math.max(tapPower, 0.01));
+}
+
+function knockerImpactScale(tapPower) {
+  const p = Math.min(Math.max(tapPower, 1), 10);
+  return 1 + ((p - 1) / 9) * 1.25;
+}
+
+/** Strike cycle for the auto tapper — same segments as iOS. */
+function knockerPose(displayProgress, tapsPerSec, tapPower, autoActive) {
+  if (!autoActive || tapsPerSec <= 0) return { arm: 0, impact: 0, phase: 0 };
+  const power = Math.max(tapPower, 0.01);
+  const tapIndex = displayProgress / power;
+  const period = 1 / tapsPerSec;
+  const phase = tapIndex - Math.floor(tapIndex);
+
+  const strike = Math.min(0.34, Math.max(0.06, knockerStrikeDuration(tapPower) / period));
+  const recoil = Math.min(0.2, Math.max(0.05, 0.07 / period));
+  const windUp = Math.max(Math.min(0.09, (1 - strike - recoil) * 0.2), 0.0001);
+  const reset = Math.max(1 - strike - recoil - windUp, 0.001);
+
+  const fadeSec = Math.min(KNOCKER.impactFade, period * 0.55);
+  const impact = Math.max(0, 1 - (phase * period) / fadeSec) ** 1.7;
+
+  let arm;
+  if (phase < recoil) {
+    arm = 1 - KNOCKER.bounce * easeOutQuad(phase / recoil);
+  } else if (phase < recoil + reset) {
+    arm = (1 - KNOCKER.bounce) * (1 - easeInOutCubic((phase - recoil) / reset));
+  } else if (phase < 1 - strike) {
+    arm = -KNOCKER.windUp * easeOutQuad((phase - recoil - reset) / windUp);
+  } else {
+    const t = Math.min(1, (phase - (1 - strike)) / strike);
+    arm = -KNOCKER.windUp + (1 + KNOCKER.windUp) * t ** 2.3;
+  }
+  return { arm, impact, phase };
+}
+
+function displayedBarProgress(progress, total, fillRate, autoActive, nowMs) {
+  if (!autoActive || fillRate <= 0 || total <= 0) return progress;
+  const elapsed = (nowMs - displayAnchorMs) / 1000;
+  return Math.min(total, displayAnchorProgress + fillRate * elapsed);
+}
+
+function struckSyncedProgress(
+  continuous,
+  knockerProgress,
+  tapPower,
+  autoActive,
+  fillRate,
+  total,
+) {
+  if (!autoActive || fillRate <= 0) return continuous;
+  const power = Math.max(tapPower, 0.01);
+  if (knockerProgress > continuous + Math.max(power * 2, 5)) return continuous;
+  const knockerHits = Math.floor(knockerProgress / power + 1e-9);
+  const continuousHits = Math.floor(continuous / power + 1e-9);
+  const hits = Math.max(knockerHits, continuousHits);
+  return Math.min(total, hits * power);
+}
+
+function syncDisplayAnchors(progress, { resetKnocker = false, wrap = false } = {}) {
+  displayAnchorProgress = progress;
+  displayAnchorMs = Date.now();
+  if (resetKnocker || wrap) {
+    knockerAnchorProgress = progress;
+    knockerAnchorMs = Date.now();
+  }
+}
+
 /** Local display of banked charges + regen countdown from the server anchor. */
 function projectChargeBank(initialCharges, initialRegen, nextAt, maxCharges, nowMs) {
   const regenSec = tunables?.adRegenSeconds ?? 0;
@@ -169,7 +325,6 @@ function project(s, nowMs) {
   const cooldown = Math.max(0, Math.ceil(s.adCooldownSecondsLeft - elapsedSec));
   const untilMs = parseMs(s.autoFillUntil);
   const autoActive = Boolean(s.autoFillActive && untilMs != null && untilMs > nowMs);
-  // When the shared auto window just ended, show a full ad bank until refresh lands.
   const windowExpired = Boolean(s.autoFillActive && !autoActive);
   const maxCharges = tunables?.adsPerCycle ?? Math.max(s.adsRemainingToday ?? 0, 1);
   let adsLeft;
@@ -193,7 +348,6 @@ function project(s, nowMs) {
   let skipLeft;
   let skipRegenLeft;
   if (typeof skipMax === "number" && skipMax < 0) {
-    // Disabled
     skipLeft = 0;
     skipRegenLeft = 0;
   } else if (windowExpired) {
@@ -301,8 +455,13 @@ function publishOptimisticTaps() {
   if (!confirmedState) return;
   let s = confirmedState;
   for (let i = 0; i < unackedTaps; i++) s = applyingManualTap(s);
+  const prevProgress = serverState?.progress ?? s.progress;
   serverState = s;
-  render(project(s, Date.now()));
+  if (s.progress + 5 < prevProgress) {
+    syncDisplayAnchors(s.progress, { wrap: true });
+  } else {
+    syncDisplayAnchors(s.progress);
+  }
 }
 
 async function ensureTapFlush() {
@@ -318,11 +477,9 @@ async function ensureTapFlush() {
         if (next.updatedAt) lastUpdatedAt = next.updatedAt;
         confirmedState = next;
         unackedTaps = Math.max(0, unackedTaps - 1);
-        // Confirmed snapshot already includes auto catch-up through now.
         anchorMs = Date.now();
         windowEndHandled = false;
         publishOptimisticTaps();
-        ensureTicker();
       } catch {
         if (generation !== tapFlushGeneration) return;
         unackedTaps = 0;
@@ -344,41 +501,62 @@ function applyState(state, force = false) {
   const incoming = state.updatedAt ?? null;
   if (!force && incoming && lastUpdatedAt && incoming < lastUpdatedAt) return;
   if (incoming) lastUpdatedAt = incoming;
+  const prev = serverState;
   tapFlushGeneration += 1;
   unackedTaps = 0;
   confirmedState = state;
   serverState = state;
   anchorMs = Date.now();
   windowEndHandled = false;
-  render(project(serverState, Date.now()));
-  ensureTicker();
+
+  const wrap = Boolean(prev && state.progress + 5 < (prev.progress ?? 0));
+  const fillChanged = Boolean(prev && prev.fillRate !== state.fillRate);
+  const powerChanged = Boolean(prev && prev.tapPower !== state.tapPower);
+  const autoStarted = Boolean(state.autoFillActive && (!prev || !prev.autoFillActive));
+  syncDisplayAnchors(state.progress, {
+    resetKnocker: wrap || fillChanged || powerChanged || autoStarted || !prev,
+    wrap,
+  });
+
+  if (lastRenderedSats != null && state.satsBalance > lastRenderedSats) {
+    celebrateSatEarn(state.satsBalance - lastRenderedSats);
+  }
+  lastRenderedSats = state.satsBalance;
+  ensureLoop();
 }
 
-function ensureTicker() {
-  if (tickerId != null) return;
-  tickerId = window.setInterval(async () => {
-    if (!serverState) return;
-    const now = Date.now();
-    const projected = project(serverState, now);
-    render(projected);
-
-    if (serverState.autoFillActive && !windowEndHandled) {
-      const untilMs = parseMs(serverState.autoFillUntil);
-      if (untilMs != null && now >= untilMs) {
-        windowEndHandled = true;
-        try {
-          await refresh(true);
-        } catch {
-          /* ignore */
+function ensureLoop() {
+  if (!rafId) {
+    const tick = (now) => {
+      rafId = requestAnimationFrame(tick);
+      if (!serverState) return;
+      const projected = project(serverState, Date.now());
+      // Detect sat earn from local projection (auto fill completing a bar).
+      if (lastRenderedSats != null && projected.satsBalance > lastRenderedSats) {
+        celebrateSatEarn(projected.satsBalance - lastRenderedSats);
+      }
+      lastRenderedSats = projected.satsBalance;
+      renderFrame(projected, now);
+    };
+    rafId = requestAnimationFrame(tick);
+  }
+  if (refreshTimerId == null) {
+    refreshTimerId = window.setInterval(async () => {
+      if (!serverState) return;
+      const now = Date.now();
+      if (serverState.autoFillActive && !windowEndHandled) {
+        const untilMs = parseMs(serverState.autoFillUntil);
+        if (untilMs != null && now >= untilMs) {
+          windowEndHandled = true;
+          try {
+            await refresh(true);
+          } catch {
+            /* ignore */
+          }
         }
       }
-    }
-
-    if (!projected.autoFillActive && projected.adCooldownSecondsLeft <= 0) {
-      window.clearInterval(tickerId);
-      tickerId = null;
-    }
-  }, 1000);
+    }, 1000);
+  }
 }
 
 function boostVisual(running, enabled) {
@@ -388,41 +566,194 @@ function boostVisual(running, enabled) {
   return "locked";
 }
 
-function render(state) {
-  if (!state) return;
-  const t = tunables;
-  const canWatch =
-    !loading && state.adsRemainingToday > 0 && state.adCooldownSecondsLeft === 0;
-  // Free starter ad while idle — does not spend from the boost bank.
-  const canActivate =
-    !loading && !state.autoFillActive && state.adCooldownSecondsLeft === 0;
-  // Faster / Stronger unlock once Auto Tapper is running.
-  const canWatchSecondary = canWatch && state.autoFillActive;
+function renderRateLine(autoActive, fillRate, tapPower) {
+  const power = tapPower > 0 ? tapPower : 1;
+  const el = $("rate-line");
+  if (!autoActive || fillRate <= 0) {
+    if (power > 1.000000001) {
+      el.innerHTML =
+        `<span class="muted-part">Idle</span>` +
+        `<span class="muted-part"> · </span>` +
+        `<span class="power-part">${power.toFixed(2)} power</span>`;
+    } else {
+      el.innerHTML = `<span class="muted-part">Idle</span>`;
+    }
+    return;
+  }
+  const tps = fillRate / power;
+  el.innerHTML =
+    `<span class="speed-part">${tps.toFixed(2)} taps/s</span>` +
+    `<span class="muted-part"> × </span>` +
+    `<span class="power-part">${power.toFixed(2)} power</span>` +
+    `<span class="muted-part"> = </span>` +
+    `<span class="fill-part">${fillRate.toFixed(2)}/s</span>`;
+}
 
-  $("balance").textContent = `${state.satsBalance} sats`;
-  $("sats-per-hour").textContent = formatSatsPerHour(
-    state.fillRate,
-    state.unitsPerSat,
-    state.autoFillActive
+function updateKnocker(pose, tapPower, autoActive) {
+  const knocker = $("knocker");
+  knocker.classList.toggle("idle", !autoActive);
+  const strikeAngle = Math.atan2(
+    KNOCKER.contact.y - KNOCKER.pivot.y,
+    KNOCKER.contact.x - KNOCKER.pivot.x,
   );
-  $("bar-count").textContent = `${Math.floor(state.progress)} / ${state.unitsPerSat} taps`;
+  const armAngle = strikeAngle - (KNOCKER.sweepDeg * Math.PI) / 180 * (1 - pose.arm);
+  const hitScale = autoActive ? knockerImpactScale(tapPower) : 1;
+  const impact = autoActive ? pose.impact : 0;
+  const kickX = -Math.cos(strikeAngle) * impact * 3 * hitScale;
+  const kickY = -Math.sin(strikeAngle) * impact * 3 * hitScale;
 
-  const tps = tapsPerSecond(state.fillRate, state.tapPower);
-  const rateEl = $("bar-rate");
-  if (state.autoFillActive && tps > 0) {
-    rateEl.textContent = `${tps.toFixed(2)} taps/s`;
-    rateEl.style.color = "var(--speed)";
-  } else {
-    rateEl.textContent = "";
+  const mount = $("knocker-mount");
+  mount.setAttribute("transform", `translate(${kickX} ${kickY})`);
+
+  const arm = $("knocker-arm");
+  const deg = (armAngle * 180) / Math.PI;
+  arm.setAttribute(
+    "transform",
+    `translate(${KNOCKER.pivot.x} ${KNOCKER.pivot.y}) rotate(${deg})`,
+  );
+
+  const gearDeg = pose.phase * 360;
+  $("drive-gear").setAttribute(
+    "transform",
+    `translate(346 58) rotate(${gearDeg})`,
+  );
+  $("idler-gear").setAttribute(
+    "transform",
+    `translate(364 58) rotate(${-gearDeg * (11 / 7)})`,
+  );
+
+  const flash = $("impact-flash");
+  const r = impact > 0.05 ? 6 + impact * 10 * hitScale : 0;
+  flash.setAttribute("cx", String(KNOCKER.strikePoint.x));
+  flash.setAttribute("cy", String(KNOCKER.strikePoint.y));
+  flash.setAttribute("r", String(r));
+  flash.style.opacity = String(impact * 0.85);
+}
+
+function celebrateSatEarn(gained) {
+  const now = Date.now();
+  if (now - lastCelebrateAt < 400) return;
+  lastCelebrateAt = now;
+  wheelFlashUntil = now + 700;
+  $("btn-redeem").classList.add("glow");
+  window.setTimeout(() => $("btn-redeem").classList.remove("glow"), 900);
+
+  const wheel = $("sat-wheel");
+  const redeem = $("btn-redeem");
+  const wr = wheel.getBoundingClientRect();
+  const rr = redeem.getBoundingClientRect();
+  const fromX = wr.left + wr.width / 2;
+  const fromY = wr.top + 12;
+  const toX = rr.left + rr.width / 2;
+  const toY = rr.top + rr.height / 2;
+  const layer = $("sat-particles");
+  const count = Math.min(8, Math.max(3, gained));
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "sat-particle";
+    const ox = (Math.random() - 0.5) * 24;
+    const oy = (Math.random() - 0.5) * 16;
+    el.style.left = `${fromX + ox}px`;
+    el.style.top = `${fromY + oy}px`;
+    const dx = toX - fromX - ox;
+    const dy = toY - fromY - oy;
+    el.animate(
+      [
+        { transform: "translate(0,0) scale(1)", opacity: 1 },
+        {
+          transform: `translate(${dx * 0.45}px, ${dy * 0.35 - 40}px) scale(1.1)`,
+          opacity: 1,
+          offset: 0.45,
+        },
+        { transform: `translate(${dx}px, ${dy}px) scale(0.35)`, opacity: 0 },
+      ],
+      { duration: 850 + i * 40, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)", fill: "forwards" },
+    );
+    layer.appendChild(el);
+    window.setTimeout(() => el.remove(), 1000);
+  }
+}
+
+function adsFooterText(state) {
+  const adsMax = tunables?.adsPerCycle ?? 10;
+  const regenLeft = state.adRegenSecondsLeft ?? 0;
+  const adRegenSeconds = tunables?.adRegenSeconds ?? 0;
+  if (state.adsRemainingToday <= 0) {
+    if (regenLeft > 0) return `Next Boost Ad in ${formatCountdown(regenLeft)}`;
+    if (adRegenSeconds <= 0) return "Ads refill when Auto ends";
+    return "No ads available";
+  }
+  if (state.adCooldownSecondsLeft > 0) {
+    return `Next Boost Ad in ${state.adCooldownSecondsLeft}s · ${state.adsRemainingToday}/${adsMax} ads`;
+  }
+  if (state.adsRemainingToday < adsMax && regenLeft > 0) {
+    return `${state.adsRemainingToday}/${adsMax} ads · +1 in ${formatCountdown(regenLeft)}`;
+  }
+  return `${state.adsRemainingToday}/${adsMax} ads`;
+}
+
+function renderFrame(state, _rafNow) {
+  if (!state) return;
+  const nowMs = Date.now();
+  const t = tunables;
+  const total = Math.max(1, state.unitsPerSat || 1);
+  const fillRate = state.fillRate ?? 0;
+  const tapPower = state.tapPower > 0 ? state.tapPower : 1;
+  const autoActive = Boolean(state.autoFillActive);
+
+  // Mirror iOS onChange(progress): re-anchor when the projected bar wraps.
+  if (state.progress + 5 < displayAnchorProgress) {
+    syncDisplayAnchors(state.progress, { wrap: true });
   }
 
-  const frac = state.unitsPerSat > 0 ? state.progress / state.unitsPerSat : 0;
-  $("progress-fill").style.width = `${Math.max(4, Math.min(100, frac * 100))}%`;
+  const continuous = displayedBarProgress(
+    state.progress,
+    total,
+    fillRate,
+    autoActive,
+    nowMs,
+  );
+  const knockerProgress =
+    autoActive && fillRate > 0
+      ? knockerAnchorProgress + fillRate * ((nowMs - knockerAnchorMs) / 1000)
+      : knockerAnchorProgress;
+  const display = struckSyncedProgress(
+    continuous,
+    knockerProgress,
+    tapPower,
+    autoActive,
+    fillRate,
+    total,
+  );
+  const fraction = Math.min(1, Math.max(0, display / total));
+  const tps = tapsPerSecond(fillRate, tapPower);
+  const pose = knockerPose(knockerProgress, tps, tapPower, autoActive);
+
+  $("btc-amount").textContent = formatBtcAmount(state.satsBalance, display, total);
+  $("sats-per-hour").textContent = formatSatsPerHour(fillRate, total, autoActive);
+  $("tap-count").textContent = `${Math.floor(display)} / ${total} taps`;
+  renderRateLine(autoActive, fillRate, tapPower);
+
+  const arc = $("wheel-arc");
+  arc.setAttribute("stroke-dasharray", `${fraction * 100} 100`);
+  $("wheel-face").style.transform = `rotate(${fraction * 360}deg)`;
+
+  const flashing = nowMs < wheelFlashUntil;
+  $("sat-wheel").classList.toggle("flashing", flashing);
+  $("wheel-flash").classList.toggle("hidden", !flashing);
+
+  updateKnocker(pose, tapPower, autoActive);
 
   $("taps-left").textContent =
     state.tapsRemaining > 0
-      ? `Tap the bar · ${state.tapsRemaining} taps left today`
+      ? `Tap the wheel · ${state.tapsRemaining} taps left today`
       : "0 taps left today";
+
+  const canWatch =
+    !loading && state.adsRemainingToday > 0 && state.adCooldownSecondsLeft === 0;
+  const canActivate =
+    !loading && !state.autoFillActive && state.adCooldownSecondsLeft === 0;
+  const canWatchSecondary = canWatch && state.autoFillActive;
 
   $("boost-caption").textContent = state.autoFillActive
     ? "Watch an Ad for a Boost"
@@ -460,26 +791,9 @@ function render(state) {
       : 0;
   $("auto-timer").textContent = left > 0 ? `Auto ${formatCountdown(left)}` : "\u00a0";
 
-  const regenLeft = state.adRegenSecondsLeft ?? 0;
-  const adRegenSeconds = t?.adRegenSeconds ?? 0;
-  let footer;
-  if (state.adsRemainingToday <= 0) {
-    if (regenLeft > 0) {
-      footer = `Next Boost Ad in ${formatCountdown(regenLeft)}`;
-    } else if (adRegenSeconds <= 0) {
-      footer = "Ads refill when Auto ends";
-    } else {
-      footer = "No ads available";
-    }
-  } else if (state.adCooldownSecondsLeft > 0) {
-    footer = `Next Boost Ad in ${state.adCooldownSecondsLeft}s · ${state.adsRemainingToday} ads left`;
-  } else {
-    footer = `${state.adsRemainingToday} ads left this run`;
-  }
-  $("ads-footer").textContent = footer;
+  $("ads-footer").textContent = adsFooterText(state);
 
   const skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0;
-  // skipAdsPerCycle < 0 disables Skip Time entirely.
   const skipEnabled = (t?.skipAdsPerCycle ?? 10) >= 0;
   const skipVisible =
     skipEnabled &&
@@ -507,9 +821,12 @@ function render(state) {
   }
 
   $("btn-reset").classList.toggle("hidden", !t?.debugReset);
-  $("redeem-amount").min = String(state.minWithdrawSats ?? 100);
-  if (!$("redeem-amount").value) {
-    $("redeem-amount").value = String(state.minWithdrawSats ?? 100);
+
+  // Redeem panel live balance (when open).
+  if ($("redeem-dialog").open) {
+    $("redeem-balance").textContent = formatSatsAsBtc(state.satsBalance);
+    $("redeem-min").textContent =
+      `Minimum withdrawal: ${formatSatsAsBtc(state.minWithdrawSats ?? 100)} BTC`;
   }
 }
 
@@ -537,7 +854,7 @@ async function withBusy(fn) {
   }
 }
 
-$("progress-bar").addEventListener("click", () => {
+function doTap() {
   if (!confirmedState) return;
   let probe = confirmedState;
   for (let i = 0; i < unackedTaps; i++) probe = applyingManualTap(probe);
@@ -545,11 +862,12 @@ $("progress-bar").addEventListener("click", () => {
   unackedTaps += 1;
   publishOptimisticTaps();
   void ensureTapFlush();
-});
+}
+
+$("sat-wheel").addEventListener("click", doTap);
 
 async function watchBoost(boostType) {
   await withBusy(async () => {
-    // Browser build uses mockCompleteBoost (same as Android debug bypass).
     const result = await callBoost({ boostType });
     applyState(result.data.state, true);
   });
@@ -571,9 +889,52 @@ $("btn-reset").addEventListener("click", async () => {
   });
 });
 
+async function loadRedeemHistory() {
+  const host = $("redeem-history");
+  try {
+    const result = await callMyWithdrawals();
+    const list = result.data?.withdrawals ?? result.data ?? [];
+    const rows = Array.isArray(list) ? list : [];
+    if (rows.length === 0) {
+      host.innerHTML = `<p class="muted">No withdrawals yet</p>`;
+      return;
+    }
+    host.innerHTML = rows
+      .map((w) => {
+        const sats = w.amountSats ?? w.amount_sats ?? w.sats ?? 0;
+        const status = w.status ?? "unknown";
+        const created = w.createdAt ?? w.created_at ?? "";
+        return (
+          `<div class="history-row">` +
+          `<strong>${formatSatsAsBtc(sats)} BTC · ${status}</strong>` +
+          (created ? `<span>${created}</span>` : "") +
+          `</div>`
+        );
+      })
+      .join("");
+  } catch {
+    host.innerHTML = `<p class="muted">Couldn’t load history</p>`;
+  }
+}
+
 $("btn-redeem").addEventListener("click", () => {
   $("redeem-error").hidden = true;
+  $("redeem-success").hidden = true;
+  if (serverState) {
+    $("redeem-balance").textContent = formatSatsAsBtc(serverState.satsBalance);
+    $("redeem-min").textContent =
+      `Minimum withdrawal: ${formatSatsAsBtc(serverState.minWithdrawSats ?? 100)} BTC`;
+    if (!$("redeem-amount").value) {
+      $("redeem-amount").value = formatSatsAsBtc(serverState.minWithdrawSats ?? 100);
+    }
+  }
   $("redeem-dialog").showModal();
+  void loadRedeemHistory();
+});
+
+$("redeem-amount").addEventListener("input", () => {
+  const filtered = filterBtcInput($("redeem-amount").value);
+  if (filtered !== $("redeem-amount").value) $("redeem-amount").value = filtered;
 });
 
 $("btn-redeem-howto").addEventListener("click", () => {
@@ -588,16 +949,25 @@ $("redeem-form").addEventListener("submit", async (ev) => {
   const submitter = ev.submitter;
   if (submitter?.value === "cancel") return;
   ev.preventDefault();
-  const amountSats = Number($("redeem-amount").value);
+  const amountSats = parseBtcToSats($("redeem-amount").value);
   const bolt11 = String($("redeem-bolt11").value || "").trim();
   const err = $("redeem-error");
+  const ok = $("redeem-success");
   err.hidden = true;
+  ok.hidden = true;
+  if (amountSats == null) {
+    err.hidden = false;
+    err.textContent = "Enter a valid BTC amount";
+    return;
+  }
   try {
     setLoading(true);
     const result = await callWithdraw({ amountSats, bolt11 });
     applyState(result.data.state, true);
-    $("redeem-dialog").close();
     $("redeem-bolt11").value = "";
+    $("redeem-amount").value = "";
+    ok.hidden = false;
+    await loadRedeemHistory();
   } catch (e) {
     err.hidden = false;
     err.textContent = e?.message || String(e);
