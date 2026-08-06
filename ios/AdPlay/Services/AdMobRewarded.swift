@@ -30,6 +30,8 @@ enum AdMobBootstrap {
             return
         }
         let task = Task { @MainActor in
+            // ATT before Mobile Ads init so personalized / tracking-capable ads match ASC labels.
+            await AppTracking.requestIfNeeded()
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 MobileAds.shared.start { _ in
                     cont.resume()

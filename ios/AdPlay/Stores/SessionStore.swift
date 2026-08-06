@@ -46,10 +46,15 @@ final class SessionStore: ObservableObject {
             GameReminderScheduler.requestPermissionIfNeeded()
             try await refresh(force: true)
             adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "waterfall")
-            configureAdMobUnit()
             isReady = true
             foreground = true
             ensureTicker()
+            // Warm AdMob after home is up so the ATT prompt is not under the splash.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard self.foreground, self.isReady else { return }
+                self.configureAdMobUnit()
+            }
         } catch {
             isReady = false
             errorMessage = error.localizedDescription
@@ -94,7 +99,9 @@ final class SessionStore: ObservableObject {
     }
 
     /// Sample creatives in Debug only. Release / TestFlight always use production units.
+    /// Skipped until `isReady` so ATT is not shown under the splash.
     private func configureAdMobUnit() {
+        guard isReady else { return }
         #if DEBUG
         let useSample = true
         #else
@@ -167,6 +174,8 @@ final class SessionStore: ObservableObject {
             guard let adService else {
                 throw APIError.message("Ad service not ready")
             }
+            // Ensure ATT ran even if preload had not finished yet.
+            await AppTracking.requestIfNeeded()
             let from = state
             let to = try await adService.showBoostAd(type: boost)
             isLoading = false

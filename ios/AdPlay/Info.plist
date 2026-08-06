@@ -40,6 +40,8 @@
 	</dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>AdPlay uses this identifier to show relevant rewarded ads and measure ad performance.</string>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-1524015618608684~3874360461</string>
 	<key>SKAdNetworkItems</key>

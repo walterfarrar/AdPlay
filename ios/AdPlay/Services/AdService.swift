@@ -128,7 +128,8 @@ final class AdsBitvexPresenter: NSObject, WKScriptMessageHandler, WKNavigationDe
     private var host: UIViewController?
 
     func present() async -> Bool {
-        await withCheckedContinuation { cont in
+        await AppTracking.requestIfNeeded()
+        return await withCheckedContinuation { cont in
             self.continuation?.resume(returning: false)
             self.continuation = cont
             presentWebAd()

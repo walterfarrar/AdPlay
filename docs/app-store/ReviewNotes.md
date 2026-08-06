@@ -21,6 +21,11 @@ AdPlay is an idle progress game:
 - Boosts are applied only after our backend credits the completion (`mockCompleteBoost` / future S2S).
 - Release / TestFlight builds use production AdMob units. There is no in-app Skip ads / Reset control in store builds.
 
+## App Tracking Transparency
+- The system ATT prompt appears **shortly after the home screen loads** (before AdMob initializes / preloads a rewarded ad), and again is ensured if the player taps a boost before that warm-up finishes.
+- Usage string: “AdPlay uses this identifier to show relevant rewarded ads and measure ad performance.”
+- To re-test on device: Settings → Privacy & Security → Tracking → enable Tracking, then delete and reinstall AdPlay (or reset the app’s tracking permission).
+
 ## Backend for review
 Provide a reachable API base URL in the build’s `ADPLAY_API_URL` (or default staging).  
 Admin payout tooling is **not** exposed in the iOS binary.
