@@ -5,19 +5,63 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Soft glow underlay -->
+    <!-- Soft orange glow behind the mark -->
     <path
-        android:fillAlpha="0.28"
-        android:fillColor="#FF7A1E"
-        android:pathData="M64,16 L32,61 L49,61 L43,92 L76,46 L59,46 Z" />
-    <!-- Lightning bolt with orange gradient -->
-    <path android:pathData="M64,18 L34,60 L50,60 L44,90 L74,48 L58,48 Z">
+        android:fillAlpha="0.30"
+        android:pathData="M54,54 m-36,0 a36,36 0 1,0 72,0 a36,36 0 1,0 -72,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="52"
+                android:gradientRadius="36"
+                android:type="radial">
+                <item android:offset="0.0" android:color="#66FF931A" />
+                <item android:offset="1.0" android:color="#00FF931A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Unfilled progress rim (dim) -->
+    <path
+        android:pathData="M83.4,71 A34,34 0 1 1 54,20"
+        android:strokeWidth="5"
+        android:strokeColor="#2B2D3D"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Filled progress arc (clockwise from 12 o'clock to ~4 o'clock) -->
+    <path
+        android:pathData="M54,20 A34,34 0 0 1 83.4,71"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="54"
+                android:startY="20"
+                android:endX="83"
+                android:endY="71"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFC15A" />
+                <item android:offset="0.55" android:color="#FF931A" />
+                <item android:offset="1.0" android:color="#FF5F26" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- BrandFill tip at the leading edge of the arc -->
+    <path
+        android:fillColor="#3DDC97"
+        android:pathData="M83.4,71 m-3.2,0 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0" />
+
+    <!-- Play triangle -->
+    <path android:pathData="M44,36 L44,72 L76,54 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:startX="44"
-                android:startY="18"
-                android:endX="64"
-                android:endY="90"
+                android:startY="36"
+                android:endX="76"
+                android:endY="72"
                 android:type="linear">
                 <item android:offset="0.0" android:color="#FFC15A" />
                 <item android:offset="0.5" android:color="#FF931A" />
