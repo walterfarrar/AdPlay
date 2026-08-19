@@ -117,7 +117,7 @@ private struct StreakTimeline: View {
                 Capsule()
                     .fill(
                         LinearGradient(
-                            colors: [accent, fill],
+                            colors: [accent, Color("BrandAccentHot")],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
