@@ -193,10 +193,12 @@ fun HomeScreen(
             else -> {
                 val state = ui.state
                 val canWatch = !ui.loading &&
+                    !ui.watchingAd &&
                     state.adsRemainingToday > 0 &&
                     state.adCooldownSecondsLeft == 0
                 // Free starter ad while idle — does not spend from the boost bank.
                 val canActivate = !ui.loading &&
+                    !ui.watchingAd &&
                     !state.autoFillActive &&
                     state.adCooldownSecondsLeft == 0
                 // Faster / Stronger unlock once Auto Tapper is running.
@@ -451,6 +453,7 @@ fun HomeScreen(
                             state.skipAdsRemaining > 0 ||
                             state.skipAdRegenSecondsLeft > 0)
                     val canSkip = !ui.loading &&
+                        !ui.watchingAd &&
                         skipVisible &&
                         state.adCooldownSecondsLeft == 0 &&
                         (state.skipAdsRemaining < 0 || state.skipAdsRemaining > 0)

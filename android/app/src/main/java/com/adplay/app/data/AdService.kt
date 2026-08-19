@@ -68,8 +68,9 @@ private class NetworkAdService(
         }
         return when (network.attempt(null)) {
             AdFillResult.EARNED -> api.mockComplete(type)
-            AdFillResult.DECLINED, AdFillResult.UNAVAILABLE ->
-                throw ApiException(408, "Ad not completed")
+            AdFillResult.DECLINED -> throw ApiException(408, "Ad not completed")
+            AdFillResult.UNAVAILABLE ->
+                throw ApiException(408, "No ad available. Try again in a moment.")
         }
     }
 }
@@ -93,7 +94,7 @@ private class WaterfallAdService(
                 }
             }
         }
-        throw ApiException(408, "Ad not completed")
+        throw ApiException(408, "No ad available. Try again in a moment.")
     }
 }
 
