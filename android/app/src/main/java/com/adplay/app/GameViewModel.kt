@@ -46,6 +46,8 @@ data class UiState(
     val soundEnabled: Boolean = true,
     val playerId: String = "",
     val unseenDailyGoalCount: Int = 0,
+    /** Rewarded ad is presenting — keep boost buttons disabled without a spinner overlay. */
+    val watchingAd: Boolean = false,
 )
 
 class GameViewModel(app: Application) : AndroidViewModel(app) {
@@ -76,6 +78,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private var foreground = false
     private var skipAnimating = false
     private var adsWatchedToday = 0
+    /** True while a rewarded ad is on screen — skip lifecycle refresh so the watch is not dropped. */
+    @Volatile private var watchingAd = false
 
     companion object {
         private const val SKIP_LERP_MS = 3_000L
@@ -136,12 +140,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     fun onForeground() {
         foreground = true
         if (!_ui.value.ready) return
+        if (watchingAd) return
         viewModelScope.launch { runCatching { refresh(force = true) } }
         ensureTicker()
     }
 
     /** App backgrounded: stop the local animation loop (no network was running anyway). */
     fun onBackground() {
+        if (watchingAd) return
         foreground = false
         tickerJob?.cancel()
         // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
@@ -215,14 +221,15 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun watch(boost: BoostType) {
+        if (watchingAd) return
+        watchingAd = true
         viewModelScope.launch {
-            _ui.update { it.copy(loading = true, error = null) }
+            _ui.update { it.copy(watchingAd = true, error = null) }
             try {
                 val service = ads ?: throw IllegalStateException("Ad service not ready")
                 val from = _ui.value.state
                 val credit = service.showBoostAd(boost)
                 val to = credit.state
-                _ui.update { it.copy(loading = false) }
                 adsWatchedToday += 1
                 if (boost == BoostType.SKIP_TIME) {
                     playSkipLerp(from, to)
@@ -233,6 +240,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _ui.update { it.copy(loading = false, error = e.message) }
                 runCatching { refresh(force = true) }
+            } finally {
+                watchingAd = false
+                _ui.update { it.copy(watchingAd = false) }
             }
         }
     }

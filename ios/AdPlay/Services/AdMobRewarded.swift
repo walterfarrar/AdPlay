@@ -60,6 +60,8 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
 
     private var continuation: CheckedContinuation<AdFillResult, Never>?
     private var rewardedAd: RewardedAd?
+    /// Must be retained until dismiss — releasing mid-present drops the reward callback.
+    private var presentingAd: RewardedAd?
     private var earned = false
     private var didPresent = false
     private var isLoading = false
@@ -157,6 +159,7 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
             finish(.unavailable)
             return
         }
+        presentingAd = ad
         ad.fullScreenContentDelegate = self
         ad.present(from: root) { [weak self] in
             self?.earned = true
@@ -164,6 +167,7 @@ final class AdMobRewardedPresenter: NSObject, FullScreenContentDelegate {
     }
 
     private func finish(_ result: AdFillResult) {
+        presentingAd = nil
         guard let cont = continuation else {
             isShowing = false
             preload()

@@ -11,6 +11,8 @@ final class SessionStore: ObservableObject {
     @Published var bypassAds: Bool = DebugAdBypass.isEnabled
     @Published var progress: PlayerProgress = .empty
     private var adsWatchedToday = 0
+    /// True while a rewarded ad is on screen — skip lifecycle refresh so the watch is not dropped.
+    @Published private(set) var watchingAd = false
 
     let api = APIClient()
     private var adService: AdServing?
@@ -42,6 +44,9 @@ final class SessionStore: ObservableObject {
         DebugAdBypass.available
     }
 
+    /// True while an ad is showing or a boost credit is applying.
+    var isBusy: Bool { isLoading || watchingAd }
+
     func start() async {
         isLoading = true
         errorMessage = nil
@@ -70,6 +75,8 @@ final class SessionStore: ObservableObject {
         foreground = true
         GameReminderScheduler.clearBadge()
         guard isReady else { return }
+        // A full-screen ad returning to Play must not refresh mid-credit.
+        guard !watchingAd else { return }
         configureAdMobUnit()
         Task { try? await refresh(force: true) }
         ensureTicker()
@@ -77,6 +84,7 @@ final class SessionStore: ObservableObject {
 
     /// App backgrounded: stop the local animation loop.
     func onBackground() {
+        if watchingAd { return }
         foreground = false
         tickTask?.cancel()
         tickTask = nil
@@ -202,8 +210,10 @@ final class SessionStore: ObservableObject {
     }
 
     func watch(boost: BoostType) async {
+        guard !watchingAd else { return }
+        watchingAd = true
+        defer { watchingAd = false }
         errorMessage = nil
-        isLoading = true
         do {
             guard let adService else {
                 throw APIError.message("Ad service not ready")
@@ -212,8 +222,8 @@ final class SessionStore: ObservableObject {
             await AppTracking.requestIfNeeded()
             let from = state
             let credit = try await adService.showBoostAd(type: boost)
+            isLoading = true
             let to = credit.state
-            isLoading = false
             adsWatchedToday += 1
             if boost == .skipTime {
                 await playSkipLerp(from: from, to: to)
@@ -221,6 +231,7 @@ final class SessionStore: ObservableObject {
                 apply(to, force: true)
             }
             applyProgress(credit.progress)
+            isLoading = false
         } catch {
             isLoading = false
             errorMessage = error.localizedDescription

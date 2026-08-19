@@ -61,8 +61,10 @@ final class NetworkAdService: AdServing {
         case .earned:
             let (state, progress) = try await api.mockComplete(boostType: type)
             return AdCredit(state: state, progress: progress)
-        case .declined, .unavailable:
+        case .declined:
             throw APIError.message("Ad not completed")
+        case .unavailable:
+            throw APIError.message("No ad available. Try again in a moment.")
         }
     }
 }
@@ -92,7 +94,7 @@ final class WaterfallAdService: AdServing {
                 continue
             }
         }
-        throw APIError.message("Ad not completed")
+        throw APIError.message("No ad available. Try again in a moment.")
     }
 }
 

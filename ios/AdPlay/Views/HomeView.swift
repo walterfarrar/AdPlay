@@ -148,7 +148,7 @@ struct HomeView: View {
             && state.adsRemainingToday <= 0
             && state.autoFillActive
             && (skipRemaining < 0 || skipRemaining > 0 || skipRegenLeft > 0)
-        let canSkip = !session.isLoading
+        let canSkip = !session.isBusy
             && skipVisible
             && state.adCooldownSecondsLeft == 0
             && (skipRemaining < 0 || skipRemaining > 0)
@@ -257,14 +257,14 @@ struct HomeView: View {
     }
 
     private var canWatch: Bool {
-        !session.isLoading
+        !session.isBusy
             && session.state.adsRemainingToday > 0
             && session.state.adCooldownSecondsLeft == 0
     }
 
     /// Free starter ad while idle — does not spend from the boost bank.
     private var canActivate: Bool {
-        !session.isLoading
+        !session.isBusy
             && !session.state.autoFillActive
             && session.state.adCooldownSecondsLeft == 0
     }

@@ -22,8 +22,12 @@ struct AdPlayApp: App {
             switch phase {
             case .active:
                 session.onForeground()
-            case .background, .inactive:
+            case .background:
                 session.onBackground()
+            // Full-screen rewarded ads (and Control Center) go inactive — do not
+            // tear down or refresh, or the watch is reported as "Ad not completed".
+            case .inactive:
+                break
             @unknown default:
                 break
             }
