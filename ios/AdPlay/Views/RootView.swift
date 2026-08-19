@@ -2,11 +2,16 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var settings: PlayerSettings
 
     var body: some View {
         Group {
             if session.isReady {
-                HomeView()
+                if settings.hasCompletedOnboarding {
+                    MainTabView()
+                } else {
+                    OnboardingView()
+                }
             } else {
                 VStack(spacing: 18) {
                     Text("AdPlay")

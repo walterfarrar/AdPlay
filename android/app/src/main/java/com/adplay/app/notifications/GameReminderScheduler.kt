@@ -45,11 +45,19 @@ object GameReminderScheduler {
         mgr.createNotificationChannel(channel)
     }
 
+    fun clearAll(context: Context) {
+        cancel(context, REQ_AUTO)
+        cancel(context, REQ_ADS)
+    }
+
     /** Reschedule from latest authoritative game state. */
     fun sync(context: Context, state: GameState) {
+        val remindersOn = context.getSharedPreferences("adplay_player", Context.MODE_PRIVATE)
+            .getBoolean("remindersEnabled", true)
         ensureChannel(context)
         cancel(context, REQ_AUTO)
         cancel(context, REQ_ADS)
+        if (!remindersOn) return
 
         val now = System.currentTimeMillis()
         val autoAt = parseMillis(state.autoFillUntil)?.takeIf { state.autoFillActive }

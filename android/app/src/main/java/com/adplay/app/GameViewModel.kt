@@ -10,6 +10,8 @@ import com.adplay.app.data.ApiClient
 import com.adplay.app.data.BoostType
 import com.adplay.app.data.DebugAdBypass
 import com.adplay.app.data.GameState
+import com.adplay.app.data.PlayerProgress
+import com.adplay.app.data.PlayerSettings
 import com.adplay.app.data.Tunables
 import com.adplay.app.data.Withdrawal
 import com.adplay.app.notifications.GameReminderScheduler
@@ -37,6 +39,13 @@ data class UiState(
     /** Debug builds only — skip live ads and auto-credit boosts. */
     val bypassAdsAvailable: Boolean = DebugAdBypass.available,
     val bypassAds: Boolean = false,
+    val progress: PlayerProgress = PlayerProgress(),
+    val hasCompletedOnboarding: Boolean = false,
+    val remindersEnabled: Boolean = true,
+    val hapticsEnabled: Boolean = true,
+    val soundEnabled: Boolean = true,
+    val playerId: String = "",
+    val unseenDailyGoalCount: Int = 0,
 )
 
 class GameViewModel(app: Application) : AndroidViewModel(app) {
@@ -46,6 +55,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /** Drop stale responses that lost a race with a newer mutation. */
     private var lastUpdatedAt: String? = null
     private val appContext = app.applicationContext
+    private val settings = PlayerSettings(appContext)
 
     /**
      * Last authoritative snapshot from the server and the wall-clock instant it was
@@ -63,6 +73,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private var windowEndHandled = false
     private var foreground = false
     private var skipAnimating = false
+    private var adsWatchedToday = 0
 
     companion object {
         private const val SKIP_LERP_MS = 3_000L
@@ -77,6 +88,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(
                 bypassAdsAvailable = DebugAdBypass.available,
                 bypassAds = DebugAdBypass.isEnabled(appContext),
+                hasCompletedOnboarding = settings.hasCompletedOnboarding,
+                remindersEnabled = settings.remindersEnabled,
+                hapticsEnabled = settings.hapticsEnabled,
+                soundEnabled = settings.soundEnabled,
             )
         }
         start()
@@ -94,7 +109,13 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 api.ensureSignedIn()
                 refresh(force = true)
-                _ui.update { it.copy(ready = true, loading = false) }
+                _ui.update {
+                    it.copy(
+                        ready = true,
+                        loading = false,
+                        playerId = api.playerId.orEmpty(),
+                    )
+                }
                 foreground = true
                 AdMobRewarded.preload(appContext)
                 ensureTicker()
@@ -138,6 +159,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
         unackedTaps += 1
         publishOptimisticTaps()
+        syncProgress()
         ensureTapFlush()
     }
 
@@ -157,15 +179,16 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             while (unackedTaps > 0) {
                 if (generation != tapFlushGeneration) return@launch
                 try {
-                    val next = api.tap()
+                    val credit = api.tap()
                     if (generation != tapFlushGeneration) return@launch
-                    next.updatedAt?.let { lastUpdatedAt = it }
-                    confirmedState = next
+                    credit.state.updatedAt?.let { lastUpdatedAt = it }
+                    confirmedState = credit.state
                     unackedTaps = (unackedTaps - 1).coerceAtLeast(0)
                     // Confirmed snapshot already includes auto catch-up through now.
                     anchorMs = System.currentTimeMillis()
                     windowEndHandled = false
                     publishOptimisticTaps()
+                    applyProgress(credit.progress)
                     GameReminderScheduler.sync(appContext, _ui.value.state)
                     ensureTicker()
                 } catch (_: Exception) {
@@ -184,13 +207,16 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val service = ads ?: throw IllegalStateException("Ad service not ready")
                 val from = _ui.value.state
-                val to = service.showBoostAd(boost)
+                val credit = service.showBoostAd(boost)
+                val to = credit.state
                 _ui.update { it.copy(loading = false) }
+                adsWatchedToday += 1
                 if (boost == BoostType.SKIP_TIME) {
                     playSkipLerp(from, to)
                 } else {
                     applyState(to, force = true)
                 }
+                applyProgress(credit.progress)
             } catch (e: Exception) {
                 _ui.update { it.copy(loading = false, error = e.message) }
                 runCatching { refresh(force = true) }
@@ -300,7 +326,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                applyState(api.debugReset(), force = true)
+                val credit = api.debugReset()
+                adsWatchedToday = 0
+                applyState(credit.state, force = true)
+                applyProgress(credit.progress)
                 _ui.update { it.copy(withdrawals = emptyList(), loading = false) }
             } catch (e: Exception) {
                 _ui.update { it.copy(loading = false, error = e.message) }
@@ -332,10 +361,46 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun refresh(force: Boolean = false) {
-        val (state, tunables) = api.fetchState()
+        val (state, tunables, progress) = api.fetchState()
         ads = AdServiceFactory.make(api, tunables?.adProvider ?: "waterfall", appContext)
         applyState(state, force = force)
-        _ui.update { it.copy(tunables = tunables, error = null) }
+        _ui.update {
+            it.copy(
+                tunables = tunables,
+                playerId = api.playerId.orEmpty(),
+                error = null,
+            )
+        }
+        applyProgress(progress)
+    }
+
+    fun completeOnboarding() {
+        settings.hasCompletedOnboarding = true
+        _ui.update { it.copy(hasCompletedOnboarding = true) }
+    }
+
+    fun setRemindersEnabled(enabled: Boolean) {
+        settings.remindersEnabled = enabled
+        _ui.update { it.copy(remindersEnabled = enabled) }
+        if (enabled) {
+            GameReminderScheduler.sync(appContext, _ui.value.state)
+        } else {
+            GameReminderScheduler.clearAll(appContext)
+        }
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) {
+        settings.hapticsEnabled = enabled
+        _ui.update { it.copy(hapticsEnabled = enabled) }
+    }
+
+    fun setSoundEnabled(enabled: Boolean) {
+        settings.soundEnabled = enabled
+        _ui.update { it.copy(soundEnabled = enabled) }
+    }
+
+    fun refreshActivity() {
+        viewModelScope.launch { runCatching { refresh(force = true) } }
     }
 
     /**
@@ -363,6 +428,53 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         ensureTicker()
     }
 
+    private fun syncProgress() {
+        applyProgress(null)
+    }
+
+    private fun applyProgress(server: PlayerProgress?) {
+        val adsFromServer = server?.dailyGoals?.firstOrNull { it.id == "ads" }?.current ?: 0
+        adsWatchedToday = maxOf(adsWatchedToday, adsFromServer)
+        _ui.update { ui ->
+            val next = ui.progress.takingServer(server).syncedWith(
+                state = ui.state,
+                tunables = ui.tunables,
+                adsWatched = adsWatchedToday,
+            )
+            val oldMax = ui.progress.adBank.max
+            val oldRemaining = ui.state.adsRemainingToday
+            val gained = (next.adBank.max - oldMax).coerceAtLeast(0)
+            val state = if (gained > 0 && ui.state.adsRemainingToday <= oldRemaining) {
+                grantCharges(ui.state, gained, next.adBank.max)
+            } else {
+                ui.state
+            }
+            if (gained > 0 && state !== ui.state) {
+                serverState = grantCharges(serverState, gained, next.adBank.max)
+                confirmedState = grantCharges(confirmedState, gained, next.adBank.max)
+            }
+            ui.copy(
+                state = state,
+                progress = next,
+                unseenDailyGoalCount = settings.unseenCompletedGoalCount(next.displayedDailyGoals),
+            )
+        }
+    }
+
+    private fun grantCharges(s: GameState, gained: Int, cap: Int): GameState {
+        val remaining = (s.adsRemainingToday + gained).coerceIn(0, cap)
+        return s.copy(
+            adsRemainingToday = remaining,
+            adRegenSecondsLeft = if (remaining >= cap) 0 else s.adRegenSecondsLeft,
+            nextAdChargeAt = if (remaining >= cap) null else s.nextAdChargeAt,
+        )
+    }
+
+    fun acknowledgeDailyGoals() {
+        settings.acknowledgeDailyGoals(_ui.value.progress.displayedDailyGoals)
+        _ui.update { it.copy(unseenDailyGoalCount = 0) }
+    }
+
     /**
      * Local, network-free animation loop. While an auto window is running everything
      * is deterministic (progress = fillRate x elapsed, cooldown counts down), so we
@@ -387,7 +499,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val shown = _ui.value.state
-                val adsMax = _ui.value.tunables?.adsPerCycle ?: 10
+                val adsMax = _ui.value.tunables?.adsPerCycle
+                    ?: _ui.value.progress.adBank.max.coerceAtLeast(1)
                 val waitingRegen = shown.adRegenSecondsLeft > 0 && shown.adsRemainingToday < adsMax
                 if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0 && !waitingRegen) break
                 delay(1_000)
@@ -404,7 +517,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         // When the shared auto window just ended, show a full ad bank until refresh lands.
         val windowExpired = s.autoFillActive && !autoActive
         val maxCharges = _ui.value.tunables?.adsPerCycle?.coerceAtLeast(0)
-            ?: maxOf(s.adsRemainingToday, 1)
+            ?: _ui.value.progress.adBank.max.coerceAtLeast(maxOf(s.adsRemainingToday, 1))
         val (adsLeft, regenLeft) = if (windowExpired) {
             maxCharges to 0
         } else {

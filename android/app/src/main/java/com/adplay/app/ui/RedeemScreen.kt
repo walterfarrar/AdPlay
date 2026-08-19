@@ -90,7 +90,8 @@ fun RedeemScreen(
     ui: UiState,
     onLoadHistory: () -> Unit,
     onSubmit: (amount: Int, bolt11: String, done: (Boolean) -> Unit) -> Unit,
-    onClose: () -> Unit,
+    showClose: Boolean = true,
+    onClose: () -> Unit = {},
 ) {
     var amountText by remember { mutableStateOf("") }
     var invoice by remember { mutableStateOf("") }
@@ -149,8 +150,10 @@ fun RedeemScreen(
                         }
                     }
                 }
-                TextButton(onClick = onClose) {
-                    Text("Close", color = BrandMuted, fontWeight = FontWeight.SemiBold)
+                if (showClose) {
+                    TextButton(onClick = onClose) {
+                        Text("Close", color = BrandMuted, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
@@ -192,7 +195,7 @@ fun RedeemScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.",
+                    "Paste a Lightning invoice to request a payout.",
                     color = BrandMuted,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -361,7 +364,7 @@ private fun RedeemHowToDialog(onDismiss: () -> Unit) {
                         "2. Open a Lightning wallet and create a receive invoice for the exact amount you want.\n" +
                         "3. Copy the BOLT11 invoice from your wallet.\n" +
                         "4. In AdPlay Redeem, enter that amount, paste the invoice, and submit.\n" +
-                        "5. We pay invoices manually. Watch History for pending → paid " +
+                        "5. Watch History for pending → paid " +
                         "(or rejected / refunded).",
                 )
                 HowToBlock(

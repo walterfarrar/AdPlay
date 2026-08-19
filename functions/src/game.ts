@@ -14,6 +14,14 @@ import {
   utcDayKey,
   freshGame,
 } from "./util";
+import {
+  effectiveAdsPerCycle,
+  playerProgress,
+  recordAutoActivated,
+  recordBoostAdWatch,
+  syncAdProgress,
+} from "./adCurrency";
+import type { PlayerProgress } from "./types";
 
 const db = () => admin.firestore();
 
@@ -74,9 +82,13 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
   return g;
 }
 
+function adsMax(g: GameStateDoc, t: Tunables): number {
+  return effectiveAdsPerCycle(g, t);
+}
+
 /** Apply timed +1 charge regen up to adsPerCycle. Mutates g. */
 function applyAdRegen(g: GameStateDoc, t: Tunables, now: Date): void {
-  const max = t.adsPerCycle;
+  const max = adsMax(g, t);
   if (max <= 0) {
     g.adCharges = 0;
     return;
@@ -132,9 +144,10 @@ function spendAdCharge(g: GameStateDoc, t: Tunables, now: Date): void {
       code: "resource-exhausted",
     });
   }
-  const wasFull = g.adCharges >= t.adsPerCycle;
+  const wasFull = g.adCharges >= adsMax(g, t);
   g.adCharges -= 1;
   g.adsUsed = (g.adsUsed || 0) + 1;
+  recordBoostAdWatch(g, t, now);
   if (wasFull) {
     g.adChargesAt = nowIso(now);
   }
@@ -154,7 +167,7 @@ function regenPublic(g: GameStateDoc, t: Tunables, now: Date): {
   const adsRemaining = Math.max(0, g.adCharges);
   let adRegenSecondsLeft = 0;
   let nextAdChargeAt: string | null = null;
-  if (t.adRegenSeconds > 0 && adsRemaining < t.adsPerCycle) {
+  if (t.adRegenSeconds > 0 && adsRemaining < adsMax(g, t)) {
     const from = parseIso(g.adChargesAt) ?? now;
     const nextMs = from.getTime() + t.adRegenSeconds * 1000;
     adRegenSecondsLeft = Math.max(0, Math.ceil((nextMs - now.getTime()) / 1000));
@@ -238,6 +251,7 @@ function resetDaily(g: GameStateDoc, t: Tunables, now: Date): void {
     g.satsDay = day;
     g.satsEarnedToday = 0;
   }
+  syncAdProgress(g, t, now);
 }
 
 /** When the shared auto window ends, clear boosts and refill the ad bank. */
@@ -253,7 +267,7 @@ function refreshAdCycleIfIdle(g: GameStateDoc, t: Tunables, now: Date): void {
   g.speedBoostCount = 0;
   g.tapStrengthBoostCount = 0;
   // New run: restore the full ad + skip bank.
-  g.adCharges = Math.max(0, t.adsPerCycle);
+  g.adCharges = Math.max(0, adsMax(g, t));
   g.adChargesAt = nowIso(now);
   g.adsUsed = 0;
   g.skipAdsUsed = 0;
@@ -377,6 +391,7 @@ function advanceInMemory(
 
   g.satsEarnedToday += earned;
   g.satsBalance += earned;
+  g.lifetimeSatsEarned = (g.lifetimeSatsEarned || 0) + earned;
   g.fillRate = effectiveFillRate(g, t, at);
   g.lastTickAt = nowIso(at);
   return { earned, credits };
@@ -396,6 +411,7 @@ function applyManualTapInMemory(
   const applied = applyProgressUnits(g, t, effectiveTapPower(g, t, at));
   g.satsEarnedToday += applied.earned;
   g.satsBalance += applied.earned;
+  g.lifetimeSatsEarned = (g.lifetimeSatsEarned || 0) + applied.earned;
   g.fillRate = effectiveFillRate(g, t, at);
   g.lastTickAt = nowIso(at);
   return applied.credits;
@@ -450,6 +466,7 @@ function applySkipTimeInMemory(
   const applied = applyProgressUnits(g, t, rate * skipSec);
   g.satsEarnedToday += applied.earned;
   g.satsBalance += applied.earned;
+  g.lifetimeSatsEarned = (g.lifetimeSatsEarned || 0) + applied.earned;
 
   const newUntil = new Date(autoUntil.getTime() - skipSec * 1000);
   g.autoFillUntil = nowIso(newUntil);
@@ -500,7 +517,7 @@ async function runGameTx(
     now: Date,
     tx: admin.firestore.Transaction,
   ) => LedgerCredit[],
-): Promise<PublicGameState> {
+): Promise<{ state: PublicGameState; progress: PlayerProgress }> {
   const t = await loadTunables();
   const now = new Date();
   const ref = gameRef(uid);
@@ -519,7 +536,7 @@ async function runGameTx(
 
     writeCredits(tx, uid, credits);
     tx.set(ref, g);
-    return toPublic(g, t, now);
+    return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
   });
 
   return result;
@@ -527,21 +544,27 @@ async function runGameTx(
 
 export async function getPublicState(uid: string): Promise<{
   state: PublicGameState;
-  tunables: Tunables & { adProvider: string; debugReset: boolean };
+  tunables: Tunables & { adProvider: string; debugReset: boolean; adsPerCycle: number };
+  progress: PlayerProgress;
 }> {
-  const state = await runGameTx(uid, () => []);
+  const { state, progress } = await runGameTx(uid, () => []);
   const t = await loadTunables();
   return {
     state,
+    progress,
     tunables: {
       ...t,
+      adsPerCycle: progress.adBank.max,
       adProvider: process.env.AD_PROVIDER ?? "waterfall",
       debugReset: debugResetAllowed(),
     },
   };
 }
 
-export async function tap(uid: string): Promise<PublicGameState> {
+export async function tap(uid: string): Promise<{
+  state: PublicGameState;
+  progress: PlayerProgress;
+}> {
   return runGameTx(uid, (g, t, now) => applyManualTapInMemory(g, t, now));
 }
 
@@ -549,7 +572,7 @@ export async function applyBoost(
   uid: string,
   boostType: BoostType,
   eventId: string,
-): Promise<PublicGameState> {
+): Promise<{ state: PublicGameState; progress: PlayerProgress }> {
   const t = await loadTunables();
   const eventRef = db().doc(`users/${uid}/adEvents/${eventId}`);
   const now = new Date();
@@ -567,7 +590,7 @@ export async function applyBoost(
       const tickCredits = advanceInMemory(g, t, now);
       writeCredits(tx, uid, tickCredits.credits);
       tx.set(ref, g);
-      return toPublic(g, t, now);
+      return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
     }
 
     const tickCredits = advanceInMemory(g, t, now);
@@ -590,7 +613,7 @@ export async function applyBoost(
       writeCredits(tx, uid, [...tickCredits.credits, ...skipCredits]);
       tx.set(eventRef, { boostType, appliedAt: nowIso(now) });
       tx.set(ref, g);
-      return toPublic(g, t, now);
+      return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
     }
 
     const autoUntil = parseIso(g.autoFillUntil);
@@ -606,6 +629,8 @@ export async function applyBoost(
       g.autoFillUntil = extendIsoBySeconds(null, t.durationBoostSeconds, now);
       g.speedBoostAmount = t.speedBoostAmount;
       g.speedBoostUntil = null;
+      recordAutoActivated(g, t, now);
+      recordBoostAdWatch(g, t, now);
       g.lastAdAt = nowIso(now);
       g.lastBoostType = boostType;
       g.fillRate = effectiveFillRate(g, t, now);
@@ -613,7 +638,7 @@ export async function applyBoost(
       writeCredits(tx, uid, tickCredits.credits);
       tx.set(eventRef, { boostType, appliedAt: nowIso(now) });
       tx.set(ref, g);
-      return toPublic(g, t, now);
+      return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
     }
 
     // Faster / Stronger require an active Auto Tapper (via Activate or Longer).
@@ -636,6 +661,7 @@ export async function applyBoost(
       g.speedBoostAmount = t.speedBoostAmount;
       g.speedBoostUntil = null;
       g.durationBoostCount = (g.durationBoostCount || 0) + 1;
+      recordAutoActivated(g, t, now);
     } else if (boostType === "duration") {
       // Longer: extend the shared auto timer only
       g.autoFillUntil = extendIsoBySeconds(g.autoFillUntil, t.durationBoostSeconds, now);
@@ -657,11 +683,14 @@ export async function applyBoost(
     writeCredits(tx, uid, tickCredits.credits);
     tx.set(eventRef, { boostType, appliedAt: nowIso(now) });
     tx.set(ref, g);
-    return toPublic(g, t, now);
+    return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
   });
 }
 
-export async function resetEverything(uid: string): Promise<PublicGameState> {
+export async function resetEverything(uid: string): Promise<{
+  state: PublicGameState;
+  progress: PlayerProgress;
+}> {
   const t = await loadTunables();
   const g = freshGame(t);
   const batch = db().batch();
@@ -675,7 +704,54 @@ export async function resetEverything(uid: string): Promise<PublicGameState> {
   wd.forEach((d) => batch.delete(d));
   await batch.commit();
 
-  return toPublic(g, t, new Date());
+  const now = new Date();
+  syncAdProgress(g, t, now);
+  return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
+}
+
+export async function purchaseAdSlot(
+  uid: string,
+  transactionId: string,
+): Promise<{ state: PublicGameState; progress: PlayerProgress }> {
+  const id = transactionId.trim();
+  if (!id || id.length > 200) {
+    throw Object.assign(new Error("Invalid transaction"), { code: "invalid-argument" });
+  }
+  const t = await loadTunables();
+  const now = new Date();
+  const ref = gameRef(uid);
+  const iapRef = db().doc(`users/${uid}/iapPurchases/${id}`);
+
+  return db().runTransaction(async (tx) => {
+    const iapSnap = await tx.get(iapRef);
+    const snap = await tx.get(ref);
+    const g = migrateGame(snap.data(), t);
+    if (!snap.exists) {
+      tx.set(db().doc(`users/${uid}`), { createdAt: nowIso(now) }, { merge: true });
+    }
+    const tickCredits = advanceInMemory(g, t, now);
+    writeCredits(tx, uid, tickCredits.credits);
+
+    if (!iapSnap.exists) {
+      if ((g.iapAdsPurchased || 0) >= t.iapBonusAdsMax) {
+        throw Object.assign(new Error("Ad slot purchases are maxed"), {
+          code: "failed-precondition",
+        });
+      }
+      g.iapAdsPurchased = (g.iapAdsPurchased || 0) + 1;
+      tx.set(iapRef, { purchasedAt: nowIso(now), productId: "com.adplay.app.adslot" });
+    }
+    syncAdProgress(g, t, now);
+    tx.set(ref, g);
+    return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
+  });
+}
+
+export async function markPaidRedeem(uid: string): Promise<void> {
+  const ref = gameRef(uid);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  await ref.set({ hasPaidRedeem: true }, { merge: true });
 }
 
 export { toPublic, gameRef };

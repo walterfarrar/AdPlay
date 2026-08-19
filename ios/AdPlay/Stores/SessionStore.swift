@@ -9,6 +9,8 @@ final class SessionStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var isReady = false
     @Published var bypassAds: Bool = DebugAdBypass.isEnabled
+    @Published var progress: PlayerProgress = .empty
+    private var adsWatchedToday = 0
 
     let api = APIClient()
     private var adService: AdServing?
@@ -89,13 +91,28 @@ final class SessionStore: ObservableObject {
     }
 
     func refresh(force: Bool = false) async throws {
-        let (s, t) = try await api.fetchState()
+        let (s, t, p) = try await api.fetchState()
         tunables = t
         if let provider = t?.adProvider {
             adService = AdServiceFactory.make(api: api, provider: provider)
         }
         configureAdMobUnit()
         setServerState(s, force: force)
+        applyProgress(p)
+    }
+
+    func buyAdSlot(transactionId: String) async throws {
+        let (s, p) = try await api.buyAdSlot(transactionId: transactionId)
+        apply(s, force: true)
+        applyProgress(p)
+    }
+
+    func restoreAdSlots(transactionIds: [String]) async throws -> Int {
+        let before = progress.iapAdsPurchased
+        for id in transactionIds {
+            try await buyAdSlot(transactionId: id)
+        }
+        return max(0, progress.iapAdsPurchased - before)
     }
 
     /// Sample creatives in Debug only. Release / TestFlight always use production units.
@@ -133,6 +150,7 @@ final class SessionStore: ObservableObject {
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
         state = project(s, now: Date())
+        replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
     }
 
     private func ensureTapFlush() {
@@ -144,7 +162,7 @@ final class SessionStore: ObservableObject {
             while self.unackedTaps > 0 {
                 guard generation == self.tapFlushGeneration else { return }
                 do {
-                    let next = try await self.api.tap()
+                    let (next, p) = try await self.api.tap()
                     guard generation == self.tapFlushGeneration else { return }
                     if let u = next.updatedAt {
                         self.lastUpdatedAt = u
@@ -155,6 +173,7 @@ final class SessionStore: ObservableObject {
                     self.anchorDate = Date()
                     self.windowEndHandled = false
                     self.publishOptimisticTaps()
+                    self.applyProgress(p)
                     GameReminderScheduler.sync(self.state)
                     self.ensureTicker()
                 } catch {
@@ -177,13 +196,16 @@ final class SessionStore: ObservableObject {
             // Ensure ATT ran even if preload had not finished yet.
             await AppTracking.requestIfNeeded()
             let from = state
-            let to = try await adService.showBoostAd(type: boost)
+            let credit = try await adService.showBoostAd(type: boost)
+            let to = credit.state
             isLoading = false
+            adsWatchedToday += 1
             if boost == .skipTime {
                 await playSkipLerp(from: from, to: to)
             } else {
                 apply(to, force: true)
             }
+            applyProgress(credit.progress)
         } catch {
             isLoading = false
             errorMessage = error.localizedDescription
@@ -316,7 +338,10 @@ final class SessionStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            apply(try await api.debugReset(), force: true)
+            let (s, p) = try await api.debugReset()
+            adsWatchedToday = 0
+            apply(s, force: true)
+            applyProgress(p)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -324,6 +349,42 @@ final class SessionStore: ObservableObject {
 
     private func apply(_ next: GameState, force: Bool) {
         setServerState(next, force: force)
+    }
+
+    private func applyProgress(_ server: PlayerProgress?) {
+        if let server, let ads = server.dailyGoals.first(where: { $0.id == "ads" }) {
+            adsWatchedToday = max(adsWatchedToday, ads.current)
+        }
+        replaceProgress(progress.takingServer(server).syncedWith(
+            state: state,
+            tunables: tunables,
+            adsWatched: adsWatchedToday
+        ))
+    }
+
+    private func replaceProgress(_ next: PlayerProgress) {
+        let oldMax = progress.adBank.max
+        let oldRemaining = state.adsRemainingToday
+        progress = next
+        let gained = max(0, next.adBank.max - oldMax)
+        if gained > 0, state.adsRemainingToday <= oldRemaining {
+            grantCharges(gained, cap: next.adBank.max)
+        }
+    }
+
+    private func grantCharges(_ gained: Int, cap: Int) {
+        func bump(_ s: GameState) -> GameState {
+            var c = s
+            c.adsRemainingToday = min(cap, max(0, c.adsRemainingToday + gained))
+            if c.adsRemainingToday >= cap {
+                c.adRegenSecondsLeft = 0
+                c.nextAdChargeAt = nil
+            }
+            return c
+        }
+        state = bump(state)
+        serverState = bump(serverState)
+        confirmedState = bump(confirmedState)
     }
 
     /// Adopt an authoritative server snapshot. It always overrides locally projected
@@ -366,7 +427,7 @@ final class SessionStore: ObservableObject {
                 }
 
                 let regenLeft = self.state.adRegenSecondsLeft ?? 0
-                let adsMax = self.tunables?.adsPerCycle ?? 10
+                let adsMax = self.tunables?.adsPerCycle ?? self.progress.adBank.max
                 let waitingRegen = regenLeft > 0 && self.state.adsRemainingToday < adsMax
                 if !self.state.autoFillActive
                     && self.state.adCooldownSecondsLeft <= 0
@@ -387,7 +448,8 @@ final class SessionStore: ObservableObject {
         let autoActive = s.autoFillActive && (until.map { $0 > now } ?? false)
         // When the shared auto window just ended, show a full ad bank until refresh lands.
         let windowExpired = s.autoFillActive && !autoActive
-        let maxCharges = tunables?.adsPerCycle ?? max(s.adsRemainingToday, 1)
+        let maxCharges = tunables?.adsPerCycle
+            ?? (progress.adBank.max > 0 ? progress.adBank.max : max(s.adsRemainingToday, 1))
         let adsLeft: Int
         let regenLeft: Int
         if windowExpired {

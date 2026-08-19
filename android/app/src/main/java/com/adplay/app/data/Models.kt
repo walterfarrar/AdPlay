@@ -71,7 +71,7 @@ data class Tunables(
     val tapStrengthBoostSeconds: Int = 1200,
     val adCooldownSeconds: Int = 10,
     val dailyAdCap: Int = 30,
-    val adsPerCycle: Int = 10,
+    val adsPerCycle: Int = 5,
     /** Seconds between +1 ad charge. 0 = no timed regen. */
     val adRegenSeconds: Int = 1200,
     val skipTimeSeconds: Int = 60,
@@ -94,6 +94,154 @@ data class Withdrawal(
 ) {
     val sats: Int get() = amountSats ?: amount_sats ?: 0
 }
+data class AdBankBreakdown(
+    val base: Int = 5,
+    val dailyBonus: Int = 0,
+    val streakBonus: Int = 0,
+    val achievementBonus: Int = 0,
+    val iapBonus: Int = 0,
+    val max: Int = 5,
+)
+
+data class DailyGoal(
+    val id: String = "",
+    val title: String = "",
+    val current: Int = 0,
+    val target: Int = 1,
+    val completed: Boolean = false,
+    val rewardAds: Int = 1,
+)
+
+data class Achievement(
+    val id: String = "",
+    val title: String = "",
+    val detail: String = "",
+    val unlocked: Boolean = false,
+    val grantsSlot: Boolean = false,
+)
+
+data class PlayerProgress(
+    val adBank: AdBankBreakdown = AdBankBreakdown(),
+    val loginStreak: Int = 0,
+    val bestLoginStreak: Int = 0,
+    val dailyGoals: List<DailyGoal> = emptyList(),
+    val achievements: List<Achievement> = emptyList(),
+    val iapAdsPurchased: Int = 0,
+    val iapBonusAdsMax: Int = 5,
+) {
+    val displayedDailyGoals: List<DailyGoal> get() = ProgressCatalog.goals(dailyGoals)
+    val displayedAchievements: List<Achievement> get() = ProgressCatalog.achievements(achievements)
+
+    fun takingServer(server: PlayerProgress?): PlayerProgress {
+        if (server == null || (server.dailyGoals.isEmpty() && server.achievements.isEmpty())) {
+            return this
+        }
+        return server
+    }
+
+    fun syncedWith(state: GameState, tunables: Tunables?, adsWatched: Int): PlayerProgress {
+        val cap = (tunables?.dailyTapCap ?: 500).coerceAtLeast(1)
+        val tapsUsed = (cap - state.tapsRemaining).coerceAtLeast(0)
+        val auto = if (state.autoFillActive || state.lastBoostType == "activate") 1 else 0
+        val next = displayedDailyGoals.map { goal ->
+            val derived = when (goal.id) {
+                "taps", "taps_stretch" -> tapsUsed
+                "sats" -> state.satsEarnedToday.coerceAtLeast(0)
+                "auto" -> auto
+                "ads" -> adsWatched
+                else -> goal.current
+            }
+            val current = maxOf(goal.current, derived)
+            goal.copy(current = current, completed = current >= goal.target)
+        }
+        val daily = next.count { it.completed }.coerceAtMost(5)
+        return copy(
+            dailyGoals = next,
+            adBank = adBank.copy(
+                dailyBonus = maxOf(adBank.dailyBonus, daily),
+                max = adBank.base + maxOf(adBank.dailyBonus, daily) + adBank.streakBonus
+                    + adBank.achievementBonus + adBank.iapBonus,
+            ),
+        )
+    }
+}
+
+object ProgressCatalog {
+    val dailyGoals: List<DailyGoal> = listOf(
+        DailyGoal(id = "taps", title = "Use taps", target = 50),
+        DailyGoal(id = "ads", title = "Watch boost ads", target = 3),
+        DailyGoal(id = "sats", title = "Earn sats", target = 1),
+        DailyGoal(id = "auto", title = "Start Auto Tapper", target = 1),
+        DailyGoal(id = "taps_stretch", title = "Keep tapping", target = 200),
+    )
+
+    private val goalHowTo = mapOf(
+        "taps" to "Tap the wheel 50 times today.",
+        "ads" to "Watch 3 boost ads today (Activate, Longer, Faster, Stronger, or Skip Time).",
+        "sats" to "Fill the wheel and earn 1 sat today.",
+        "auto" to "Watch Activate to start Auto Tapper today.",
+        "taps_stretch" to "Tap the wheel 200 times today.",
+    )
+
+    val achievements: List<Achievement> = listOf(
+        Achievement("first_sat", "First sat", "Fill the wheel until it credits 1 sat.", false, true),
+        Achievement("first_auto", "Auto Tapper", "Watch Activate to start Auto Tapper for the first time.", false, true),
+        Achievement("first_redeem", "First payout", "Submit a Lightning redeem and wait until it is marked paid.", false, true),
+        Achievement("streak_7", "Week streak", "Open AdPlay 7 days in a row (UTC).", false, true),
+        Achievement("streak_30", "Month streak", "Open AdPlay 30 days in a row (UTC).", false, true),
+        Achievement("lifetime_10", "10 sats", "Earn 10 sats over your lifetime. Badge only — no extra hold.", false, false),
+        Achievement("lifetime_100", "100 sats", "Earn 100 sats over your lifetime. Badge only — no extra hold.", false, false),
+    )
+
+    fun howTo(goal: DailyGoal): String =
+        goalHowTo[goal.id] ?: "Reach ${goal.target} to complete this goal."
+
+    fun goals(live: List<DailyGoal>): List<DailyGoal> {
+        val byId = live.associateBy { it.id }
+        val seen = mutableSetOf<String>()
+        val out = mutableListOf<DailyGoal>()
+        for (template in dailyGoals) {
+            seen += template.id
+            val found = byId[template.id]
+            out += if (found != null) {
+                found.copy(
+                    title = found.title.ifBlank { template.title },
+                    target = if (found.target > 0) found.target else template.target,
+                )
+            } else {
+                template
+            }
+        }
+        live.filter { it.id !in seen }.forEach { out += it }
+        return out
+    }
+
+    fun achievements(live: List<Achievement>): List<Achievement> {
+        val byId = live.associateBy { it.id }
+        val seen = mutableSetOf<String>()
+        val out = mutableListOf<Achievement>()
+        for (template in achievements) {
+            seen += template.id
+            val found = byId[template.id]
+            out += if (found != null) {
+                found.copy(
+                    title = found.title.ifBlank { template.title },
+                    detail = found.detail.ifBlank { template.detail },
+                )
+            } else {
+                template
+            }
+        }
+        live.filter { it.id !in seen }.forEach { out += it }
+        return out
+    }
+}
+
+data class AdCredit(
+    val state: GameState,
+    val progress: PlayerProgress? = null,
+)
+
 enum class BoostType(val apiValue: String) {
     ACTIVATE("activate"),
     DURATION("duration"),

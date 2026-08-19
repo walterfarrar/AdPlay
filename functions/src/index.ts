@@ -6,6 +6,8 @@ import {
   applyBoost,
   getPublicState,
   loadTunables,
+  markPaidRedeem,
+  purchaseAdSlot,
   resetEverything,
   tap,
 } from "./game";
@@ -42,6 +44,9 @@ function mapErr(e: unknown): never {
   if (err.code === "failed-precondition") {
     throw new HttpsError("failed-precondition", err.message);
   }
+  if (err.code === "invalid-argument") {
+    throw new HttpsError("invalid-argument", err.message);
+  }
   throw new HttpsError("internal", err.message || "Error");
 }
 
@@ -65,7 +70,18 @@ async function markWithdrawalPaid(
     adminNote: note,
     updatedAt: nowIso(),
   });
+  await markPaidRedeem(userId);
 }
+
+export const buyAdSlot = onCall(async (request) => {
+  const uid = requireAuth(request.auth?.uid);
+  const transactionId = String(request.data?.transactionId ?? "");
+  try {
+    return await purchaseAdSlot(uid, transactionId);
+  } catch (e) {
+    mapErr(e);
+  }
+});
 
 async function rejectWithdrawal(
   userId: string,
@@ -139,7 +155,7 @@ export const getState = onCall(async (request) => {
 export const gameTap = onCall(async (request) => {
   const uid = requireAuth(request.auth?.uid);
   try {
-    return { state: await tap(uid) };
+    return await tap(uid);
   } catch (e) {
     mapErr(e);
   }
@@ -162,7 +178,7 @@ export const mockCompleteBoost = onCall(async (request) => {
   }
   const eventId = `mock_${db.collection("_").doc().id}`;
   try {
-    return { state: await applyBoost(uid, boostType, eventId) };
+    return await applyBoost(uid, boostType, eventId);
   } catch (e) {
     mapErr(e);
   }
@@ -174,7 +190,7 @@ export const debugReset = onCall(async (request) => {
   }
   const uid = requireAuth(request.auth?.uid);
   try {
-    return { state: await resetEverything(uid) };
+    return await resetEverything(uid);
   } catch (e) {
     mapErr(e);
   }

@@ -32,12 +32,13 @@ targets:
       - package: google-mobile-ads
         product: GoogleMobileAds
       - sdk: AppTrackingTransparency.framework
+      - sdk: StoreKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.adplay.app
         INFOPLIST_FILE: AdPlay/Info.plist
         GENERATE_INFOPLIST_FILE: false
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: "1.0.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

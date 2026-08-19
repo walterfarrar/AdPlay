@@ -2,8 +2,13 @@ import Foundation
 import SwiftUI
 import WebKit
 
+struct AdCredit {
+    var state: GameState
+    var progress: PlayerProgress?
+}
+
 protocol AdServing {
-    func showBoostAd(type: BoostType) async throws -> GameState
+    func showBoostAd(type: BoostType) async throws -> AdCredit
 }
 
 /// Low-level network that reports fill outcome without calling the game API.
@@ -18,9 +23,10 @@ final class MockAdService: AdServing {
         self.api = api
     }
 
-    func showBoostAd(type: BoostType) async throws -> GameState {
+    func showBoostAd(type: BoostType) async throws -> AdCredit {
         try await Task.sleep(nanoseconds: 1_200_000_000)
-        return try await api.mockComplete(boostType: type)
+        let (state, progress) = try await api.mockComplete(boostType: type)
+        return AdCredit(state: state, progress: progress)
     }
 }
 
@@ -47,13 +53,14 @@ final class NetworkAdService: AdServing {
         self.network = network
     }
 
-    func showBoostAd(type: BoostType) async throws -> GameState {
+    func showBoostAd(type: BoostType) async throws -> AdCredit {
         if DebugAdBypass.available, DebugAdBypass.isEnabled {
             return try await MockAdService(api: api).showBoostAd(type: type)
         }
         switch await network.attempt() {
         case .earned:
-            return try await api.mockComplete(boostType: type)
+            let (state, progress) = try await api.mockComplete(boostType: type)
+            return AdCredit(state: state, progress: progress)
         case .declined, .unavailable:
             throw APIError.message("Ad not completed")
         }
@@ -70,14 +77,15 @@ final class WaterfallAdService: AdServing {
         self.networks = networks
     }
 
-    func showBoostAd(type: BoostType) async throws -> GameState {
+    func showBoostAd(type: BoostType) async throws -> AdCredit {
         if DebugAdBypass.available, DebugAdBypass.isEnabled {
             return try await MockAdService(api: api).showBoostAd(type: type)
         }
         for network in networks {
             switch await network.attempt() {
             case .earned:
-                return try await api.mockComplete(boostType: type)
+                let (state, progress) = try await api.mockComplete(boostType: type)
+                return AdCredit(state: state, progress: progress)
             case .declined:
                 throw APIError.message("Ad not completed")
             case .unavailable:

@@ -12,33 +12,32 @@ class ApiClient {
     private val functions: FirebaseFunctions = Firebase.functions("us-central1")
     private val gson = Gson()
 
+    val playerId: String?
+        get() = auth.currentUser?.uid
+
     suspend fun ensureSignedIn() {
         if (auth.currentUser == null) {
             auth.signInAnonymously().await()
         }
     }
 
-    suspend fun fetchState(): Pair<GameState, Tunables?> {
+    suspend fun fetchState(): Triple<GameState, Tunables?, PlayerProgress?> {
         ensureSignedIn()
         val result = functions.getHttpsCallable("getState").call().await()
         @Suppress("UNCHECKED_CAST")
         val data = result.getData() as Map<String, Any?>
-        val state = gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
-        val tunables = data["tunables"]?.let {
-            gson.fromJson(gson.toJson(it), Tunables::class.java)
-        }
-        return state to tunables
+        return parseBundle(data)
     }
 
-    suspend fun tap(): GameState {
+    suspend fun tap(): AdCredit {
         ensureSignedIn()
         val result = functions.getHttpsCallable("gameTap").call().await()
         @Suppress("UNCHECKED_CAST")
         val data = result.getData() as Map<String, Any?>
-        return gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
+        return parseCredit(data)
     }
 
-    suspend fun mockComplete(boost: BoostType): GameState {
+    suspend fun mockComplete(boost: BoostType): AdCredit {
         ensureSignedIn()
         val result = functions
             .getHttpsCallable("mockCompleteBoost")
@@ -46,15 +45,15 @@ class ApiClient {
             .await()
         @Suppress("UNCHECKED_CAST")
         val data = result.getData() as Map<String, Any?>
-        return gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
+        return parseCredit(data)
     }
 
-    suspend fun debugReset(): GameState {
+    suspend fun debugReset(): AdCredit {
         ensureSignedIn()
         val result = functions.getHttpsCallable("debugReset").call().await()
         @Suppress("UNCHECKED_CAST")
         val data = result.getData() as Map<String, Any?>
-        return gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
+        return parseCredit(data)
     }
 
     suspend fun requestWithdrawal(amountSats: Int, bolt11: String): GameState {
@@ -76,7 +75,25 @@ class ApiClient {
         val list = data["withdrawals"] as? List<*> ?: emptyList<Any>()
         return list.map { gson.fromJson(gson.toJson(it), Withdrawal::class.java) }
     }
+
+    private fun parseBundle(data: Map<String, Any?>): Triple<GameState, Tunables?, PlayerProgress?> {
+        val state = gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
+        val tunables = data["tunables"]?.let {
+            gson.fromJson(gson.toJson(it), Tunables::class.java)
+        }
+        val progress = data["progress"]?.let {
+            gson.fromJson(gson.toJson(it), PlayerProgress::class.java)
+        }
+        return Triple(state, tunables, progress)
+    }
+
+    private fun parseCredit(data: Map<String, Any?>): AdCredit {
+        val state = gson.fromJson(gson.toJson(data["state"]), GameState::class.java)
+        val progress = data["progress"]?.let {
+            gson.fromJson(gson.toJson(it), PlayerProgress::class.java)
+        }
+        return AdCredit(state, progress)
+    }
 }
 
 class ApiException(val code: Int, message: String) : Exception(message)
-

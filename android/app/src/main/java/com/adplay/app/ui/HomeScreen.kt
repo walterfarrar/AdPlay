@@ -72,6 +72,8 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -118,7 +120,8 @@ fun HomeScreen(
     onFaster: () -> Unit,
     onStronger: () -> Unit,
     onSkipTime: () -> Unit,
-    onRedeem: () -> Unit,
+    onAchievements: () -> Unit,
+    onSettings: () -> Unit,
     onDebugReset: () -> Unit,
     onToggleBypassAds: () -> Unit,
     onRetry: () -> Unit,
@@ -262,11 +265,15 @@ fun HomeScreen(
                         )
                     }
 
-                    @Suppress("DEPRECATION")
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    playSatTick()
+                    if (ui.hapticsEnabled) {
+                        @Suppress("DEPRECATION")
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    }
+                    if (ui.soundEnabled) {
+                        playSatTick()
+                    }
 
-                    // Afterglow when the orb lands on Redeem (pop + hover + fly).
+                    // Afterglow when the orb lands on the trophy (pop + hover + fly).
                     Handler(Looper.getMainLooper()).postDelayed({
                         redeemGlow = true
                         Handler(Looper.getMainLooper()).postDelayed({
@@ -361,12 +368,13 @@ fun HomeScreen(
                                         scaleX = redeemGlowScale
                                         scaleY = redeemGlowScale
                                     }
-                                    .clip(RoundedCornerShape(50))
+                                    .size(36.dp)
+                                    .clip(CircleShape)
                                     .background(BrandAccent.copy(alpha = 0.14f + 0.24f * redeemGlowStrength))
                                     .border(
                                         width = (1f + redeemGlowStrength).dp,
                                         color = BrandAccent.copy(alpha = 0.55f + 0.45f * redeemGlowStrength),
-                                        shape = RoundedCornerShape(50),
+                                        shape = CircleShape,
                                     )
                                     .drawBehind {
                                         if (redeemGlowStrength > 0.01f) {
@@ -381,16 +389,30 @@ fun HomeScreen(
                                             )
                                         }
                                     }
-                                    .clickable(onClick = onRedeem)
-                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .clickable(onClick = onAchievements)
+                                    .semantics { contentDescription = "Achievements" }
                                     .onGloballyPositioned { coords ->
                                         redeemCenter = localInHome(
                                             coords,
                                             Offset(coords.size.width / 2f, coords.size.height / 2f),
                                         )
                                     },
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Text("Redeem", color = BrandAccent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("🏆", fontSize = 16.sp)
+                            }
+                            Box(
+                                Modifier
+                                    .padding(start = 8.dp)
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(BrandInk.copy(alpha = 0.08f))
+                                    .border(1.dp, BrandInk.copy(alpha = 0.25f), CircleShape)
+                                    .clickable(onClick = onSettings)
+                                    .semantics { contentDescription = "Settings" },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("⚙", color = BrandInk, fontSize = 18.sp)
                             }
                         }
                     }
@@ -519,7 +541,7 @@ fun HomeScreen(
                         adsRemaining = state.adsRemainingToday,
                         cooldownLeft = state.adCooldownSecondsLeft,
                         regenLeft = state.adRegenSecondsLeft,
-                        adsMax = t?.adsPerCycle ?: 10,
+                        adsMax = ui.progress.adBank.max.takeIf { it > 0 } ?: (t?.adsPerCycle ?: 5),
                         adRegenSeconds = t?.adRegenSeconds ?: 0,
                     )
 
@@ -1613,7 +1635,7 @@ private object SatParticleMotion {
     const val POP_MS = 320L
     const val HOVER_MS = 500L
     const val FLY_MS = 850
-    /** When the orb arrives at Redeem (for afterglow sync). */
+    /** When the orb arrives at the trophy (for afterglow sync). */
     const val LAND_AT_MS = POP_MS + HOVER_MS + FLY_MS - 60L
 }
 
@@ -1652,7 +1674,7 @@ private fun FlyingSatParticle(
         delay(SatParticleMotion.HOVER_MS)
         hoverJob.cancel()
         bob.snapTo(0f)
-        // 3) Ease along the curve to Redeem
+        // 3) Ease along the curve to the trophy
         flyT.animateTo(
             1f,
             animationSpec = tween(

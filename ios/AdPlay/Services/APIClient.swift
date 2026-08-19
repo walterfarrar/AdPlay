@@ -23,28 +23,38 @@ final class APIClient {
         }
     }
 
-    func fetchState() async throws -> (GameState, Tunables?) {
+    func fetchState() async throws -> (GameState, Tunables?, PlayerProgress?) {
         try await ensureSignedIn()
         let data = try await call("getState")
         let envelope: StateEnvelope = try decode(data)
-        return (envelope.state, envelope.tunables)
+        return (envelope.state, envelope.tunables, envelope.progress)
     }
 
-    func tap() async throws -> GameState {
+    func tap() async throws -> (GameState, PlayerProgress?) {
         try await ensureSignedIn()
         let data = try await call("gameTap")
         let envelope: StateOnly = try decode(data)
-        return envelope.state
+        return (envelope.state, envelope.progress)
     }
 
-    func mockComplete(boostType: BoostType) async throws -> GameState {
+    func mockComplete(boostType: BoostType) async throws -> (GameState, PlayerProgress?) {
         try await ensureSignedIn()
         let data = try await call(
             "mockCompleteBoost",
             data: ["boostType": boostType.rawValue],
         )
         let envelope: StateOnly = try decode(data)
-        return envelope.state
+        return (envelope.state, envelope.progress)
+    }
+
+    func buyAdSlot(transactionId: String) async throws -> (GameState, PlayerProgress?) {
+        try await ensureSignedIn()
+        let data = try await call(
+            "buyAdSlot",
+            data: ["transactionId": transactionId],
+        )
+        let envelope: StateOnly = try decode(data)
+        return (envelope.state, envelope.progress)
     }
 
     func requestWithdrawal(amountSats: Int, bolt11: String) async throws -> GameState {
@@ -60,11 +70,11 @@ final class APIClient {
         return envelope.state
     }
 
-    func debugReset() async throws -> GameState {
+    func debugReset() async throws -> (GameState, PlayerProgress?) {
         try await ensureSignedIn()
         let data = try await call("debugReset")
         let envelope: StateOnly = try decode(data)
-        return envelope.state
+        return (envelope.state, envelope.progress)
     }
 
     func myWithdrawals() async throws -> [Withdrawal] {
@@ -96,10 +106,12 @@ final class APIClient {
 private struct StateEnvelope: Decodable {
     let state: GameState
     let tunables: Tunables?
+    let progress: PlayerProgress?
 }
 
 private struct StateOnly: Decodable {
     let state: GameState
+    let progress: PlayerProgress?
 }
 
 private struct WithdrawalsEnvelope: Decodable {

@@ -21,8 +21,29 @@ export type Tunables = {
   /** @deprecated Unused — Stronger uses the shared auto timer; kept for config compat */
   tapStrengthBoostSeconds: number;
   adCooldownSeconds: number;
-  /** Max banked ad charges (burst pool). */
+  /**
+   * @deprecated Computed per player as effective ads max. Kept so older clients
+   * still read tunables.adsPerCycle. New configs should set baseAdsPerCycle.
+   */
   adsPerCycle: number;
+  /** Starting hold size for every player. */
+  baseAdsPerCycle: number;
+  /** Extra hold from completed daily goals today (cap). */
+  dailyGoalBonusAdsMax: number;
+  dailyGoalTapTarget: number;
+  dailyGoalAdTarget: number;
+  dailyGoalSatsTarget: number;
+  dailyGoalTapStretchTarget: number;
+  /** Extra hold from login streak (cap). */
+  streakBonusAdsMax: number;
+  /** Streak days per +1 hold (1 = +1 per day, up to streakBonusAdsMax). */
+  streakAdsEveryDays: number;
+  /** Extra hold from slot-granting achievements (cap). */
+  achievementBonusAdsMax: number;
+  /** Extra hold from IAP (cap). */
+  iapBonusAdsMax: number;
+  /** Safety rail — default equals 5+5+5+3+5. Must not drop earned slots. */
+  maxAdsPerCycle: number;
   /**
    * Seconds between +1 boost-ad / Skip charge while below max during an active run.
    * When the shared auto timer ends, both banks refill to max immediately.
@@ -53,7 +74,18 @@ export const DEFAULT_TUNABLES: Tunables = {
   tapStrengthBoostAmount: 0.25,
   tapStrengthBoostSeconds: 20 * 60,
   adCooldownSeconds: 10,
-  adsPerCycle: 10,
+  adsPerCycle: 5,
+  baseAdsPerCycle: 5,
+  dailyGoalBonusAdsMax: 5,
+  dailyGoalTapTarget: 50,
+  dailyGoalAdTarget: 3,
+  dailyGoalSatsTarget: 1,
+  dailyGoalTapStretchTarget: 200,
+  streakBonusAdsMax: 5,
+  streakAdsEveryDays: 1,
+  achievementBonusAdsMax: 3,
+  iapBonusAdsMax: 5,
+  maxAdsPerCycle: 23,
   adRegenSeconds: 20 * 60,
   skipTimeSeconds: 60,
   skipAdsPerCycle: 10,
@@ -97,6 +129,19 @@ export type GameStateDoc = {
   speedBoostCount: number;
   /** Times Stronger was completed this auto cycle. */
   tapStrengthBoostCount: number;
+  loginDay: string;
+  loginStreak: number;
+  bestLoginStreak: number;
+  iapAdsPurchased: number;
+  unlockedAchievements: string[];
+  lifetimeSatsEarned: number;
+  adsWatchedDay: string;
+  adsWatchedToday: number;
+  hasActivatedAuto: boolean;
+  hasActivatedToday: boolean;
+  hasPaidRedeem: boolean;
+  /** Last applied hold max; used to grant charges when the max grows. */
+  adsHoldMax?: number;
 };
 export type PublicGameState = {
   progress: number;
@@ -144,4 +189,40 @@ export type PublicGameState = {
   resetHourUtc: number;
   /** ISO timestamp of last authoritative state write — clients use this to drop stale polls. */
   updatedAt: string;
+};
+
+export type AdBankBreakdown = {
+  base: number;
+  dailyBonus: number;
+  streakBonus: number;
+  achievementBonus: number;
+  iapBonus: number;
+  max: number;
+};
+
+export type DailyGoalPublic = {
+  id: string;
+  title: string;
+  current: number;
+  target: number;
+  completed: boolean;
+  rewardAds: number;
+};
+
+export type AchievementPublic = {
+  id: string;
+  title: string;
+  detail: string;
+  unlocked: boolean;
+  grantsSlot: boolean;
+};
+
+export type PlayerProgress = {
+  adBank: AdBankBreakdown;
+  loginStreak: number;
+  bestLoginStreak: number;
+  dailyGoals: DailyGoalPublic[];
+  achievements: AchievementPublic[];
+  iapAdsPurchased: number;
+  iapBonusAdsMax: number;
 };

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RedeemView: View {
+    var showsClose: Bool = true
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
 
@@ -27,6 +28,8 @@ struct RedeemView: View {
                     historyPanel
                 }
                 .padding(20)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Redeem")
@@ -36,9 +39,11 @@ struct RedeemView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
             .tint(Color("BrandInk"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                        .foregroundStyle(Color("BrandInk"))
+                if showsClose {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { dismiss() }
+                            .foregroundStyle(Color("BrandInk"))
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -77,7 +82,7 @@ struct RedeemView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Color("BrandInk"))
                 .monospacedDigit()
-            Text("Paste a Lightning invoice. An admin pays it manually from a Lightning wallet.")
+            Text("Paste a Lightning invoice to request a payout.")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
         }
@@ -258,7 +263,7 @@ struct RedeemHowToView: View {
                             "2. Open a Lightning wallet and create a receive invoice for the exact amount you want.\n" +
                             "3. Copy the BOLT11 invoice from your wallet.\n" +
                             "4. In AdPlay Redeem, enter that amount, paste the invoice, and submit.\n" +
-                            "5. We pay invoices manually. Watch History for pending → paid " +
+                            "5. Watch History for pending → paid " +
                             "(or rejected / refunded)."
                     )
                     howToSection(

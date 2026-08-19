@@ -4,10 +4,13 @@ import UIKit
 
 struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
-    @State private var showRedeem = false
+    @EnvironmentObject private var settings: PlayerSettings
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var showSettings = false
+    @State private var showAchievements = false
     @State private var satAnchors: [SatEarnAnchor: CGPoint] = [:]
     @State private var satParticles: [SatParticle] = []
-    @State private var redeemGlow = false
+    @State private var trophyGlow = false
     @State private var barFlash = false
     @State private var lastCelebrateAt: Date = .distantPast
     @State private var homeSize: CGSize = .zero
@@ -18,199 +21,27 @@ struct HomeView: View {
         ZStack {
             AtmosphereBackground()
 
-            VStack(spacing: 0) {
-                HStack {
-                    Text("AdPlay")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color("BrandInk"))
-                    Spacer()
-                    if session.bypassAdsAvailable {
-                        Button(session.bypassAds ? "Skip ads" : "Real ads") {
-                            session.setBypassAds(!session.bypassAds)
+            GeometryReader { geo in
+                let wide = sizeClass == .regular && geo.size.width > 700
+                let wheel = min(260, max(180, (wide ? geo.size.width * 0.28 : geo.size.width * 0.55)))
+                ScrollView {
+                    Group {
+                        if wide {
+                            HStack(alignment: .top, spacing: 28) {
+                                playStage(state: state, wheel: wheel)
+                                boostsColumn(state: state)
+                            }
+                        } else {
+                            VStack(spacing: 0) {
+                                playStage(state: state, wheel: wheel)
+                                boostsColumn(state: state)
+                            }
                         }
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(session.bypassAds ? Color("BrandAccent") : Color("BrandMuted"))
                     }
-                    // Fail-closed: only when server explicitly enables debug reset.
-                    if session.tunables?.debugReset == true {
-                        Button("Reset") {
-                            Task { await session.debugReset() }
-                        }
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color("BrandMuted"))
-                    }
-                    Button {
-                        showRedeem = true
-                    } label: {
-                        Text("Redeem")
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color("BrandAccent"))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(
-                                Capsule().fill(Color("BrandAccent").opacity(redeemGlow ? 0.38 : 0.14))
-                            )
-                            .overlay(
-                                Capsule().stroke(
-                                    Color("BrandAccent").opacity(redeemGlow ? 1.0 : 0.55),
-                                    lineWidth: redeemGlow ? 2 : 1
-                                )
-                            )
-                            .shadow(
-                                color: Color("BrandAccent").opacity(redeemGlow ? 0.85 : 0),
-                                radius: redeemGlow ? 16 : 0,
-                                y: 0
-                            )
-                            .scaleEffect(redeemGlow ? 1.08 : 1.0)
-                    }
-                    .background(satAnchorReporter(.redeem))
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
-
-                Text(
-                    "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
-                        "they can improve as more players join and ad revenue grows."
-                )
-                .font(.system(size: 12, weight: .regular, design: .rounded))
-                .foregroundStyle(Color("BrandMuted"))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.top, 10)
-
-                Spacer(minLength: 24)
-
-                SatEarnStage(
-                    satsBalance: state.satsBalance,
-                    progress: state.progress,
-                    total: state.unitsPerSat,
-                    fillRate: state.fillRate,
-                    tapPower: state.effectiveTapPower,
-                    autoActive: state.autoFillActive,
-                    autoFillUntil: state.autoFillUntil,
-                    wheelFlash: barFlash
-                )
-
-                Text(
-                    state.tapsRemaining > 0
-                        ? "Tap the wheel · \(state.tapsRemaining) taps left today"
-                        : "0 taps left today"
-                )
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color("BrandMuted"))
-                    .padding(.top, 14)
-
-                Spacer(minLength: 36)
-
-                Text(
-                    state.autoFillActive
-                        ? "Watch an Ad for a Boost"
-                        : "Watch an Ad to activate Auto Tapper"
-                )
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color("BrandMuted"))
+                    .frame(maxWidth: wide ? .infinity : 560)
                     .frame(maxWidth: .infinity)
-                    .padding(.bottom, 8)
-
-                Group {
-                    if state.autoFillActive {
-                        HStack(spacing: 10) {
-                            BoostButton(
-                                title: "Longer",
-                                actionLabel: formatLongerAction(session.tunables),
-                                theme: Color("BrandTime"),
-                                running: state.longerBoostActive,
-                                applyCount: state.longerBoostCount,
-                                disabled: !canWatch
-                            ) {
-                                Task { await session.watch(boost: .duration) }
-                            }
-                            BoostButton(
-                                title: "Faster",
-                                actionLabel: formatFasterAction(session.tunables),
-                                theme: Color("BrandAccent"),
-                                running: state.speedBoostActive,
-                                applyCount: state.fasterBoostCount,
-                                disabled: !canWatchSecondary
-                            ) {
-                                Task { await session.watch(boost: .speed) }
-                            }
-                            BoostButton(
-                                title: "Stronger",
-                                actionLabel: formatStrongerAction(session.tunables),
-                                theme: Color("BrandPower"),
-                                running: state.tapStrengthActive ?? false,
-                                applyCount: state.strongerBoostCount,
-                                disabled: !canWatchSecondary
-                            ) {
-                                Task { await session.watch(boost: .tapStrength) }
-                            }
-                        }
-                    } else {
-                        BoostButton(
-                            title: "Activate Auto Tapper",
-                            actionLabel: formatLongerAction(session.tunables),
-                            theme: Color("BrandTime"),
-                            showCount: false,
-                            disabled: !canActivate
-                        ) {
-                            Task { await session.watch(boost: .activate) }
-                        }
-                    }
+                    .padding(.bottom, 16)
                 }
-                .frame(height: 88)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 10)
-
-                if let err = session.errorMessage {
-                    Text(err)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 12)
-                }
-
-                AdsFooterView(
-                    adsRemaining: state.adsRemainingToday,
-                    cooldownLeft: state.adCooldownSecondsLeft,
-                    regenLeft: state.adRegenSecondsLeft ?? 0,
-                    adsMax: session.tunables?.adsPerCycle ?? 10,
-                    adRegenSeconds: session.tunables?.adRegenSeconds ?? 0
-                )
-
-                // Reserved height so layout never jumps when Skip appears.
-                // skipAdsPerCycle < 0 disables Skip Time entirely.
-                let skipEnabled = (session.tunables?.skipAdsPerCycle ?? 10) >= 0
-                let skipRemaining = state.effectiveSkipAdsRemaining
-                let skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0
-                let skipVisible = skipEnabled
-                    && state.adsRemainingToday <= 0
-                    && state.autoFillActive
-                    && (skipRemaining < 0 || skipRemaining > 0 || skipRegenLeft > 0)
-                let canSkip = !session.isLoading
-                    && skipVisible
-                    && state.adCooldownSecondsLeft == 0
-                    && (skipRemaining < 0 || skipRemaining > 0)
-
-                ZStack {
-                    if skipVisible {
-                        SkipTimeButton(
-                            actionLabel: formatSkipTimeAction(session.tunables),
-                            remainingLabel: formatSkipButtonStatus(
-                                skipAdsRemaining: skipRemaining,
-                                cooldownLeft: state.adCooldownSecondsLeft,
-                                regenLeft: skipRegenLeft
-                            ),
-                            disabled: !canSkip
-                        ) {
-                            Task { await session.watch(boost: .skipTime) }
-                        }
-                    }
-                }
-                .frame(height: 52)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
             }
 
             ForEach(satParticles) { particle in
@@ -233,9 +64,228 @@ struct HomeView: View {
             guard gained > 0 else { return }
             celebrateSatEarn(gained: gained)
         }
-        .sheet(isPresented: $showRedeem) {
-            RedeemView()
+        .sheet(isPresented: $showAchievements) {
+            AchievementsView()
                 .environmentObject(session)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(showsClose: true)
+                .environmentObject(session)
+                .environmentObject(settings)
+        }
+    }
+
+    private func playStage(state: GameState, wheel: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            headerBar
+            Text(
+                "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
+                    "they can improve as more players join and ad revenue grows."
+            )
+            .font(.system(size: 12, weight: .regular, design: .rounded))
+            .foregroundStyle(Color("BrandMuted"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 10)
+
+            SatEarnStage(
+                satsBalance: state.satsBalance,
+                progress: state.progress,
+                total: state.unitsPerSat,
+                fillRate: state.fillRate,
+                tapPower: state.effectiveTapPower,
+                autoActive: state.autoFillActive,
+                autoFillUntil: state.autoFillUntil,
+                wheelFlash: barFlash,
+                wheelSize: wheel
+            )
+            .padding(.top, 20)
+
+            Text(
+                state.tapsRemaining > 0
+                    ? "Tap the wheel · \(state.tapsRemaining) taps left today"
+                    : "0 taps left today"
+            )
+            .font(.system(size: 14, weight: .medium, design: .rounded))
+            .foregroundStyle(Color("BrandMuted"))
+            .padding(.top, 14)
+        }
+    }
+
+    private var headerBar: some View {
+        HStack {
+            Text("AdPlay")
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .foregroundStyle(Color("BrandInk"))
+            Spacer()
+            if session.bypassAdsAvailable {
+                Button(session.bypassAds ? "Skip ads" : "Real ads") {
+                    session.setBypassAds(!session.bypassAds)
+                }
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(session.bypassAds ? Color("BrandAccent") : Color("BrandMuted"))
+            }
+            if session.tunables?.debugReset == true {
+                Button("Reset") {
+                    Task { await session.debugReset() }
+                }
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color("BrandMuted"))
+            }
+            Button {
+                showAchievements = true
+            } label: {
+                Image(systemName: "trophy.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color("BrandAccent"))
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Circle().fill(Color("BrandAccent").opacity(trophyGlow ? 0.38 : 0.14))
+                    )
+                    .overlay(
+                        Circle().stroke(
+                            Color("BrandAccent").opacity(trophyGlow ? 1.0 : 0.55),
+                            lineWidth: trophyGlow ? 2 : 1
+                        )
+                    )
+                    .shadow(
+                        color: Color("BrandAccent").opacity(trophyGlow ? 0.85 : 0),
+                        radius: trophyGlow ? 16 : 0,
+                        y: 0
+                    )
+                    .scaleEffect(trophyGlow ? 1.08 : 1.0)
+            }
+            .accessibilityLabel("Achievements")
+            .background(satAnchorReporter(.trophy))
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color("BrandInk"))
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color("BrandInk").opacity(0.08)))
+                    .overlay(Circle().stroke(Color("BrandInk").opacity(0.25), lineWidth: 1))
+            }
+            .accessibilityLabel("Settings")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+    }
+
+    private func boostsColumn(state: GameState) -> some View {
+        let skipEnabled = (session.tunables?.skipAdsPerCycle ?? 10) >= 0
+        let skipRemaining = state.effectiveSkipAdsRemaining
+        let skipRegenLeft = state.skipAdRegenSecondsLeft ?? 0
+        let skipVisible = skipEnabled
+            && state.adsRemainingToday <= 0
+            && state.autoFillActive
+            && (skipRemaining < 0 || skipRemaining > 0 || skipRegenLeft > 0)
+        let canSkip = !session.isLoading
+            && skipVisible
+            && state.adCooldownSecondsLeft == 0
+            && (skipRemaining < 0 || skipRemaining > 0)
+        let adsMax = session.progress.adBank.max > 0
+            ? session.progress.adBank.max
+            : (session.tunables?.adsPerCycle ?? 5)
+
+        return VStack(spacing: 0) {
+            Text(
+                state.autoFillActive
+                    ? "Watch an Ad for a Boost"
+                    : "Watch an Ad to activate Auto Tapper"
+            )
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color("BrandMuted"))
+            .frame(maxWidth: .infinity)
+            .padding(.top, 28)
+            .padding(.bottom, 8)
+
+            Group {
+                if state.autoFillActive {
+                    HStack(spacing: 10) {
+                        BoostButton(
+                            title: "Longer",
+                            actionLabel: formatLongerAction(session.tunables),
+                            theme: Color("BrandTime"),
+                            running: state.longerBoostActive,
+                            applyCount: state.longerBoostCount,
+                            disabled: !canWatch
+                        ) {
+                            Task { await session.watch(boost: .duration) }
+                        }
+                        BoostButton(
+                            title: "Faster",
+                            actionLabel: formatFasterAction(session.tunables),
+                            theme: Color("BrandAccent"),
+                            running: state.speedBoostActive,
+                            applyCount: state.fasterBoostCount,
+                            disabled: !canWatchSecondary
+                        ) {
+                            Task { await session.watch(boost: .speed) }
+                        }
+                        BoostButton(
+                            title: "Stronger",
+                            actionLabel: formatStrongerAction(session.tunables),
+                            theme: Color("BrandPower"),
+                            running: state.tapStrengthActive ?? false,
+                            applyCount: state.strongerBoostCount,
+                            disabled: !canWatchSecondary
+                        ) {
+                            Task { await session.watch(boost: .tapStrength) }
+                        }
+                    }
+                } else {
+                    BoostButton(
+                        title: "Activate Auto Tapper",
+                        actionLabel: formatLongerAction(session.tunables),
+                        theme: Color("BrandTime"),
+                        showCount: false,
+                        disabled: !canActivate
+                    ) {
+                        Task { await session.watch(boost: .activate) }
+                    }
+                }
+            }
+            .frame(height: 88)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 10)
+
+            if let err = session.errorMessage {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+            }
+
+            AdsFooterView(
+                adsRemaining: state.adsRemainingToday,
+                cooldownLeft: state.adCooldownSecondsLeft,
+                regenLeft: state.adRegenSecondsLeft ?? 0,
+                adsMax: adsMax,
+                adRegenSeconds: session.tunables?.adRegenSeconds ?? 0
+            )
+
+            ZStack {
+                if skipVisible {
+                    SkipTimeButton(
+                        actionLabel: formatSkipTimeAction(session.tunables),
+                        remainingLabel: formatSkipButtonStatus(
+                            skipAdsRemaining: skipRemaining,
+                            cooldownLeft: state.adCooldownSecondsLeft,
+                            regenLeft: skipRegenLeft
+                        ),
+                        disabled: !canSkip
+                    ) {
+                        Task { await session.watch(boost: .skipTime) }
+                    }
+                }
+            }
+            .frame(height: 52)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
         }
     }
 
@@ -283,26 +333,30 @@ struct HomeView: View {
 
         let from = satAnchors[.wheelTip]
             ?? CGPoint(x: max(24, homeSize.width * 0.38), y: homeSize.height * 0.38)
-        let to = satAnchors[.redeem]
-            ?? CGPoint(x: max(48, homeSize.width - 56), y: 36)
+        let to = satAnchors[.trophy]
+            ?? CGPoint(x: max(48, homeSize.width - 88), y: 36)
         if satParticles.count < 4, homeSize.width > 0 {
             satParticles.append(SatParticle(from: from, to: to))
         }
 
-        // Afterglow when the orb lands on Redeem (pop + hover + fly).
+        // Afterglow when the orb lands on the trophy (pop + hover + fly).
         DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.landAt) {
             withAnimation(.spring(response: 0.34, dampingFraction: 0.55)) {
-                redeemGlow = true
+                trophyGlow = true
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                 withAnimation(.easeOut(duration: 0.5)) {
-                    redeemGlow = false
+                    trophyGlow = false
                 }
             }
         }
 
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        AudioServicesPlaySystemSound(1057)
+        if settings.hapticsEnabled {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }
+        if settings.soundEnabled {
+            AudioServicesPlaySystemSound(1057)
+        }
     }
 
     private func satAnchorReporter(_ id: SatEarnAnchor) -> some View {
@@ -478,7 +532,7 @@ private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
 // MARK: - Sat earn celebration
 
 private enum SatEarnAnchor: Hashable {
-    case redeem
+    case trophy
     case wheelTip
 }
 
@@ -507,14 +561,13 @@ struct SatEarnStage: View {
     let autoActive: Bool
     let autoFillUntil: String?
     var wheelFlash: Bool = false
+    var wheelSize: CGFloat = 220
 
     @State private var anchorProgress: Double = 0
     @State private var anchorDate: Date = .now
     /// Auto-only clock for the knocker — ignores manual tap progress jumps.
     @State private var knockerAnchorProgress: Double = 0
     @State private var knockerAnchorDate: Date = .now
-
-    private let wheelSize: CGFloat = 220
 
     var body: some View {
         VStack(spacing: 0) {
@@ -574,15 +627,17 @@ struct SatEarnStage: View {
                                 .background(wheelTipReporter)
 
                             AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+                                .scaleEffect(wheelSize / 220)
+                                .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
 
                             SharedAutoTimerView(
                                 autoFillUntil: autoFillUntil,
                                 autoActive: autoActive
                             )
                             .frame(width: 92)
-                            .offset(x: 153, y: 74)
+                            .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
                         }
-                        .offset(x: -22)
+                        .offset(x: -22 * wheelSize / 220)
                         .frame(maxWidth: .infinity)
                         .frame(height: wheelSize + 40)
 
@@ -1150,7 +1205,7 @@ private enum SatParticleMotion {
     static let pop: TimeInterval = 0.32
     static let hover: TimeInterval = 0.50
     static let fly: TimeInterval = 0.85
-    /// When the orb arrives at Redeem (for afterglow sync).
+    /// When the orb arrives at the trophy (for afterglow sync).
     static var landAt: TimeInterval { pop + hover + fly - 0.06 }
 }
 
@@ -1164,7 +1219,7 @@ private struct FlyingSatParticleView: View {
 
     var body: some View {
         let hover = CGPoint(x: particle.from.x + 18, y: particle.from.y - 58)
-        // Gentle S-curve toward Redeem (bulge right, then in).
+        // Gentle S-curve toward the trophy (bulge right, then in).
         let ctrl = CGPoint(
             x: hover.x + (particle.to.x - hover.x) * 0.3 + 42,
             y: min(hover.y, particle.to.y) - 36
@@ -1223,7 +1278,7 @@ private struct FlyingSatParticleView: View {
                     bob = -7
                 }
             }
-            // 3) Ease along the curve to Redeem
+            // 3) Ease along the curve to the trophy
             DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.pop + SatParticleMotion.hover) {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true

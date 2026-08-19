@@ -20,10 +20,18 @@ enum GameReminderScheduler {
         UNUserNotificationCenter.current().setBadgeCount(0)
     }
 
-    /// Reschedule from latest authoritative game state.
-    static func sync(_ state: GameState) {
+    static func clearAll() {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [idAuto, idAds])
+        clearBadge()
+    }
+
+    /// Reschedule from latest authoritative game state.
+    static func sync(_ state: GameState) {
+        let remindersOn = UserDefaults.standard.object(forKey: "adplay.remindersEnabled") as? Bool ?? true
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [idAuto, idAds])
+        guard remindersOn else { return }
 
         let now = Date()
         let autoAt = parseDate(state.autoFillUntil).flatMap { state.autoFillActive ? $0 : nil }

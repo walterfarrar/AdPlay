@@ -18,7 +18,7 @@ import kotlinx.coroutines.TimeoutCancellationException
  * Boost credit via mockCompleteBoost after a successful reward.
  */
 interface AdServing {
-    suspend fun showBoostAd(type: BoostType): GameState
+    suspend fun showBoostAd(type: BoostType): AdCredit
 }
 
 private fun interface AdNetwork {
@@ -26,7 +26,7 @@ private fun interface AdNetwork {
 }
 
 class MockAdService(private val api: ApiClient) : AdServing {
-    override suspend fun showBoostAd(type: BoostType): GameState {
+    override suspend fun showBoostAd(type: BoostType): AdCredit {
         delay(1_200)
         return api.mockComplete(type)
     }
@@ -62,7 +62,7 @@ private class NetworkAdService(
     private val appContext: Context,
     private val network: AdNetwork,
 ) : AdServing {
-    override suspend fun showBoostAd(type: BoostType): GameState {
+    override suspend fun showBoostAd(type: BoostType): AdCredit {
         if (DebugAdBypass.isEnabled(appContext)) {
             return MockAdService(api).showBoostAd(type)
         }
@@ -79,7 +79,7 @@ private class WaterfallAdService(
     private val appContext: Context,
     private val networks: List<AdNetwork>,
 ) : AdServing {
-    override suspend fun showBoostAd(type: BoostType): GameState {
+    override suspend fun showBoostAd(type: BoostType): AdCredit {
         if (DebugAdBypass.isEnabled(appContext)) {
             return MockAdService(api).showBoostAd(type)
         }

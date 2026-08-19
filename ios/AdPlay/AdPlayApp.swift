@@ -4,6 +4,7 @@ import FirebaseCore
 @main
 struct AdPlayApp: App {
     @StateObject private var session = SessionStore()
+    @StateObject private var settings = PlayerSettings()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -14,6 +15,7 @@ struct AdPlayApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .environmentObject(settings)
                 .preferredColorScheme(.dark)
         }
         .onChange(of: scenePhase) { _, phase in
