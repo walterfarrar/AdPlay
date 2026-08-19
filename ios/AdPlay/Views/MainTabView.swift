@@ -6,23 +6,25 @@ struct MainTabView: View {
     @State private var tab = 0
 
     var body: some View {
-        TabView(selection: $tab) {
-            HomeView()
-                .tabItem { Label("Play", systemImage: "play.circle.fill") }
-                .tag(0)
-            ActivityView()
-                .tabItem { Label("Daily Goals", systemImage: "checkmark.circle.fill") }
-                .badge(goalBadge)
-                .tag(1)
-            StoreView()
-                .tabItem { Label("Store", systemImage: "bag.fill") }
-                .tag(2)
-            RedeemView(showsClose: false)
-                .tabItem { Label("Redeem", systemImage: "bolt.fill") }
-                .tag(3)
+        SatEarnFlightHost {
+            TabView(selection: $tab) {
+                HomeView()
+                    .tabItem { Label("Play", systemImage: "play.circle.fill") }
+                    .tag(0)
+                ActivityView()
+                    .tabItem { Label("Daily Goals", systemImage: "checkmark.circle.fill") }
+                    .badge(goalBadge)
+                    .tag(1)
+                StoreView()
+                    .tabItem { Label("Store", systemImage: "bag.fill") }
+                    .tag(2)
+                RedeemView(showsClose: false)
+                    .tabItem { Label("Redeem", systemImage: "bolt.fill") }
+                    .tag(3)
+            }
+            .tint(Color("BrandAccent"))
+            .preferredColorScheme(.dark)
         }
-        .tint(Color("BrandAccent"))
-        .preferredColorScheme(.dark)
         .onChange(of: tab) { _, t in
             if t == 1 {
                 settings.acknowledgeDailyGoals(session.progress.displayedDailyGoals)
