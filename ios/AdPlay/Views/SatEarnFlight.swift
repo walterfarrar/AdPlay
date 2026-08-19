@@ -36,9 +36,22 @@ struct SatEarnFlightHost<Content: View>: View {
         .environmentObject(flight)
         .background(
             GeometryReader { geo in
+                let global = geo.frame(in: .global)
                 Color.clear
                     .onAppear { flight.canvasSize = geo.size }
                     .onChange(of: geo.size) { _, newSize in flight.canvasSize = newSize }
+                    .background(
+                        RedeemTabBarProbe { windowPoint in
+                            let next = CGPoint(
+                                x: windowPoint.x - global.minX,
+                                y: windowPoint.y - global.minY
+                            )
+                            if abs(flight.redeem.x - next.x) > 0.5
+                                || abs(flight.redeem.y - next.y) > 0.5 {
+                                flight.redeem = next
+                            }
+                        }
+                    )
             }
         )
         .onChange(of: session.state.satsBalance) { oldValue, newValue in
@@ -63,10 +76,17 @@ struct SatEarnFlightHost<Content: View>: View {
                                     let frame = geo.frame(in: .named("satEarn"))
                                     Color.clear
                                         .onAppear {
-                                            flight.redeem = CGPoint(x: frame.midX, y: frame.midY)
+                                            if flight.redeem == .zero {
+                                                flight.redeem = CGPoint(x: frame.midX, y: frame.midY)
+                                            }
                                         }
                                         .onChange(of: frame) { _, newFrame in
-                                            flight.redeem = CGPoint(x: newFrame.midX, y: newFrame.midY)
+                                            if flight.redeem == .zero {
+                                                flight.redeem = CGPoint(
+                                                    x: newFrame.midX,
+                                                    y: newFrame.midY
+                                                )
+                                            }
                                         }
                                 }
                             }
@@ -138,6 +158,76 @@ struct SatEarnFlightHost<Content: View>: View {
         }
         if settings.soundEnabled {
             AudioServicesPlaySystemSound(1057)
+        }
+    }
+}
+
+/// Reads the trailing UITabBar button so the orb lands on Redeem, not an estimate.
+private struct RedeemTabBarProbe: UIViewRepresentable {
+    var onWindowPoint: (CGPoint) -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.onWindowPoint = onWindowPoint
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.onWindowPoint = onWindowPoint
+        uiView.reportSoon()
+    }
+
+    final class ProbeView: UIView {
+        var onWindowPoint: ((CGPoint) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            reportSoon()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            reportSoon()
+        }
+
+        func reportSoon() {
+            DispatchQueue.main.async { [weak self] in
+                self?.report()
+            }
+        }
+
+        private func report() {
+            guard let button = redeemButton() else { return }
+            let center = CGPoint(x: button.bounds.midX, y: button.bounds.midY)
+            onWindowPoint?(button.convert(center, to: nil))
+        }
+
+        private func redeemButton() -> UIView? {
+            guard let tabBar = findTabBar() else { return nil }
+            let buttons = tabBar.subviews.filter { view in
+                let name = String(describing: type(of: view))
+                return name.contains("Button") && !view.isHidden
+            }.sorted { $0.frame.minX < $1.frame.minX }
+            if buttons.count >= 4 { return buttons[3] }
+            return buttons.last
+        }
+
+        private func findTabBar() -> UITabBar? {
+            var current: UIView? = superview
+            while let view = current {
+                if let bar = view as? UITabBar { return bar }
+                current = view.superview
+            }
+            guard let root = window else { return nil }
+            return findTabBar(in: root)
+        }
+
+        private func findTabBar(in view: UIView) -> UITabBar? {
+            if let bar = view as? UITabBar { return bar }
+            for child in view.subviews {
+                if let found = findTabBar(in: child) { return found }
+            }
+            return nil
         }
     }
 }

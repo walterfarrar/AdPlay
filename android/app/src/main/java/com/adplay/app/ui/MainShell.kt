@@ -194,48 +194,14 @@ fun MainShell(
                                 Modifier
                             },
                             icon = {
-                                val badgeIcon = @Composable {
-                                    BadgedBox(
-                                        badge = {
-                                            if (i == 1 && ui.unseenDailyGoalCount > 0) {
-                                                Badge { Text("${ui.unseenDailyGoalCount}") }
-                                            }
-                                        },
-                                    ) {
-                                        Text(
-                                            if (tab == i) "●" else "○",
-                                            color = if (tab == i) BrandAccent else BrandMuted,
-                                        )
-                                    }
-                                }
-                                if (i != 3) {
-                                    badgeIcon()
-                                } else {
-                                    Box(
-                                        Modifier
-                                            .graphicsLayer {
-                                                scaleX = redeemGlowScale
-                                                scaleY = redeemGlowScale
-                                            }
-                                            .size(36.dp)
-                                            .drawBehind {
-                                                if (redeemGlowStrength > 0.01f) {
-                                                    drawCircle(
-                                                        brush = Brush.radialGradient(
-                                                            colors = listOf(
-                                                                BrandAccent.copy(alpha = 0.55f * redeemGlowStrength),
-                                                                Color.Transparent,
-                                                            ),
-                                                        ),
-                                                        radius = size.maxDimension * 0.95f,
-                                                    )
-                                                }
-                                            },
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        badgeIcon()
-                                    }
-                                }
+                                RedeemTabIcon(
+                                    selected = tab == i,
+                                    showGoalBadge = i == 1 && ui.unseenDailyGoalCount > 0,
+                                    goalBadgeCount = ui.unseenDailyGoalCount,
+                                    glow = i == 3,
+                                    glowScale = redeemGlowScale,
+                                    glowStrength = redeemGlowStrength,
+                                )
                             },
                             label = { Text(label) },
                             colors = NavigationBarItemDefaults.colors(
@@ -321,5 +287,64 @@ fun MainShell(
                 AchievementsScreen(ui = ui, onClose = { showAchievements = false })
             }
         }
+    }
+}
+
+@Composable
+private fun RedeemTabIcon(
+    selected: Boolean,
+    showGoalBadge: Boolean,
+    goalBadgeCount: Int,
+    glow: Boolean,
+    glowScale: Float,
+    glowStrength: Float,
+) {
+    if (!glow) {
+        TabGlyph(selected = selected, showGoalBadge = showGoalBadge, goalBadgeCount = goalBadgeCount)
+        return
+    }
+    Box(
+        Modifier
+            .graphicsLayer {
+                scaleX = glowScale
+                scaleY = glowScale
+            }
+            .size(36.dp)
+            .drawBehind {
+                if (glowStrength > 0.01f) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                BrandAccent.copy(alpha = 0.55f * glowStrength),
+                                Color.Transparent,
+                            ),
+                        ),
+                        radius = size.maxDimension * 0.95f,
+                    )
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        TabGlyph(selected = selected, showGoalBadge = showGoalBadge, goalBadgeCount = goalBadgeCount)
+    }
+}
+
+@Composable
+private fun TabGlyph(
+    selected: Boolean,
+    showGoalBadge: Boolean,
+    goalBadgeCount: Int,
+) {
+    BadgedBox(
+        badge = {
+            if (showGoalBadge) {
+                Badge { Text("$goalBadgeCount") }
+            }
+        },
+    ) {
+        Text(
+            if (selected) "●" else "○",
+            color = if (selected) BrandAccent else BrandMuted,
+        )
     }
 }
