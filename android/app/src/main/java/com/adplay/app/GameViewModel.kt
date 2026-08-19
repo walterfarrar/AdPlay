@@ -69,6 +69,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private var unackedTaps = 0
     private var tapFlushJob: Job? = null
     private var tapFlushGeneration = 0
+    /** True while tapFlushJob is sending gameTap calls (avoids refresh joining itself). */
+    private var flushingTaps = false
     private var anchorMs: Long = System.currentTimeMillis()
     private var windowEndHandled = false
     private var foreground = false
@@ -172,10 +174,18 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(state = project(s, System.currentTimeMillis())) }
     }
 
+    /** Finish uploading optimistic taps so the next getState includes them. */
+    private suspend fun drainPendingTaps() {
+        if (flushingTaps) return
+        tapFlushJob?.join()
+    }
+
     private fun ensureTapFlush() {
         if (tapFlushJob?.isActive == true) return
         val generation = tapFlushGeneration
         tapFlushJob = viewModelScope.launch {
+            flushingTaps = true
+            try {
             while (unackedTaps > 0) {
                 if (generation != tapFlushGeneration) return@launch
                 try {
@@ -197,6 +207,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { refresh(force = true) }
                     return@launch
                 }
+            }
+            } finally {
+                flushingTaps = false
             }
         }
     }
@@ -361,9 +374,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun refresh(force: Boolean = false) {
+        // Daily Goals (and other getState pulls) must not race in-flight taps.
+        drainPendingTaps()
         val (state, tunables, progress) = api.fetchState()
         ads = AdServiceFactory.make(api, tunables?.adProvider ?: "waterfall", appContext)
-        applyState(state, force = force)
+        applyState(state, force = force, discardOptimisticTaps = false)
         _ui.update {
             it.copy(
                 tunables = tunables,
@@ -406,25 +421,36 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Apply an authoritative server snapshot: it always wins over any locally
      * projected values, so a tampered client can never keep fake progress/balance.
+     *
+     * `discardOptimisticTaps` is true for mutations that already include those taps
+     * (boost, reset, redeem). getState refresh keeps taps that landed during the fetch.
      */
-    private fun applyState(state: GameState, force: Boolean) {
+    private fun applyState(state: GameState, force: Boolean, discardOptimisticTaps: Boolean = true) {
         val incoming = state.updatedAt
         val prev = lastUpdatedAt
         if (!force && incoming != null && prev != null && incoming < prev) {
             return // stale response lost a race with a newer tap/boost
         }
         if (incoming != null) lastUpdatedAt = incoming
-        // Invalidate any in-flight optimistic tap flush; those responses are stale
-        // relative to this authoritative snapshot (boost / refresh / reset).
-        tapFlushGeneration += 1
-        unackedTaps = 0
-        confirmedState = state
-        serverState = state
-        anchorMs = System.currentTimeMillis()
-        windowEndHandled = false
-        val projected = project(state, anchorMs)
-        _ui.update { it.copy(state = projected) }
-        GameReminderScheduler.sync(appContext, projected)
+        if (discardOptimisticTaps) {
+            // Invalidate any in-flight optimistic tap flush; those responses are stale
+            // relative to this authoritative snapshot (boost / reset / redeem).
+            tapFlushGeneration += 1
+            unackedTaps = 0
+            confirmedState = state
+            serverState = state
+            anchorMs = System.currentTimeMillis()
+            windowEndHandled = false
+            val projected = project(state, anchorMs)
+            _ui.update { it.copy(state = projected) }
+            GameReminderScheduler.sync(appContext, projected)
+        } else {
+            confirmedState = state
+            anchorMs = System.currentTimeMillis()
+            windowEndHandled = false
+            publishOptimisticTaps()
+            GameReminderScheduler.sync(appContext, _ui.value.state)
+        }
         ensureTicker()
     }
 
@@ -433,8 +459,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyProgress(server: PlayerProgress?) {
-        val adsFromServer = server?.dailyGoals?.firstOrNull { it.id == "ads" }?.current ?: 0
-        adsWatchedToday = maxOf(adsWatchedToday, adsFromServer)
+        val adsFromServer = server?.dailyGoals?.firstOrNull { it.id == "ads" }?.current
+        if (adsFromServer != null) adsWatchedToday = adsFromServer
         _ui.update { ui ->
             val next = ui.progress.takingServer(server).syncedWith(
                 state = ui.state,

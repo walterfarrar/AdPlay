@@ -12,6 +12,7 @@ import {
   nowIso,
   parseIso,
   utcDayKey,
+  utcDayStart,
   freshGame,
 } from "./util";
 import {
@@ -27,8 +28,16 @@ const db = () => admin.firestore();
 
 export async function loadTunables(): Promise<Tunables> {
   const snap = await db().doc("config/tunables").get();
-  if (!snap.exists) return { ...DEFAULT_TUNABLES };
-  return { ...DEFAULT_TUNABLES, ...(snap.data() as Partial<Tunables>) };
+  const t = snap.exists
+    ? { ...DEFAULT_TUNABLES, ...(snap.data() as Partial<Tunables>) }
+    : { ...DEFAULT_TUNABLES };
+  // Stored caps must not sit below current defaults or new slot sources get clipped.
+  t.achievementBonusAdsMax = Math.max(
+    t.achievementBonusAdsMax,
+    DEFAULT_TUNABLES.achievementBonusAdsMax,
+  );
+  t.maxAdsPerCycle = Math.max(t.maxAdsPerCycle, DEFAULT_TUNABLES.maxAdsPerCycle);
+  return t;
 }
 
 function gameRef(uid: string) {
@@ -352,6 +361,18 @@ function applyProgressUnits(
   return { earned, credits };
 }
 
+function catchUpSlice(
+  g: GameStateDoc,
+  t: Tunables,
+  from: Date,
+  to: Date,
+): { earned: number; credits: LedgerCredit[] } {
+  const earnSec = Math.max(0, (to.getTime() - from.getTime()) / 1000);
+  const rate = autoFillRate(g, t) * effectiveTapPower(g, t, to);
+  if (earnSec <= 0 || rate <= 0) return { earned: 0, credits: [] };
+  return applyProgressUnits(g, t, rate * earnSec);
+}
+
 /** Advance auto-fill in memory only (no writes). */
 function advanceInMemory(
   g: GameStateDoc,
@@ -366,16 +387,23 @@ function advanceInMemory(
 
   const last = parseIso(g.lastTickAt) ?? at;
   const autoUntil = parseIso(g.autoFillUntil);
-  // Offline catch-up only runs until the shared auto timer — never past autoFillUntil
+  // Offline catch-up only runs until the shared auto timer — never past autoFillUntil.
+  // Split at the UTC day start so leftover yesterday fill cannot complete today's sat goal.
   if (autoUntil && autoUntil > last) {
     const earnUntil = autoUntil < at ? autoUntil : at;
-    const earnSec = Math.max(0, (earnUntil.getTime() - last.getTime()) / 1000);
-    // Use tap power at earnUntil so Stronger applies to offline auto catch-up too.
-    const rate = autoFillRate(g, t) * effectiveTapPower(g, t, earnUntil);
-    if (earnSec > 0 && rate > 0) {
-      const applied = applyProgressUnits(g, t, rate * earnSec);
-      earned = applied.earned;
-      credits = applied.credits;
+    const dayStart = utcDayStart(t.resetHourUtc, at);
+    const priorEnd = earnUntil.getTime() < dayStart.getTime() ? earnUntil : dayStart;
+    if (last.getTime() < priorEnd.getTime()) {
+      const prior = catchUpSlice(g, t, last, priorEnd);
+      earned += prior.earned;
+      credits = credits.concat(prior.credits);
+    }
+    const todayFrom = last.getTime() > dayStart.getTime() ? last : dayStart;
+    if (todayFrom.getTime() < earnUntil.getTime()) {
+      const today = catchUpSlice(g, t, todayFrom, earnUntil);
+      earned += today.earned;
+      credits = credits.concat(today.credits);
+      g.satsEarnedToday += today.earned;
     }
   }
 
@@ -389,7 +417,6 @@ function advanceInMemory(
     g.tapStrengthBoostUntil = g.autoFillUntil;
   }
 
-  g.satsEarnedToday += earned;
   g.satsBalance += earned;
   g.lifetimeSatsEarned = (g.lifetimeSatsEarned || 0) + earned;
   g.fillRate = effectiveFillRate(g, t, at);

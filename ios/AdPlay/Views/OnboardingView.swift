@@ -75,7 +75,8 @@ struct OnboardingView: View {
                 .padding(.bottom, 28)
             }
             .frame(maxWidth: 560)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .padding(.horizontal, 20)
         }
         .preferredColorScheme(.dark)
     }

@@ -14,6 +14,13 @@ export function utcDayKey(resetHourUtc: number, date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Instant the current UTC play-day started (`resetHourUtc`). */
+export function utcDayStart(resetHourUtc: number, date = new Date()): Date {
+  const key = utcDayKey(resetHourUtc, date);
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, resetHourUtc, 0, 0, 0));
+}
+
 export function nowIso(date = new Date()): string {
   return date.toISOString();
 }

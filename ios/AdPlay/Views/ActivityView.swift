@@ -8,14 +8,11 @@ struct ActivityView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 16) {
                     streakCard
                     goalsCard
                 }
-                .padding(20)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Daily Goals")
@@ -38,14 +35,16 @@ struct ActivityView: View {
                 Text("\(progress.loginStreak)")
                     .font(.system(size: 36, weight: .bold, design: .rounded))
                     .foregroundStyle(Color("BrandAccent"))
-                Text("days")
+                Text(progress.loginStreak == 1 ? "day" : "days")
                     .foregroundStyle(Color("BrandMuted"))
                 Spacer()
                 Text("Best \(progress.bestLoginStreak)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color("BrandInk"))
             }
-            Text("Open AdPlay once each UTC day. +1 ad hold per day while the streak is alive, up to 5. Miss a day and this bonus drops to 0. Now +\(progress.adBank.streakBonus).")
+            StreakTimeline(days: progress.loginStreak)
+                .padding(.top, 4)
+            Text("Check in once each UTC day. Hold unlocks at days 1, 3, 5, 7, and 30. Miss a day and this bonus resets. Now +\(progress.adBank.streakBonus).")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
         }
@@ -90,5 +89,75 @@ struct ActivityView: View {
         .background(panelBg)
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(panelBorder, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+/// Days 1–7 are dotted; 7→30 is a long fill with only the day-30 stop.
+private struct StreakTimeline: View {
+    let days: Int
+
+    private let marks = ProgressCatalog.streakMilestones
+    private let accent = Color("BrandAccent")
+    private let muted = Color("BrandMuted")
+    private let ink = Color("BrandInk")
+    private let track = Color(red: 0.169, green: 0.176, blue: 0.239)
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset = 16.0
+            let usable = max(geo.size.width - inset * 2, 1)
+            let railY = 13.0
+            let fillWidth = usable * ProgressCatalog.streakTrackFill(days: days)
+
+            ZStack(alignment: .topLeading) {
+                Capsule()
+                    .fill(track)
+                    .frame(width: usable, height: 4)
+                    .position(x: inset + usable / 2, y: railY)
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [accent, fill],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(fillWidth, days > 0 ? 8 : 0), height: 4)
+                    .position(x: inset + max(fillWidth, 0) / 2, y: railY)
+
+                ForEach(marks) { mark in
+                    let x = inset + usable * ProgressCatalog.streakRailX(day: mark.day)
+                    let reached = days >= mark.day
+                    let node: CGFloat = mark.isLongRun ? 22 : (mark.grantsHold ? 18 : 14)
+                    ZStack {
+                        Circle()
+                            .fill(Color(red: 0.090, green: 0.094, blue: 0.149))
+                        Circle()
+                            .stroke(reached ? accent : track, lineWidth: mark.grantsHold ? 2 : 1.5)
+                        if reached {
+                            Circle()
+                                .fill(accent)
+                                .frame(width: node * 0.55, height: node * 0.55)
+                        }
+                    }
+                    .frame(width: node, height: node)
+                    .position(x: x, y: railY)
+
+                    VStack(spacing: 1) {
+                        Text("\(mark.day)")
+                            .font(.system(size: mark.grantsHold ? 11 : 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(reached ? ink : muted)
+                        Text(mark.caption.isEmpty ? " " : mark.caption)
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(reached && mark.grantsHold ? accent : Color.clear)
+                    }
+                    .frame(width: 36)
+                    .position(x: x, y: railY + 28)
+                }
+            }
+        }
+        .frame(height: 68)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Login streak timeline, \(days) days")
     }
 }

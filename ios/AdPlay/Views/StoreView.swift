@@ -9,14 +9,11 @@ struct StoreView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 16) {
                     holdSummary
                     extraSlots
                 }
-                .padding(20)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Store")
@@ -49,7 +46,7 @@ struct StoreView: View {
     private var extraSlots: some View {
         let maxed = progress.iapAdsPurchased >= progress.iapBonusAdsMax
         return panel(title: "Extra ad slots") {
-            Text("Buy +1 permanent hold, one at a time. \(progress.iapAdsPurchased) / \(progress.iapBonusAdsMax) purchased.")
+            Text(slotCopy)
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
             if let err = store.errorMessage {
@@ -65,7 +62,7 @@ struct StoreView: View {
             Button {
                 Task { await buySlot() }
             } label: {
-                Text(maxed ? "All extra slots owned" : "Buy +1 ad slot")
+                Text(maxed ? "All extra slots owned" : buyLabel)
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(red: 0.04, green: 0.05, blue: 0.08))
                     .frame(maxWidth: .infinity)
@@ -95,6 +92,21 @@ struct StoreView: View {
                 .font(.caption)
                 .foregroundStyle(Color("BrandMuted"))
         }
+    }
+
+    private var buyLabel: String {
+        if let price = store.product?.displayPrice {
+            return "Buy +1 ad slot · \(price)"
+        }
+        return "Buy +1 ad slot"
+    }
+
+    private var slotCopy: String {
+        let counts = "\(progress.iapAdsPurchased) / \(progress.iapBonusAdsMax) purchased."
+        if let price = store.product?.displayPrice {
+            return "Buy +1 permanent hold for \(price), one at a time. \(counts)"
+        }
+        return "Buy +1 permanent hold, one at a time. \(counts)"
     }
 
     private func buySlot() async {

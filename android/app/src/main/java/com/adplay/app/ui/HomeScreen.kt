@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -337,6 +338,9 @@ fun HomeScreen(
                 ) {
                 Column(
                     Modifier
+                        .align(Alignment.TopCenter)
+                        .widthIn(max = 560.dp)
+                        .fillMaxWidth()
                         .fillMaxSize()
                         .padding(horizontal = 24.dp, vertical = 16.dp),
                 ) {

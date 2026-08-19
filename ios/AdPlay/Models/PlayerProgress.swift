@@ -76,7 +76,7 @@ struct PlayerProgress: Codable, Equatable {
             case "ads": derived = adsWatched
             default: derived = goal.current
             }
-            let current = max(goal.current, derived)
+            let current = derived
             return DailyGoal(
                 id: goal.id,
                 title: goal.title,
@@ -89,14 +89,66 @@ struct PlayerProgress: Codable, Equatable {
         let daily = min(5, next.filter(\.completed).count)
         var copy = self
         copy.dailyGoals = next
-        copy.adBank.dailyBonus = max(copy.adBank.dailyBonus, daily)
+        copy.adBank.dailyBonus = daily
         copy.adBank.max = copy.adBank.base + copy.adBank.dailyBonus + copy.adBank.streakBonus
             + copy.adBank.achievementBonus + copy.adBank.iapBonus
         return copy
     }
 }
 
+struct StreakMilestone: Equatable, Identifiable {
+    var id: Int { day }
+    let day: Int
+    let caption: String
+    var grantsHold: Bool { !caption.isEmpty }
+    var isLongRun: Bool { day >= 30 }
+}
+
 enum ProgressCatalog {
+    static let streakMilestones: [StreakMilestone] = [
+        StreakMilestone(day: 1, caption: "+1"),
+        StreakMilestone(day: 2, caption: ""),
+        StreakMilestone(day: 3, caption: "+1"),
+        StreakMilestone(day: 4, caption: ""),
+        StreakMilestone(day: 5, caption: "+1"),
+        StreakMilestone(day: 7, caption: "+1"),
+        StreakMilestone(day: 30, caption: "+1"),
+    ]
+
+    /// Days 1–7 sit in the first stretch; 7→30 is a long fill with no extra dots.
+    private static let streakEarlyDays = [1, 2, 3, 4, 5, 7]
+    private static let streakEarlySpan: CGFloat = 0.64
+
+    static func streakRailX(day: Int) -> CGFloat {
+        if let index = streakEarlyDays.firstIndex(of: day) {
+            return CGFloat(index) / CGFloat(streakEarlyDays.count - 1) * streakEarlySpan
+        }
+        if day >= 30 { return 1 }
+        if day > 7 {
+            return streakEarlySpan + CGFloat(day - 7) / 23 * (1 - streakEarlySpan)
+        }
+        return 0
+    }
+
+    static func streakTrackFill(days: Int) -> CGFloat {
+        if days <= 0 { return 0 }
+        if days >= 30 { return 1 }
+        let marks = streakMilestones.map(\.day)
+        var prev = 0
+        var prevX: CGFloat = 0
+        for day in marks {
+            let x = streakRailX(day: day)
+            if days < day {
+                let span = max(day - prev, 1)
+                let local = CGFloat(days - prev) / CGFloat(span)
+                return prevX + local * (x - prevX)
+            }
+            prev = day
+            prevX = x
+        }
+        return 1
+    }
+
     static let dailyGoals: [DailyGoal] = [
         DailyGoal(id: "taps", title: "Use taps", current: 0, target: 50, completed: false, rewardAds: 1),
         DailyGoal(id: "ads", title: "Watch boost ads", current: 0, target: 3, completed: false, rewardAds: 1),
@@ -117,10 +169,8 @@ enum ProgressCatalog {
         Achievement(id: "first_sat", title: "First sat", detail: "Fill the wheel until it credits 1 sat.", unlocked: false, grantsSlot: true),
         Achievement(id: "first_auto", title: "Auto Tapper", detail: "Watch Activate to start Auto Tapper for the first time.", unlocked: false, grantsSlot: true),
         Achievement(id: "first_redeem", title: "First payout", detail: "Submit a Lightning redeem and wait until it is marked paid.", unlocked: false, grantsSlot: true),
-        Achievement(id: "streak_7", title: "Week streak", detail: "Open AdPlay 7 days in a row (UTC).", unlocked: false, grantsSlot: true),
-        Achievement(id: "streak_30", title: "Month streak", detail: "Open AdPlay 30 days in a row (UTC).", unlocked: false, grantsSlot: true),
-        Achievement(id: "lifetime_10", title: "10 sats", detail: "Earn 10 sats over your lifetime. Badge only — no extra hold.", unlocked: false, grantsSlot: false),
-        Achievement(id: "lifetime_100", title: "100 sats", detail: "Earn 100 sats over your lifetime. Badge only — no extra hold.", unlocked: false, grantsSlot: false),
+        Achievement(id: "lifetime_50", title: "50 sats", detail: "Earn 50 sats over your lifetime.", unlocked: false, grantsSlot: true),
+        Achievement(id: "lifetime_500", title: "500 sats", detail: "Earn 500 sats over your lifetime.", unlocked: false, grantsSlot: true),
     ]
 
     static func goals(merging live: [DailyGoal]) -> [DailyGoal] {

@@ -36,13 +36,13 @@ export type Tunables = {
   dailyGoalTapStretchTarget: number;
   /** Extra hold from login streak (cap). */
   streakBonusAdsMax: number;
-  /** Streak days per +1 hold (1 = +1 per day, up to streakBonusAdsMax). */
+  /** @deprecated Streak holds are milestone days 1/3/5/7/30. Kept for config compat. */
   streakAdsEveryDays: number;
   /** Extra hold from slot-granting achievements (cap). */
   achievementBonusAdsMax: number;
   /** Extra hold from IAP (cap). */
   iapBonusAdsMax: number;
-  /** Safety rail — default equals 5+5+5+3+5. Must not drop earned slots. */
+  /** Safety rail — default equals 5+5+5+5+5. Must not drop earned slots. */
   maxAdsPerCycle: number;
   /**
    * Seconds between +1 boost-ad / Skip charge while below max during an active run.
@@ -83,9 +83,9 @@ export const DEFAULT_TUNABLES: Tunables = {
   dailyGoalTapStretchTarget: 200,
   streakBonusAdsMax: 5,
   streakAdsEveryDays: 1,
-  achievementBonusAdsMax: 3,
+  achievementBonusAdsMax: 5,
   iapBonusAdsMax: 5,
-  maxAdsPerCycle: 23,
+  maxAdsPerCycle: 25,
   adRegenSeconds: 20 * 60,
   skipTimeSeconds: 60,
   skipAdsPerCycle: 10,

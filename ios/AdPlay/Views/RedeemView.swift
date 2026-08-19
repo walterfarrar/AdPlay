@@ -21,15 +21,12 @@ struct RedeemView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 16) {
                     balancePanel
                     requestForm
                     historyPanel
                 }
-                .padding(20)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Redeem")
@@ -249,7 +246,7 @@ struct RedeemHowToView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 16) {
                     howToSection(
                         title: "What you need",
@@ -284,7 +281,6 @@ struct RedeemHowToView: View {
                             "Only one pending withdrawal is allowed at a time."
                     )
                 }
-                .padding(20)
             }
             .background(AtmosphereBackground())
             .navigationTitle("How to redeem")

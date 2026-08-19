@@ -8,12 +8,15 @@ import type {
 } from "./types";
 import { utcDayKey } from "./util";
 
+/** Current-streak days that each grant +1 hold (lost if the streak breaks). */
+export const STREAK_HOLD_DAYS = [1, 3, 5, 7, 30] as const;
+
 export const SLOT_ACHIEVEMENTS = [
   "first_sat",
   "first_auto",
   "first_redeem",
-  "streak_7",
-  "streak_30",
+  "lifetime_50",
+  "lifetime_500",
 ] as const;
 
 const ACHIEVEMENT_META: Record<
@@ -35,25 +38,15 @@ const ACHIEVEMENT_META: Record<
     detail: "A Lightning redeem is marked paid.",
     grantsSlot: true,
   },
-  streak_7: {
-    title: "Week streak",
-    detail: "Log in 7 days in a row.",
+  lifetime_50: {
+    title: "50 sats",
+    detail: "Earn 50 sats over your lifetime.",
     grantsSlot: true,
   },
-  streak_30: {
-    title: "Month streak",
-    detail: "Log in 30 days in a row.",
+  lifetime_500: {
+    title: "500 sats",
+    detail: "Earn 500 sats over your lifetime.",
     grantsSlot: true,
-  },
-  lifetime_10: {
-    title: "10 sats",
-    detail: "Earn 10 sats over your lifetime.",
-    grantsSlot: false,
-  },
-  lifetime_100: {
-    title: "100 sats",
-    detail: "Earn 100 sats over your lifetime.",
-    grantsSlot: false,
   },
 };
 
@@ -100,6 +93,10 @@ export function resetDailyProgress(g: GameStateDoc, t: Tunables, now: Date): voi
     g.adsWatchedToday = 0;
     g.hasActivatedToday = false;
   }
+  if (g.satsDay !== day) {
+    g.satsDay = day;
+    g.satsEarnedToday = 0;
+  }
 }
 
 export function recordBoostAdWatch(g: GameStateDoc, t: Tunables, now: Date): void {
@@ -120,10 +117,12 @@ export function evaluateAchievements(g: GameStateDoc): void {
   }
   if (g.hasActivatedAuto) unlocked.add("first_auto");
   if (g.hasPaidRedeem) unlocked.add("first_redeem");
-  if ((g.loginStreak || 0) >= 7) unlocked.add("streak_7");
-  if ((g.loginStreak || 0) >= 30) unlocked.add("streak_30");
-  if ((g.lifetimeSatsEarned || 0) >= 10) unlocked.add("lifetime_10");
-  if ((g.lifetimeSatsEarned || 0) >= 100) unlocked.add("lifetime_100");
+  if ((g.lifetimeSatsEarned || 0) >= 50) unlocked.add("lifetime_50");
+  if ((g.lifetimeSatsEarned || 0) >= 500) unlocked.add("lifetime_500");
+  unlocked.delete("streak_7");
+  unlocked.delete("streak_30");
+  unlocked.delete("lifetime_10");
+  unlocked.delete("lifetime_100");
   g.unlockedAchievements = [...unlocked];
 }
 
@@ -169,8 +168,9 @@ export function dailyBonus(g: GameStateDoc, t: Tunables): number {
 }
 
 export function streakBonus(g: GameStateDoc, t: Tunables): number {
-  const every = Math.max(1, t.streakAdsEveryDays || 1);
-  return Math.min(t.streakBonusAdsMax, Math.floor((g.loginStreak || 0) / every));
+  const days = g.loginStreak || 0;
+  const earned = STREAK_HOLD_DAYS.filter((d) => days >= d).length;
+  return Math.min(t.streakBonusAdsMax, earned);
 }
 
 export function achievementBonus(g: GameStateDoc, t: Tunables): number {

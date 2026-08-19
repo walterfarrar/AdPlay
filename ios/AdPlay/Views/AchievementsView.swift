@@ -9,9 +9,9 @@ struct AchievementsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Unlock these by playing. The first three slot achievements raise how many boost ads you can hold.")
+                    Text("Unlock these by playing. Slot achievements raise how many boost ads you can hold.")
                         .font(.footnote)
                         .foregroundStyle(Color("BrandMuted"))
                     ForEach(session.progress.displayedAchievements) { a in
@@ -40,9 +40,6 @@ struct AchievementsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
-                .padding(20)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Achievements")

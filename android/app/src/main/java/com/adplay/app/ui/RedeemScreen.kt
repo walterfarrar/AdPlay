@@ -7,14 +7,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,8 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -105,21 +102,7 @@ fun RedeemScreen(
         RedeemHowToDialog(onDismiss = { showHowTo = false })
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(listOf(BrandBgTop, BrandBgMid, BrandBgBottom)),
-            )
-            .statusBarsPadding()
-            .navigationBarsPadding(),
-    ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-        ) {
+    CenteredFitPage {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -316,7 +299,6 @@ fun RedeemScreen(
             }
 
             Spacer(Modifier.height(24.dp))
-        }
     }
 }
 
@@ -346,10 +328,13 @@ private fun RedeemHowToDialog(onDismiss: () -> Unit) {
             Text("How to redeem", fontWeight = FontWeight.Bold, color = BrandInk)
         },
         text = {
+            val scroll = rememberScrollState()
+            var measured by remember { mutableStateOf(false) }
             Column(
                 Modifier
                     .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(scroll, enabled = !measured || scroll.maxValue > 0)
+                    .onGloballyPositioned { measured = true },
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 HowToBlock(

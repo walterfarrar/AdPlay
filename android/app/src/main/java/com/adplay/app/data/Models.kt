@@ -151,14 +151,13 @@ data class PlayerProgress(
                 "ads" -> adsWatched
                 else -> goal.current
             }
-            val current = maxOf(goal.current, derived)
-            goal.copy(current = current, completed = current >= goal.target)
+            goal.copy(current = derived, completed = derived >= goal.target)
         }
         val daily = next.count { it.completed }.coerceAtMost(5)
         return copy(
             dailyGoals = next,
             adBank = adBank.copy(
-                dailyBonus = maxOf(adBank.dailyBonus, daily),
+                dailyBonus = daily,
                 max = adBank.base + maxOf(adBank.dailyBonus, daily) + adBank.streakBonus
                     + adBank.achievementBonus + adBank.iapBonus,
             ),
@@ -166,7 +165,55 @@ data class PlayerProgress(
     }
 }
 
+data class StreakMilestone(
+    val day: Int,
+    val caption: String,
+) {
+    val grantsHold: Boolean get() = caption.isNotEmpty()
+    val isLongRun: Boolean get() = day >= 30
+}
+
 object ProgressCatalog {
+    val streakMilestones: List<StreakMilestone> = listOf(
+        StreakMilestone(1, "+1"),
+        StreakMilestone(2, ""),
+        StreakMilestone(3, "+1"),
+        StreakMilestone(4, ""),
+        StreakMilestone(5, "+1"),
+        StreakMilestone(7, "+1"),
+        StreakMilestone(30, "+1"),
+    )
+
+    private val streakEarlyDays = listOf(1, 2, 3, 4, 5, 7)
+    private const val streakEarlySpan = 0.64f
+
+    /** Days 1–7 sit in the first stretch; 7→30 is a long fill with no extra dots. */
+    fun streakRailX(day: Int): Float {
+        val index = streakEarlyDays.indexOf(day)
+        if (index >= 0) return index.toFloat() / (streakEarlyDays.size - 1) * streakEarlySpan
+        if (day >= 30) return 1f
+        if (day > 7) return streakEarlySpan + (day - 7).toFloat() / 23f * (1f - streakEarlySpan)
+        return 0f
+    }
+
+    fun streakTrackFill(days: Int): Float {
+        if (days <= 0) return 0f
+        if (days >= 30) return 1f
+        var prev = 0
+        var prevX = 0f
+        for (day in streakMilestones.map { it.day }) {
+            val x = streakRailX(day)
+            if (days < day) {
+                val span = (day - prev).coerceAtLeast(1)
+                val local = (days - prev).toFloat() / span
+                return prevX + local * (x - prevX)
+            }
+            prev = day
+            prevX = x
+        }
+        return 1f
+    }
+
     val dailyGoals: List<DailyGoal> = listOf(
         DailyGoal(id = "taps", title = "Use taps", target = 50),
         DailyGoal(id = "ads", title = "Watch boost ads", target = 3),
@@ -187,10 +234,8 @@ object ProgressCatalog {
         Achievement("first_sat", "First sat", "Fill the wheel until it credits 1 sat.", false, true),
         Achievement("first_auto", "Auto Tapper", "Watch Activate to start Auto Tapper for the first time.", false, true),
         Achievement("first_redeem", "First payout", "Submit a Lightning redeem and wait until it is marked paid.", false, true),
-        Achievement("streak_7", "Week streak", "Open AdPlay 7 days in a row (UTC).", false, true),
-        Achievement("streak_30", "Month streak", "Open AdPlay 30 days in a row (UTC).", false, true),
-        Achievement("lifetime_10", "10 sats", "Earn 10 sats over your lifetime. Badge only — no extra hold.", false, false),
-        Achievement("lifetime_100", "100 sats", "Earn 100 sats over your lifetime. Badge only — no extra hold.", false, false),
+        Achievement("lifetime_50", "50 sats", "Earn 50 sats over your lifetime.", false, true),
+        Achievement("lifetime_500", "500 sats", "Earn 500 sats over your lifetime.", false, true),
     )
 
     fun howTo(goal: DailyGoal): String =

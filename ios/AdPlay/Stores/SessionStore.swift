@@ -27,6 +27,8 @@ final class SessionStore: ObservableObject {
     private var unackedTaps = 0
     private var tapFlushTask: Task<Void, Never>?
     private var tapFlushGeneration = 0
+    /// True while `tapFlushTask` is sending `gameTap`s (avoids refresh awaiting itself).
+    private var flushingTaps = false
     private var anchorDate: Date = .now
     private var windowEndHandled = false
     private var foreground = false
@@ -91,13 +93,16 @@ final class SessionStore: ObservableObject {
     }
 
     func refresh(force: Bool = false) async throws {
+        // Daily Goals (and other getState pulls) must not race in-flight taps.
+        // Opening that tab used to drop unacked taps, so the bar filled then snapped back.
+        await drainPendingTaps()
         let (s, t, p) = try await api.fetchState()
         tunables = t
         if let provider = t?.adProvider {
             adService = AdServiceFactory.make(api: api, provider: provider)
         }
         configureAdMobUnit()
-        setServerState(s, force: force)
+        setServerState(s, force: force, discardOptimisticTaps: false)
         applyProgress(p)
     }
 
@@ -153,12 +158,22 @@ final class SessionStore: ObservableObject {
         replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
     }
 
+    /// Finish uploading optimistic taps so the next getState includes them.
+    private func drainPendingTaps() async {
+        guard !flushingTaps else { return }
+        await tapFlushTask?.value
+    }
+
     private func ensureTapFlush() {
         guard tapFlushTask == nil else { return }
         let generation = tapFlushGeneration
         tapFlushTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.tapFlushTask = nil }
+            self.flushingTaps = true
+            defer {
+                self.flushingTaps = false
+                self.tapFlushTask = nil
+            }
             while self.unackedTaps > 0 {
                 guard generation == self.tapFlushGeneration else { return }
                 do {
@@ -353,7 +368,7 @@ final class SessionStore: ObservableObject {
 
     private func applyProgress(_ server: PlayerProgress?) {
         if let server, let ads = server.dailyGoals.first(where: { $0.id == "ads" }) {
-            adsWatchedToday = max(adsWatchedToday, ads.current)
+            adsWatchedToday = ads.current
         }
         replaceProgress(progress.takingServer(server).syncedWith(
             state: state,
@@ -389,22 +404,32 @@ final class SessionStore: ObservableObject {
 
     /// Adopt an authoritative server snapshot. It always overrides locally projected
     /// values, so a tampered client can never keep fake progress or balance.
-    private func setServerState(_ next: GameState, force: Bool) {
+    ///
+    /// `discardOptimisticTaps` is true for mutations that already include those taps
+    /// (boost, reset, redeem). getState refresh keeps taps that landed during the fetch.
+    private func setServerState(_ next: GameState, force: Bool, discardOptimisticTaps: Bool = true) {
         if !force, let incoming = next.updatedAt, let last = lastUpdatedAt, incoming < last {
             return
         }
         if let u = next.updatedAt {
             lastUpdatedAt = u
         }
-        // Invalidate any in-flight optimistic tap flush; those responses are stale
-        // relative to this authoritative snapshot (boost / refresh / reset).
-        tapFlushGeneration += 1
-        unackedTaps = 0
-        confirmedState = next
-        serverState = next
-        anchorDate = Date()
-        windowEndHandled = false
-        state = project(next, now: anchorDate)
+        if discardOptimisticTaps {
+            // Invalidate any in-flight optimistic tap flush; those responses are stale
+            // relative to this authoritative snapshot (boost / reset / redeem).
+            tapFlushGeneration += 1
+            unackedTaps = 0
+            confirmedState = next
+            serverState = next
+            anchorDate = Date()
+            windowEndHandled = false
+            state = project(next, now: anchorDate)
+        } else {
+            confirmedState = next
+            anchorDate = Date()
+            windowEndHandled = false
+            publishOptimisticTaps()
+        }
         GameReminderScheduler.sync(state)
         ensureTicker()
     }

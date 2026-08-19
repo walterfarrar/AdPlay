@@ -23,26 +23,29 @@ struct HomeView: View {
 
             GeometryReader { geo in
                 let wide = sizeClass == .regular && geo.size.width > 700
-                let wheel = min(260, max(180, (wide ? geo.size.width * 0.28 : geo.size.width * 0.55)))
-                ScrollView {
-                    Group {
-                        if wide {
-                            HStack(alignment: .top, spacing: 28) {
-                                playStage(state: state, wheel: wheel)
-                                boostsColumn(state: state)
-                            }
-                        } else {
-                            VStack(spacing: 0) {
-                                playStage(state: state, wheel: wheel)
-                                boostsColumn(state: state)
-                            }
+                let chrome = wide ? 240.0 : 390.0
+                let wheel = min(
+                    wide ? min(260.0, geo.size.width * 0.28) : min(240.0, geo.size.width * 0.50),
+                    max(150.0, geo.size.height - chrome)
+                )
+                Group {
+                    if wide {
+                        HStack(alignment: .center, spacing: 28) {
+                            playStage(state: state, wheel: wheel)
+                            boostsColumn(state: state)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            playStage(state: state, wheel: wheel)
+                            boostsColumn(state: state)
+                            Spacer(minLength: 0)
                         }
                     }
-                    .frame(maxWidth: wide ? .infinity : 560)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 16)
                 }
+                .frame(maxWidth: wide ? .infinity : 560)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             }
+            .clipped()
 
             ForEach(satParticles) { particle in
                 FlyingSatParticleView(particle: particle) {
@@ -198,7 +201,7 @@ struct HomeView: View {
             .font(.system(size: 14, weight: .semibold, design: .rounded))
             .foregroundStyle(Color("BrandMuted"))
             .frame(maxWidth: .infinity)
-            .padding(.top, 28)
+            .padding(.top, 16)
             .padding(.bottom, 8)
 
             Group {
@@ -616,30 +619,30 @@ struct SatEarnStage: View {
                             .foregroundStyle(Color("BrandAccent"))
                             .monospacedDigit()
 
-                        // Wheel and tapper are one machine, nudged left to make room for the arm.
-                        ZStack {
-                            SatWheelView(fraction: fraction, flash: wheelFlash)
-                                .frame(width: wheelSize, height: wheelSize)
-                                .contentShape(Circle())
-                                .onTapGesture {
-                                    Task { await session.tap() }
-                                }
-                                .background(wheelTipReporter)
-
-                            AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
-                                .scaleEffect(wheelSize / 220)
-                                .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
-
-                            SharedAutoTimerView(
-                                autoFillUntil: autoFillUntil,
-                                autoActive: autoActive
-                            )
-                            .frame(width: 92)
-                            .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
-                        }
-                        .offset(x: -22 * wheelSize / 220)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: wheelSize + 40)
+                        SatWheelView(fraction: fraction, flash: wheelFlash)
+                            .frame(width: wheelSize, height: wheelSize)
+                            .contentShape(Circle())
+                            .onTapGesture {
+                                Task { await session.tap() }
+                            }
+                            .background(wheelTipReporter)
+                            .overlay {
+                                AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+                                    .scaleEffect(wheelSize / 220)
+                                    .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
+                                    .allowsHitTesting(false)
+                            }
+                            .overlay {
+                                SharedAutoTimerView(
+                                    autoFillUntil: autoFillUntil,
+                                    autoActive: autoActive
+                                )
+                                .frame(width: 92)
+                                .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
+                                .allowsHitTesting(false)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: wheelSize + 40)
 
                         Text("\(Int(display.rounded(.down))) / \(total) taps")
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -1336,7 +1339,8 @@ struct BtcBalanceView: View {
                 .tracking(3)
                 .foregroundStyle(Color("BrandAccent"))
         }
-        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
     }
 }
 
@@ -1373,8 +1377,9 @@ struct RollingDigitsLabel: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity)
-        .minimumScaleFactor(0.45)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .minimumScaleFactor(0.4)
+        .scaledToFit()
         .lineLimit(1)
         .onAppear {
             if fromQuanta == nil { fromQuanta = quanta }

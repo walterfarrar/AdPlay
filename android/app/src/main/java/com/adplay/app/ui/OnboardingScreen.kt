@@ -59,6 +59,9 @@ fun OnboardingScreen(onFinished: () -> Unit) {
     ) {
         Column(
             Modifier
+                .align(Alignment.Center)
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
                 .fillMaxSize()
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

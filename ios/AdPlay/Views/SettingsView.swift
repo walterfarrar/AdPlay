@@ -14,7 +14,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            FitPage {
                 VStack(alignment: .leading, spacing: 16) {
                     panel(title: "Play") {
                         toggle("Reminders", isOn: $settings.remindersEnabled)
@@ -43,9 +43,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .padding(20)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
             }
             .background(AtmosphereBackground())
             .navigationTitle("Settings")
