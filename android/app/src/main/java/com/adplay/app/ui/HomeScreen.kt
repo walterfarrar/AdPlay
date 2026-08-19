@@ -4,7 +4,6 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -47,7 +46,6 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -72,7 +70,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -85,7 +82,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import com.adplay.app.UiState
 import com.adplay.app.data.Tunables
 import java.time.Instant
@@ -126,6 +122,7 @@ fun HomeScreen(
     onDebugReset: () -> Unit,
     onToggleBypassAds: () -> Unit,
     onRetry: () -> Unit,
+    onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
 ) {
     Box(
         modifier = Modifier
@@ -205,82 +202,16 @@ fun HomeScreen(
                 // Faster / Stronger unlock once Auto Tapper is running.
                 val canWatchSecondary = canWatch && state.autoFillActive
                 var displayProgress by remember { mutableDoubleStateOf(state.progress) }
-                val view = LocalView.current
-                val density = LocalDensity.current
-                var homeCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
-                var homeWidthPx by remember { mutableFloatStateOf(0f) }
-                var homeHeightPx by remember { mutableFloatStateOf(0f) }
-                var redeemCenter by remember { mutableStateOf(Offset.Zero) }
-                var wheelTip by remember { mutableStateOf(Offset.Zero) }
-                val satParticles = remember { mutableStateListOf<SatParticle>() }
-                var redeemGlow by remember { mutableStateOf(false) }
                 var barFlash by remember { mutableFloatStateOf(0f) }
-                var lastCelebrateAtMs by remember { mutableLongStateOf(0L) }
                 var previousSats by remember { mutableStateOf<Int?>(null) }
-                var nextParticleId by remember { mutableLongStateOf(1L) }
-
-                val redeemGlowScale by animateFloatAsState(
-                    targetValue = if (redeemGlow) 1.08f else 1f,
-                    animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
-                    label = "redeemGlowScale",
-                )
-                val redeemGlowStrength by animateFloatAsState(
-                    targetValue = if (redeemGlow) 1f else 0f,
-                    animationSpec = tween(if (redeemGlow) 180 else 500),
-                    label = "redeemGlowStrength",
-                )
                 val barFlashAnimated by animateFloatAsState(
                     targetValue = barFlash,
                     animationSpec = tween(if (barFlash > 0f) 80 else 450),
                     label = "barFlash",
                 )
 
-                fun localInHome(child: LayoutCoordinates, pointInChild: Offset): Offset {
-                    val home = homeCoords ?: return Offset.Zero
-                    return if (child.isAttached && home.isAttached) {
-                        home.localPositionOf(child, pointInChild)
-                    } else {
-                        Offset.Zero
-                    }
-                }
-
                 fun fireSatCelebrationBeat() {
-                    val now = System.currentTimeMillis()
-                    if (now - lastCelebrateAtMs < 120L && satParticles.isNotEmpty()) return
-                    lastCelebrateAtMs = now
                     barFlash = 1f
-
-                    val fallbackFrom = Offset(
-                        x = homeWidthPx * 0.38f,
-                        y = homeHeightPx * 0.38f,
-                    )
-                    val fallbackTo = Offset(
-                        x = (homeWidthPx - with(density) { 56.dp.toPx() }).coerceAtLeast(0f),
-                        y = with(density) { 36.dp.toPx() },
-                    )
-                    val from = if (wheelTip != Offset.Zero) wheelTip else fallbackFrom
-                    val to = if (redeemCenter != Offset.Zero) redeemCenter else fallbackTo
-                    if (satParticles.size < 4 && homeWidthPx > 0f) {
-                        satParticles.add(
-                            SatParticle(id = nextParticleId++, from = from, to = to),
-                        )
-                    }
-
-                    if (ui.hapticsEnabled) {
-                        @Suppress("DEPRECATION")
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    }
-                    if (ui.soundEnabled) {
-                        playSatTick()
-                    }
-
-                    // Afterglow when the orb lands on the trophy (pop + hover + fly).
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        redeemGlow = true
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            redeemGlow = false
-                        }, 550)
-                    }, SatParticleMotion.LAND_AT_MS)
                 }
 
                 LaunchedEffect(barFlash) {
@@ -329,12 +260,7 @@ fun HomeScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .graphicsLayer { clip = false }
-                        .onGloballyPositioned { coords ->
-                            homeCoords = coords
-                            homeWidthPx = coords.size.width.toFloat()
-                            homeHeightPx = coords.size.height.toFloat()
-                        },
+                        .graphicsLayer { clip = false },
                 ) {
                 Column(
                     Modifier
@@ -368,39 +294,12 @@ fun HomeScreen(
                             }
                             Box(
                                 Modifier
-                                    .graphicsLayer {
-                                        scaleX = redeemGlowScale
-                                        scaleY = redeemGlowScale
-                                    }
                                     .size(36.dp)
                                     .clip(CircleShape)
-                                    .background(BrandAccent.copy(alpha = 0.14f + 0.24f * redeemGlowStrength))
-                                    .border(
-                                        width = (1f + redeemGlowStrength).dp,
-                                        color = BrandAccent.copy(alpha = 0.55f + 0.45f * redeemGlowStrength),
-                                        shape = CircleShape,
-                                    )
-                                    .drawBehind {
-                                        if (redeemGlowStrength > 0.01f) {
-                                            drawCircle(
-                                                brush = Brush.radialGradient(
-                                                    colors = listOf(
-                                                        BrandAccent.copy(alpha = 0.55f * redeemGlowStrength),
-                                                        Color.Transparent,
-                                                    ),
-                                                ),
-                                                radius = size.maxDimension * 0.95f,
-                                            )
-                                        }
-                                    }
+                                    .background(BrandAccent.copy(alpha = 0.14f))
+                                    .border(1.dp, BrandAccent.copy(alpha = 0.55f), CircleShape)
                                     .clickable(onClick = onAchievements)
-                                    .semantics { contentDescription = "Achievements" }
-                                    .onGloballyPositioned { coords ->
-                                        redeemCenter = localInHome(
-                                            coords,
-                                            Offset(coords.size.width / 2f, coords.size.height / 2f),
-                                        )
-                                    },
+                                    .semantics { contentDescription = "Achievements" },
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text("🏆", fontSize = 16.sp)
@@ -443,15 +342,7 @@ fun HomeScreen(
                         tapPower = state.tapPower,
                         onTap = onTap,
                         wheelFlash = barFlashAnimated,
-                        onWheelTipPositioned = { coords ->
-                            wheelTip = localInHome(
-                                coords,
-                                Offset(
-                                    coords.size.width / 2f,
-                                    with(density) { 8.dp.toPx() },
-                                ),
-                            )
-                        },
+                        onWheelTipPositioned = onWheelTipPositioned,
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -590,21 +481,6 @@ fun HomeScreen(
                     }
                 }
 
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .graphicsLayer { clip = false }
-                        .zIndex(3f),
-                ) {
-                    satParticles.forEach { particle ->
-                        key(particle.id) {
-                            FlyingSatParticle(
-                                particle = particle,
-                                onFinished = { satParticles.removeAll { it.id == particle.id } },
-                            )
-                        }
-                    }
-                }
                 } // home Box
             }
         }
@@ -991,7 +867,7 @@ internal fun formatSatsPerHour(fillRate: Double, unitsPerSat: Int, autoActive: B
     }
 }
 
-private data class SatParticle(
+internal data class SatParticle(
     val id: Long,
     val from: Offset,
     val to: Offset,
@@ -1642,16 +1518,16 @@ private fun easeInOutCubic(t: Double): Double {
     return if (x < 0.5) 4.0 * x * x * x else 1.0 - (-2.0 * x + 2.0).pow(3) / 2.0
 }
 
-private object SatParticleMotion {
+internal object SatParticleMotion {
     const val POP_MS = 320L
     const val HOVER_MS = 500L
     const val FLY_MS = 850
-    /** When the orb arrives at the trophy (for afterglow sync). */
+    /** When the orb arrives at the Redeem tab (for afterglow sync). */
     const val LAND_AT_MS = POP_MS + HOVER_MS + FLY_MS - 60L
 }
 
 @Composable
-private fun FlyingSatParticle(
+internal fun FlyingSatParticle(
     particle: SatParticle,
     onFinished: () -> Unit,
 ) {
@@ -1685,7 +1561,7 @@ private fun FlyingSatParticle(
         delay(SatParticleMotion.HOVER_MS)
         hoverJob.cancel()
         bob.snapTo(0f)
-        // 3) Ease along the curve to the trophy
+        // 3) Ease along the curve to the Redeem tab
         flyT.animateTo(
             1f,
             animationSpec = tween(
@@ -1780,7 +1656,7 @@ private fun quadBezier(p0: Offset, p1: Offset, p2: Offset, t: Float): Offset {
     )
 }
 
-private fun playSatTick() {
+internal fun playSatTick() {
     try {
         val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
         tg.startTone(ToneGenerator.TONE_PROP_BEEP, 70)

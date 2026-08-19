@@ -1,6 +1,4 @@
-import AudioToolbox
 import SwiftUI
-import UIKit
 
 struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
@@ -8,12 +6,7 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSettings = false
     @State private var showAchievements = false
-    @State private var satAnchors: [SatEarnAnchor: CGPoint] = [:]
-    @State private var satParticles: [SatParticle] = []
-    @State private var trophyGlow = false
     @State private var barFlash = false
-    @State private var lastCelebrateAt: Date = .distantPast
-    @State private var homeSize: CGSize = .zero
 
     var body: some View {
         let state = session.state
@@ -46,26 +39,11 @@ struct HomeView: View {
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             }
             .clipped()
-
-            ForEach(satParticles) { particle in
-                FlyingSatParticleView(particle: particle) {
-                    satParticles.removeAll { $0.id == particle.id }
-                }
-            }
         }
-        .coordinateSpace(name: "satEarn")
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { homeSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in homeSize = newSize }
-            }
-        )
-        .onPreferenceChange(SatEarnAnchorKey.self) { satAnchors = $0 }
         .onChange(of: session.state.satsBalance) { oldValue, newValue in
             let gained = newValue - oldValue
             guard gained > 0 else { return }
-            celebrateSatEarn(gained: gained)
+            flashWheelForSatEarn(gained: gained)
         }
         .sheet(isPresented: $showAchievements) {
             AchievementsView()
@@ -142,24 +120,10 @@ struct HomeView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color("BrandAccent"))
                     .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(Color("BrandAccent").opacity(trophyGlow ? 0.38 : 0.14))
-                    )
-                    .overlay(
-                        Circle().stroke(
-                            Color("BrandAccent").opacity(trophyGlow ? 1.0 : 0.55),
-                            lineWidth: trophyGlow ? 2 : 1
-                        )
-                    )
-                    .shadow(
-                        color: Color("BrandAccent").opacity(trophyGlow ? 0.85 : 0),
-                        radius: trophyGlow ? 16 : 0,
-                        y: 0
-                    )
-                    .scaleEffect(trophyGlow ? 1.08 : 1.0)
+                    .background(Circle().fill(Color("BrandAccent").opacity(0.14)))
+                    .overlay(Circle().stroke(Color("BrandAccent").opacity(0.55), lineWidth: 1))
             }
             .accessibilityLabel("Achievements")
-            .background(satAnchorReporter(.trophy))
             Button {
                 showSettings = true
             } label: {
@@ -310,67 +274,19 @@ struct HomeView: View {
         canWatch && session.state.autoFillActive
     }
 
-    private func celebrateSatEarn(gained: Int) {
+    private func flashWheelForSatEarn(gained: Int) {
         let bursts = min(max(gained, 1), 4)
         for i in 0..<bursts {
-            let delay = Double(i) * 0.12
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                fireSatCelebrationBeat()
-            }
-        }
-    }
-
-    private func fireSatCelebrationBeat() {
-        let now = Date()
-        guard now.timeIntervalSince(lastCelebrateAt) >= 0.12 || satParticles.isEmpty else { return }
-        lastCelebrateAt = now
-
-        withAnimation(.easeOut(duration: 0.12)) {
-            barFlash = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            withAnimation(.easeOut(duration: 0.45)) {
-                barFlash = false
-            }
-        }
-
-        let from = satAnchors[.wheelTip]
-            ?? CGPoint(x: max(24, homeSize.width * 0.38), y: homeSize.height * 0.38)
-        let to = satAnchors[.trophy]
-            ?? CGPoint(x: max(48, homeSize.width - 88), y: 36)
-        if satParticles.count < 4, homeSize.width > 0 {
-            satParticles.append(SatParticle(from: from, to: to))
-        }
-
-        // Afterglow when the orb lands on the trophy (pop + hover + fly).
-        DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.landAt) {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.55)) {
-                trophyGlow = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                withAnimation(.easeOut(duration: 0.5)) {
-                    trophyGlow = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    barFlash = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    withAnimation(.easeOut(duration: 0.45)) {
+                        barFlash = false
+                    }
                 }
             }
-        }
-
-        if settings.hapticsEnabled {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        }
-        if settings.soundEnabled {
-            AudioServicesPlaySystemSound(1057)
-        }
-    }
-
-    private func satAnchorReporter(_ id: SatEarnAnchor) -> some View {
-        GeometryReader { geo in
-            Color.clear.preference(
-                key: SatEarnAnchorKey.self,
-                value: [id: CGPoint(
-                    x: geo.frame(in: .named("satEarn")).midX,
-                    y: geo.frame(in: .named("satEarn")).midY
-                )]
-            )
         }
     }
 }
@@ -537,19 +453,7 @@ private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
 
 // MARK: - Sat earn celebration
 
-private enum SatEarnAnchor: Hashable {
-    case trophy
-    case wheelTip
-}
-
-private struct SatEarnAnchorKey: PreferenceKey {
-    static var defaultValue: [SatEarnAnchor: CGPoint] = [:]
-    static func reduce(value: inout [SatEarnAnchor: CGPoint], nextValue: () -> [SatEarnAnchor: CGPoint]) {
-        value.merge(nextValue(), uniquingKeysWith: { $1 })
-    }
-}
-
-private struct SatParticle: Identifiable {
+struct SatParticle: Identifiable {
     let id = UUID()
     let from: CGPoint
     let to: CGPoint
@@ -558,6 +462,7 @@ private struct SatParticle: Identifiable {
 /// BTC balance + centered sat wheel + overlapping auto knocker.
 struct SatEarnStage: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var satEarn: SatEarnFlight
 
     let satsBalance: Int
     let progress: Double
@@ -705,10 +610,11 @@ struct SatEarnStage: View {
     private var wheelTipReporter: some View {
         GeometryReader { geo in
             let frame = geo.frame(in: .named("satEarn"))
-            Color.clear.preference(
-                key: SatEarnAnchorKey.self,
-                value: [.wheelTip: CGPoint(x: frame.midX, y: frame.minY + 8)]
-            )
+            Color.clear
+                .onAppear { satEarn.wheelTip = CGPoint(x: frame.midX, y: frame.minY + 8) }
+                .onChange(of: frame) { _, newFrame in
+                    satEarn.wheelTip = CGPoint(x: newFrame.midX, y: newFrame.minY + 8)
+                }
         }
     }
 }
@@ -1207,15 +1113,15 @@ private func drawGear(
     )
 }
 
-private enum SatParticleMotion {
+enum SatParticleMotion {
     static let pop: TimeInterval = 0.32
     static let hover: TimeInterval = 0.50
     static let fly: TimeInterval = 0.85
-    /// When the orb arrives at the trophy (for afterglow sync).
+    /// When the orb arrives at the Redeem tab (for afterglow sync).
     static var landAt: TimeInterval { pop + hover + fly - 0.06 }
 }
 
-private struct FlyingSatParticleView: View {
+struct FlyingSatParticleView: View {
     let particle: SatParticle
     let onFinished: () -> Void
 
@@ -1225,7 +1131,7 @@ private struct FlyingSatParticleView: View {
 
     var body: some View {
         let hover = CGPoint(x: particle.from.x + 18, y: particle.from.y - 58)
-        // Gentle S-curve toward the trophy (bulge right, then in).
+        // Gentle S-curve toward the Redeem tab (bulge right, then in).
         let ctrl = CGPoint(
             x: hover.x + (particle.to.x - hover.x) * 0.3 + 42,
             y: min(hover.y, particle.to.y) - 36
@@ -1284,7 +1190,7 @@ private struct FlyingSatParticleView: View {
                     bob = -7
                 }
             }
-            // 3) Ease along the curve to the trophy
+            // 3) Ease along the curve to the Redeem tab
             DispatchQueue.main.asyncAfter(deadline: .now() + SatParticleMotion.pop + SatParticleMotion.hover) {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
