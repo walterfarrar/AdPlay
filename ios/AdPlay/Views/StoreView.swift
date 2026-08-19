@@ -32,12 +32,15 @@ struct StoreView: View {
     private var progress: PlayerProgress { session.progress }
 
     private var holdSummary: some View {
-        panel(title: "Your hold") {
-            Text("\(session.state.adsRemainingToday) / \(progress.adBank.max)")
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundStyle(Color("BrandInk"))
-                .monospacedDigit()
-            Text("Boost ads you can hold right now. Extra slots raise the max permanently.")
+        panel(title: "Ad Tokens") {
+            HStack(spacing: 12) {
+                AdSlotIcon(size: 36)
+                Text("\(session.state.adsRemainingToday) / \(progress.adBank.max)")
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color("BrandInk"))
+                    .monospacedDigit()
+            }
+            Text("Spend one token to watch a Boost Ad. Goals, streaks, achievements, and extras raise how many you can keep.")
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
         }
@@ -45,7 +48,7 @@ struct StoreView: View {
 
     private var extraSlots: some View {
         let maxed = progress.iapAdsPurchased >= progress.iapBonusAdsMax
-        return panel(title: "Extra ad slots") {
+        return panel(title: "Extra tokens") {
             Text(slotCopy)
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
@@ -62,8 +65,13 @@ struct StoreView: View {
             Button {
                 Task { await buySlot() }
             } label: {
-                Text(maxed ? "All extra slots owned" : buyLabel)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                HStack(spacing: 8) {
+                    if !maxed {
+                        AdSlotIcon(size: 18)
+                    }
+                    Text(maxed ? "All extra tokens owned" : buyLabel)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                }
                     .foregroundStyle(Color(red: 0.04, green: 0.05, blue: 0.08))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -88,7 +96,7 @@ struct StoreView: View {
                     .padding(.vertical, 8)
             }
             .disabled(store.isBusy || session.isLoading)
-            Text("Uses this Apple ID. Extra slots you already bought are credited again on this device.")
+            Text("Uses this Apple ID. Extra tokens you already bought are credited again on this device.")
                 .font(.caption)
                 .foregroundStyle(Color("BrandMuted"))
         }
@@ -96,17 +104,17 @@ struct StoreView: View {
 
     private var buyLabel: String {
         if let price = store.product?.displayPrice {
-            return "Buy +1 ad slot · \(price)"
+            return "Buy +1 Ad Token · \(price)"
         }
-        return "Buy +1 ad slot"
+        return "Buy +1 Ad Token"
     }
 
     private var slotCopy: String {
         let counts = "\(progress.iapAdsPurchased) / \(progress.iapBonusAdsMax) purchased."
         if let price = store.product?.displayPrice {
-            return "Buy +1 permanent hold for \(price), one at a time. \(counts)"
+            return "Buy +1 permanent Ad Token for \(price), one at a time. \(counts)"
         }
-        return "Buy +1 permanent hold, one at a time. \(counts)"
+        return "Buy +1 permanent Ad Token, one at a time. \(counts)"
     }
 
     private func buySlot() async {

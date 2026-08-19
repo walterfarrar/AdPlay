@@ -649,25 +649,32 @@ private fun AdsFooter(
         adsRemaining <= 0 -> {
             when {
                 regenLeft > 0 -> "Next Boost Ad in ${formatCountdown(regenLeft.toLong())}"
-                adRegenSeconds <= 0 -> "Ads refill when Auto ends"
-                else -> "No ads available"
+                adRegenSeconds <= 0 -> "Tokens refill when Auto ends"
+                else -> "No Ad Tokens"
             }
         }
-        cooldownLeft > 0 -> "Next Boost Ad in ${cooldownLeft}s · $adsRemaining/$adsMax ads"
+        cooldownLeft > 0 -> "Next Boost Ad in ${cooldownLeft}s · $adsRemaining/$adsMax tokens"
         adsRemaining < adsMax && regenLeft > 0 ->
-            "$adsRemaining/$adsMax ads · +1 in ${formatCountdown(regenLeft.toLong())}"
-        else -> "$adsRemaining/$adsMax ads"
+            "$adsRemaining/$adsMax tokens · +1 in ${formatCountdown(regenLeft.toLong())}"
+        else -> "$adsRemaining/$adsMax tokens"
     }
 
-    Text(
-        footer,
-        color = BrandMuted,
-        fontSize = 12.sp,
-        textAlign = TextAlign.Center,
-        modifier = Modifier
+    Row(
+        Modifier
             .fillMaxWidth()
             .padding(bottom = 8.dp),
-    )
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AdSlotIcon(size = 16.dp)
+        Text(
+            footer,
+            color = BrandMuted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+    }
 }
 
 /**

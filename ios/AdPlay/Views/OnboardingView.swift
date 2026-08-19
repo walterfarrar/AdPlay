@@ -11,8 +11,8 @@ struct OnboardingView: View {
             "circle.hexagongrid.fill"
         ),
         (
-            "Ads are currency",
-            "Boost ads sit in a hold bank. Daily goals, login streaks, achievements, and optional extra slots raise how many you can hold.",
+            "Ad Tokens",
+            "Spend one Ad Token to watch a Boost Ad. Daily goals, login streaks, achievements, and extras raise how many tokens you can keep.",
             "play.rectangle.fill"
         ),
         (
@@ -34,9 +34,13 @@ struct OnboardingView: View {
                 TabView(selection: $page) {
                     ForEach(pages.indices, id: \.self) { i in
                         VStack(spacing: 18) {
-                            Image(systemName: pages[i].icon)
-                                .font(.system(size: 48, weight: .semibold))
-                                .foregroundStyle(Color("BrandAccent"))
+                            if pages[i].icon == "play.rectangle.fill" {
+                                AdSlotIcon(size: 56)
+                            } else {
+                                Image(systemName: pages[i].icon)
+                                    .font(.system(size: 48, weight: .semibold))
+                                    .foregroundStyle(Color("BrandAccent"))
+                            }
                             Text(pages[i].title)
                                 .font(.system(size: 28, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color("BrandInk"))

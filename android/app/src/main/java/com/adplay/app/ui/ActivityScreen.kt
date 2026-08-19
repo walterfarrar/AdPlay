@@ -2,6 +2,7 @@ package com.adplay.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -21,8 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
@@ -49,19 +52,31 @@ fun ActivityScreen(ui: UiState, onRefresh: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 StreakTimeline(days = p.loginStreak)
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Check in once each UTC day. Hold unlocks at days 1, 3, 5, 7, and 30. Miss a day and this bonus resets. Now +${bank.streakBonus}.",
-                    color = BrandMuted,
-                    fontSize = 13.sp,
-                )
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AdSlotIcon(size = 18.dp)
+                    Text(
+                        "Check in once each UTC day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +${bank.streakBonus}.",
+                        color = BrandMuted,
+                        fontSize = 13.sp,
+                    )
+                }
             }
             Spacer(Modifier.height(16.dp))
             Panel("Daily goals") {
-                Text(
-                    "Each completed goal adds +1 ad hold today. Resets with the UTC day. Now +${bank.dailyBonus}.",
-                    color = BrandMuted,
-                    fontSize = 13.sp,
-                )
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AdSlotIcon(size = 18.dp)
+                    Text(
+                        "Each completed goal adds +1 Ad Token today. Resets with the UTC day. Now +${bank.dailyBonus}.",
+                        color = BrandMuted,
+                        fontSize = 13.sp,
+                    )
+                }
                 p.displayedDailyGoals.forEach { GoalRow(it) }
             }
     }
@@ -71,12 +86,14 @@ fun ActivityScreen(ui: UiState, onRefresh: () -> Unit) {
 private fun StreakTimeline(days: Int) {
     val marks = ProgressCatalog.streakMilestones
     val fill = ProgressCatalog.streakTrackFill(days)
-    BoxWithConstraints(Modifier.fillMaxWidth().height(68.dp)) {
+    val nodeSlot = 22.dp
+    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp)) {
         val inset = 12.dp
         val rail = (maxWidth - inset * 2).coerceAtLeast(1.dp)
+        val railTop = (nodeSlot - 4.dp) / 2
         Box(
             Modifier
-                .offset(x = inset, y = 11.dp)
+                .offset(x = inset, y = railTop)
                 .width(rail)
                 .height(4.dp)
                 .clip(RoundedCornerShape(2.dp))
@@ -84,7 +101,7 @@ private fun StreakTimeline(days: Int) {
         )
         Box(
             Modifier
-                .offset(x = inset, y = 11.dp)
+                .offset(x = inset, y = railTop)
                 .width(rail * fill.coerceIn(0f, 1f))
                 .height(4.dp)
                 .clip(RoundedCornerShape(2.dp))
@@ -92,47 +109,48 @@ private fun StreakTimeline(days: Int) {
         )
         marks.forEach { mark ->
             val reached = days >= mark.day
-            val node = if (mark.isLongRun) 22.dp else if (mark.grantsHold) 18.dp else 14.dp
             val x = inset + rail * ProgressCatalog.streakRailX(mark.day)
-            Column(
+            Box(
                 Modifier
-                    .offset(x = x - 18.dp, y = 0.dp)
-                    .width(36.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .offset(x = x - nodeSlot / 2, y = 0.dp)
+                    .size(nodeSlot),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    Modifier
-                        .size(node)
-                        .clip(CircleShape)
-                        .background(BrandCard)
-                        .border(if (mark.grantsHold) 2.dp else 1.5.dp, if (reached) BrandAccent else BrandCardBorder, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (reached) {
-                        Box(
-                            Modifier
-                                .size(node * 0.45f)
-                                .clip(CircleShape)
-                                .background(BrandAccent),
-                        )
+                if (mark.grantsToken) {
+                    AdSlotIcon(
+                        size = if (mark.isLongRun) 22.dp else 18.dp,
+                        modifier = Modifier.alpha(if (reached) 1f else 0.38f),
+                    )
+                } else {
+                    Box(
+                        Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(BrandCard)
+                            .border(1.5.dp, if (reached) BrandAccent else BrandCardBorder, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (reached) {
+                            Box(
+                                Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(BrandAccent),
+                            )
+                        }
                     }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "${mark.day}",
-                    color = if (reached) BrandInk else BrandMuted,
-                    fontSize = if (mark.grantsHold) 11.sp else 10.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                if (mark.grantsHold) {
-                    Text(
-                        mark.caption,
-                        color = if (reached) BrandAccent else BrandMuted,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
             }
+            Text(
+                "${mark.day}",
+                color = if (reached) BrandInk else BrandMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .offset(x = x - 18.dp, y = nodeSlot + 6.dp)
+                    .width(36.dp),
+            )
         }
     }
 }
@@ -145,12 +163,27 @@ private fun GoalRow(goal: DailyGoal) {
                 Text(goal.title, color = BrandInk)
                 Text(ProgressCatalog.howTo(goal), color = BrandMuted, fontSize = 12.sp)
             }
-            Text(
-                if (goal.completed) "Done · +1" else "${goal.current.coerceAtMost(goal.target)} / ${goal.target}",
-                color = if (goal.completed) BrandFill else BrandMuted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+            if (goal.completed) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    AdSlotIcon(size = 14.dp)
+                    Text(
+                        "Done · +1 token",
+                        color = BrandFill,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            } else {
+                Text(
+                    "${goal.current.coerceAtMost(goal.target)} / ${goal.target}",
+                    color = BrandMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         LinearProgressIndicator(

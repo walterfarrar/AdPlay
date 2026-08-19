@@ -402,10 +402,13 @@ struct AdsFooterView: View {
     let adRegenSeconds: Int
 
     var body: some View {
-        Text(footerText)
-            .font(.caption)
-            .foregroundStyle(Color("BrandMuted"))
-            .padding(.bottom, 16)
+        HStack(spacing: 6) {
+            AdSlotIcon(size: 16)
+            Text(footerText)
+                .font(.caption)
+                .foregroundStyle(Color("BrandMuted"))
+        }
+        .padding(.bottom, 16)
     }
 
     private var footerText: String {
@@ -414,17 +417,17 @@ struct AdsFooterView: View {
                 return "Next Boost Ad in \(formatCountdown(regenLeft))"
             }
             if adRegenSeconds <= 0 {
-                return "Ads refill when Auto ends"
+                return "Tokens refill when Auto ends"
             }
-            return "No ads available"
+            return "No Ad Tokens"
         }
         if cooldownLeft > 0 {
-            return "Next Boost Ad in \(cooldownLeft)s · \(adsRemaining)/\(adsMax) ads"
+            return "Next Boost Ad in \(cooldownLeft)s · \(adsRemaining)/\(adsMax) tokens"
         }
         if adsRemaining < adsMax, regenLeft > 0 {
-            return "\(adsRemaining)/\(adsMax) ads · +1 in \(formatCountdown(regenLeft))"
+            return "\(adsRemaining)/\(adsMax) tokens · +1 in \(formatCountdown(regenLeft))"
         }
-        return "\(adsRemaining)/\(adsMax) ads"
+        return "\(adsRemaining)/\(adsMax) tokens"
     }
 }
 

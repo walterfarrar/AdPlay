@@ -99,24 +99,24 @@ struct PlayerProgress: Codable, Equatable {
 struct StreakMilestone: Equatable, Identifiable {
     var id: Int { day }
     let day: Int
-    let caption: String
-    var grantsHold: Bool { !caption.isEmpty }
+    let grantsToken: Bool
     var isLongRun: Bool { day >= 30 }
 }
 
 enum ProgressCatalog {
     static let streakMilestones: [StreakMilestone] = [
-        StreakMilestone(day: 1, caption: "+1"),
-        StreakMilestone(day: 2, caption: ""),
-        StreakMilestone(day: 3, caption: "+1"),
-        StreakMilestone(day: 4, caption: ""),
-        StreakMilestone(day: 5, caption: "+1"),
-        StreakMilestone(day: 7, caption: "+1"),
-        StreakMilestone(day: 30, caption: "+1"),
+        StreakMilestone(day: 1, grantsToken: true),
+        StreakMilestone(day: 2, grantsToken: false),
+        StreakMilestone(day: 3, grantsToken: true),
+        StreakMilestone(day: 4, grantsToken: false),
+        StreakMilestone(day: 5, grantsToken: true),
+        StreakMilestone(day: 6, grantsToken: false),
+        StreakMilestone(day: 7, grantsToken: true),
+        StreakMilestone(day: 30, grantsToken: true),
     ]
 
     /// Days 1–7 sit in the first stretch; 7→30 is a long fill with no extra dots.
-    private static let streakEarlyDays = [1, 2, 3, 4, 5, 7]
+    private static let streakEarlyDays = [1, 2, 3, 4, 5, 6, 7]
     private static let streakEarlySpan: CGFloat = 0.64
 
     static func streakRailX(day: Int) -> CGFloat {

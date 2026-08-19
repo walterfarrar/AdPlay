@@ -11,7 +11,7 @@ struct AchievementsView: View {
         NavigationStack {
             FitPage {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Unlock these by playing. Slot achievements raise how many boost ads you can hold.")
+                    Text("Unlock these by playing. Some raise how many Ad Tokens you can keep.")
                         .font(.footnote)
                         .foregroundStyle(Color("BrandMuted"))
                     ForEach(session.progress.displayedAchievements) { a in
@@ -28,9 +28,13 @@ struct AchievementsView: View {
                             }
                             Spacer()
                             if a.grantsSlot {
-                                Text(a.unlocked ? "+1 hold" : "+1")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(a.unlocked ? Color("BrandAccent") : Color("BrandMuted"))
+                                HStack(spacing: 4) {
+                                    AdSlotIcon(size: 16)
+                                    Text("+1 token")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(a.unlocked ? Color("BrandAccent") : Color("BrandMuted"))
+                                }
+                                .opacity(a.unlocked ? 1 : 0.55)
                             }
                         }
                         .padding(14)

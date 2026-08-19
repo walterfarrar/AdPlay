@@ -1,5 +1,6 @@
 package com.adplay.app.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +40,7 @@ fun AchievementsScreen(ui: UiState, onClose: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "Unlock these by playing. Slot achievements raise how many boost ads you can hold.",
+                "Unlock these by playing. Some raise how many Ad Tokens you can keep.",
                 color = BrandMuted,
                 fontSize = 13.sp,
             )
@@ -57,11 +58,18 @@ internal fun AchievementRow(a: Achievement) {
             Text(a.detail, color = BrandMuted, fontSize = 12.sp)
         }
         if (a.grantsSlot) {
-            Text(
-                if (a.unlocked) "+1 hold" else "+1",
-                color = if (a.unlocked) BrandAccent else BrandMuted,
-                fontSize = 12.sp,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                AdSlotIcon(size = 16.dp)
+                Text(
+                    "+1 token",
+                    color = if (a.unlocked) BrandAccent else BrandMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }

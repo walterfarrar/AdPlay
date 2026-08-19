@@ -37,8 +37,8 @@ fun OnboardingScreen(onFinished: () -> Unit) {
             "Each tap fills the progress wheel. Fill it completely to earn 1 sat — a tiny unit of Bitcoin.",
         ),
         OnboardPage(
-            "Ads are currency",
-            "Boost ads sit in a hold bank. Daily goals, login streaks, achievements, and optional extra slots raise how many you can hold.",
+            "Ad Tokens",
+            "Spend one Ad Token to watch a Boost Ad. Daily goals, login streaks, achievements, and extras raise how many tokens you can keep.",
         ),
         OnboardPage(
             "Watch ads to boost",
@@ -72,6 +72,10 @@ fun OnboardingScreen(onFinished: () -> Unit) {
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    if (pages[i].title == "Ad Tokens") {
+                        AdSlotIcon(size = 56.dp)
+                        Spacer(Modifier.height(18.dp))
+                    }
                     Text(
                         pages[i].title,
                         color = BrandInk,

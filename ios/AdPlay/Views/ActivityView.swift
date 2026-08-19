@@ -44,17 +44,23 @@ struct ActivityView: View {
             }
             StreakTimeline(days: progress.loginStreak)
                 .padding(.top, 4)
-            Text("Check in once each UTC day. Hold unlocks at days 1, 3, 5, 7, and 30. Miss a day and this bonus resets. Now +\(progress.adBank.streakBonus).")
-                .font(.footnote)
-                .foregroundStyle(Color("BrandMuted"))
+            HStack(alignment: .top, spacing: 8) {
+                AdSlotIcon(size: 18)
+                Text("Check in once each UTC day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +\(progress.adBank.streakBonus).")
+                    .font(.footnote)
+                    .foregroundStyle(Color("BrandMuted"))
+            }
         }
     }
 
     private var goalsCard: some View {
         panel(title: "Daily goals") {
-            Text("Each completed goal adds +1 ad hold today. Resets with the UTC day. Now +\(progress.adBank.dailyBonus).")
-                .font(.footnote)
-                .foregroundStyle(Color("BrandMuted"))
+            HStack(alignment: .top, spacing: 8) {
+                AdSlotIcon(size: 18)
+                Text("Each completed goal adds +1 Ad Token today. Resets with the UTC day. Now +\(progress.adBank.dailyBonus).")
+                    .font(.footnote)
+                    .foregroundStyle(Color("BrandMuted"))
+            }
             ForEach(progress.displayedDailyGoals) { goal in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline) {
@@ -66,9 +72,18 @@ struct ActivityView: View {
                                 .foregroundStyle(Color("BrandMuted"))
                         }
                         Spacer()
-                        Text(goal.completed ? "Done · +1" : "\(min(goal.current, goal.target)) / \(goal.target)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(goal.completed ? Color("BrandFill") : Color("BrandMuted"))
+                        if goal.completed {
+                            HStack(spacing: 4) {
+                                AdSlotIcon(size: 14)
+                                Text("Done · +1 token")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color("BrandFill"))
+                            }
+                        } else {
+                            Text("\(min(goal.current, goal.target)) / \(goal.target)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color("BrandMuted"))
+                        }
                     }
                     ProgressView(value: Double(min(goal.current, goal.target)), total: Double(max(goal.target, 1)))
                         .tint(goal.completed ? Color("BrandFill") : Color("BrandAccent"))
@@ -106,58 +121,74 @@ private struct StreakTimeline: View {
         GeometryReader { geo in
             let inset = 16.0
             let usable = max(geo.size.width - inset * 2, 1)
-            let railY = 13.0
+            let nodeSlot: CGFloat = 22
+            let railY = nodeSlot / 2
             let fillWidth = usable * ProgressCatalog.streakTrackFill(days: days)
 
-            ZStack(alignment: .topLeading) {
-                Capsule()
-                    .fill(track)
-                    .frame(width: usable, height: 4)
-                    .position(x: inset + usable / 2, y: railY)
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [accent, Color("BrandAccentHot")],
-                            startPoint: .leading,
-                            endPoint: .trailing
+            VStack(spacing: 6) {
+                ZStack(alignment: .topLeading) {
+                    Capsule()
+                        .fill(track)
+                        .frame(width: usable, height: 4)
+                        .position(x: inset + usable / 2, y: railY)
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [accent, Color("BrandAccentHot")],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: max(fillWidth, days > 0 ? 8 : 0), height: 4)
-                    .position(x: inset + max(fillWidth, 0) / 2, y: railY)
+                        .frame(width: max(fillWidth, days > 0 ? 8 : 0), height: 4)
+                        .position(x: inset + max(fillWidth, 0) / 2, y: railY)
 
-                ForEach(marks) { mark in
-                    let x = inset + usable * ProgressCatalog.streakRailX(day: mark.day)
-                    let reached = days >= mark.day
-                    let node: CGFloat = mark.isLongRun ? 22 : (mark.grantsHold ? 18 : 14)
-                    ZStack {
-                        Circle()
-                            .fill(Color(red: 0.090, green: 0.094, blue: 0.149))
-                        Circle()
-                            .stroke(reached ? accent : track, lineWidth: mark.grantsHold ? 2 : 1.5)
-                        if reached {
-                            Circle()
-                                .fill(accent)
-                                .frame(width: node * 0.55, height: node * 0.55)
-                        }
+                    ForEach(marks) { mark in
+                        let x = inset + usable * ProgressCatalog.streakRailX(day: mark.day)
+                        let reached = days >= mark.day
+                        node(for: mark, reached: reached)
+                            .frame(width: nodeSlot, height: nodeSlot)
+                            .position(x: x, y: railY)
                     }
-                    .frame(width: node, height: node)
-                    .position(x: x, y: railY)
-
-                    VStack(spacing: 1) {
-                        Text("\(mark.day)")
-                            .font(.system(size: mark.grantsHold ? 11 : 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(reached ? ink : muted)
-                        Text(mark.caption.isEmpty ? " " : mark.caption)
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(reached && mark.grantsHold ? accent : Color.clear)
-                    }
-                    .frame(width: 36)
-                    .position(x: x, y: railY + 28)
                 }
+                .frame(height: nodeSlot)
+
+                ZStack(alignment: .topLeading) {
+                    ForEach(marks) { mark in
+                        let x = inset + usable * ProgressCatalog.streakRailX(day: mark.day)
+                        let reached = days >= mark.day
+                        Text("\(mark.day)")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(reached ? ink : muted)
+                            .frame(width: 36)
+                            .position(x: x, y: 8)
+                    }
+                }
+                .frame(height: 16)
             }
         }
-        .frame(height: 68)
+        .frame(height: 48)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Login streak timeline, \(days) days")
+    }
+
+    @ViewBuilder
+    private func node(for mark: StreakMilestone, reached: Bool) -> some View {
+        if mark.grantsToken {
+            AdSlotIcon(size: mark.isLongRun ? 22 : 18)
+                .opacity(reached ? 1 : 0.38)
+        } else {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0.090, green: 0.094, blue: 0.149))
+                Circle()
+                    .stroke(reached ? accent : track, lineWidth: 1.5)
+                if reached {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .frame(width: 14, height: 14)
+        }
     }
 }

@@ -26,7 +26,7 @@ final class AdSlotStore: ObservableObject {
 
     func purchase() async -> String? {
         guard let product else {
-            errorMessage = "Ad slot purchase is not available yet."
+            errorMessage = "Ad Token purchase is not available yet."
             return nil
         }
         isBusy = true

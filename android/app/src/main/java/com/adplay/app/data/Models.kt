@@ -167,24 +167,24 @@ data class PlayerProgress(
 
 data class StreakMilestone(
     val day: Int,
-    val caption: String,
+    val grantsToken: Boolean,
 ) {
-    val grantsHold: Boolean get() = caption.isNotEmpty()
     val isLongRun: Boolean get() = day >= 30
 }
 
 object ProgressCatalog {
     val streakMilestones: List<StreakMilestone> = listOf(
-        StreakMilestone(1, "+1"),
-        StreakMilestone(2, ""),
-        StreakMilestone(3, "+1"),
-        StreakMilestone(4, ""),
-        StreakMilestone(5, "+1"),
-        StreakMilestone(7, "+1"),
-        StreakMilestone(30, "+1"),
+        StreakMilestone(1, true),
+        StreakMilestone(2, false),
+        StreakMilestone(3, true),
+        StreakMilestone(4, false),
+        StreakMilestone(5, true),
+        StreakMilestone(6, false),
+        StreakMilestone(7, true),
+        StreakMilestone(30, true),
     )
 
-    private val streakEarlyDays = listOf(1, 2, 3, 4, 5, 7)
+    private val streakEarlyDays = listOf(1, 2, 3, 4, 5, 6, 7)
     private const val streakEarlySpan = 0.64f
 
     /** Days 1–7 sit in the first stretch; 7→30 is a long fill with no extra dots. */
