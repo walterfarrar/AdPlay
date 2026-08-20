@@ -15,30 +15,61 @@ struct HomeView: View {
             AtmosphereBackground()
 
             GeometryReader { geo in
-                let wide = sizeClass == .regular && geo.size.width > 700
-                let chrome = wide ? 240.0 : 390.0
-                let wheel = min(
-                    wide ? min(260.0, geo.size.width * 0.28) : min(240.0, geo.size.width * 0.50),
-                    max(150.0, geo.size.height - chrome)
-                )
-                Group {
-                    if wide {
-                        HStack(alignment: .center, spacing: 28) {
-                            playStage(state: state, wheel: wheel)
-                            boostsColumn(state: state)
-                        }
-                    } else {
+                let filled = VStack(spacing: 0) {
+                    headerBar
+                    earlyAccessHint
+                    GeometryReader { mid in
+                        let wheel = min(
+                            mid.size.width * 0.48,
+                            max(160, mid.size.height - 168)
+                        )
                         VStack(spacing: 0) {
-                            playStage(state: state, wheel: wheel)
-                            boostsColumn(state: state)
-                            Spacer(minLength: 0)
+                            SatEarnStage(
+                                satsBalance: state.satsBalance,
+                                progress: state.progress,
+                                total: state.unitsPerSat,
+                                fillRate: state.fillRate,
+                                tapPower: state.effectiveTapPower,
+                                autoActive: state.autoFillActive,
+                                autoFillUntil: state.autoFillUntil,
+                                wheelFlash: barFlash,
+                                wheelSize: wheel
+                            )
+                            .padding(.top, 12)
+                            tapHint(state: state)
                         }
+                        .frame(width: mid.size.width, height: mid.size.height, alignment: .top)
                     }
+                    boostsColumn(state: state)
                 }
-                .frame(maxWidth: wide ? .infinity : 560)
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                .frame(width: geo.size.width, height: geo.size.height)
+
+                ViewThatFits(in: .vertical) {
+                    filled
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            headerBar
+                            earlyAccessHint
+                            SatEarnStage(
+                                satsBalance: state.satsBalance,
+                                progress: state.progress,
+                                total: state.unitsPerSat,
+                                fillRate: state.fillRate,
+                                tapPower: state.effectiveTapPower,
+                                autoActive: state.autoFillActive,
+                                autoFillUntil: state.autoFillUntil,
+                                wheelFlash: barFlash,
+                                wheelSize: min(240, geo.size.width * 0.50)
+                            )
+                            .padding(.top, 20)
+                            tapHint(state: state)
+                            boostsColumn(state: state)
+                        }
+                        .frame(width: geo.size.width)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                }
             }
-            .clipped()
         }
         .onChange(of: session.state.satsBalance) { oldValue, newValue in
             let gained = newValue - oldValue
@@ -56,41 +87,27 @@ struct HomeView: View {
         }
     }
 
-    private func playStage(state: GameState, wheel: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            headerBar
-            Text(
-                "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
-                    "they can improve as more players join and ad revenue grows."
-            )
-            .font(.system(size: 12, weight: .regular, design: .rounded))
-            .foregroundStyle(Color("BrandMuted"))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.top, 10)
+    private func tapHint(state: GameState) -> some View {
+        Text(
+            state.tapsRemaining > 0
+                ? "Tap the wheel · \(state.tapsRemaining) taps left today"
+                : "0 taps left today"
+        )
+        .font(.system(size: 14, weight: .medium, design: .rounded))
+        .foregroundStyle(Color("BrandMuted"))
+        .padding(.top, 14)
+    }
 
-            SatEarnStage(
-                satsBalance: state.satsBalance,
-                progress: state.progress,
-                total: state.unitsPerSat,
-                fillRate: state.fillRate,
-                tapPower: state.effectiveTapPower,
-                autoActive: state.autoFillActive,
-                autoFillUntil: state.autoFillUntil,
-                wheelFlash: barFlash,
-                wheelSize: wheel
-            )
-            .padding(.top, 20)
-
-            Text(
-                state.tapsRemaining > 0
-                    ? "Tap the wheel · \(state.tapsRemaining) taps left today"
-                    : "0 taps left today"
-            )
-            .font(.system(size: 14, weight: .medium, design: .rounded))
-            .foregroundStyle(Color("BrandMuted"))
-            .padding(.top, 14)
-        }
+    private var earlyAccessHint: some View {
+        Text(
+            "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
+                "they can improve as more players join and ad revenue grows."
+        )
+        .font(.system(size: 12, weight: .regular, design: .rounded))
+        .foregroundStyle(Color("BrandMuted"))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
     }
 
     private var headerBar: some View {
@@ -214,7 +231,7 @@ struct HomeView: View {
                     }
                 }
             }
-            .frame(height: 88)
+            .frame(height: sizeClass == .regular ? 108 : 88)
             .padding(.horizontal, 24)
             .padding(.bottom, 10)
 
@@ -519,7 +536,7 @@ struct SatEarnStage: View {
                         total: total
                     )
 
-                    Spacer(minLength: 20)
+                    Spacer().frame(height: 20)
 
                     VStack(spacing: 8) {
                         Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))

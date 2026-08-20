@@ -18,7 +18,7 @@ AdPlay is an idle progress game with Play, Daily Goals, Store, and Redeem:
 
 ## iPad
 - The app is a universal iPhone + iPad target.
-- Play scrolls so controls are never cropped. On wide iPad (landscape / large portrait) Play is two columns: wheel on the left, boosts on the right.
+- Play uses the same stacked layout as iPhone, scaled to fill the iPad window. It scrolls if a short landscape window would otherwise crop controls.
 - Please review on iPad Air 11-inch in portrait and landscape.
 
 ## Ads
