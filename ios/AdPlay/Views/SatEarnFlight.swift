@@ -207,6 +207,8 @@ private struct RedeemTabBarProbe: UIViewRepresentable {
 
         private func applyGlow(to button: UIView?, on: Bool, animated: Bool) {
             guard let button else { return }
+            button.superview?.clipsToBounds = false
+            button.superview?.layer.masksToBounds = false
             let accent = UIColor(named: "BrandAccent")
                 ?? UIColor(red: 0.969, green: 0.580, blue: 0.102, alpha: 1)
             let updates = {
