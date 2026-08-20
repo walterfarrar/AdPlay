@@ -10,7 +10,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.NavigationBar
@@ -30,12 +29,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -188,27 +183,44 @@ fun MainShell(
                                 tab = i
                                 if (i == 1) onAcknowledgeDailyGoals()
                             },
-                            modifier = if (i == 3) {
-                                Modifier.onGloballyPositioned { redeemCoords = it }
-                            } else {
-                                Modifier
-                            },
+                            modifier = Modifier
+                                .then(
+                                    if (i == 3) {
+                                        Modifier
+                                            .onGloballyPositioned { redeemCoords = it }
+                                            .graphicsLayer {
+                                                scaleX = redeemGlowScale
+                                                scaleY = redeemGlowScale
+                                                shadowElevation = 14.dp.toPx() * redeemGlowStrength
+                                                ambientShadowColor = BrandAccent
+                                                spotShadowColor = BrandAccent
+                                            }
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
                             icon = {
-                                RedeemTabIcon(
-                                    selected = tab == i,
+                                TabGlyph(
+                                    selected = tab == i || (i == 3 && redeemGlowStrength > 0.01f),
                                     showGoalBadge = i == 1 && ui.unseenDailyGoalCount > 0,
                                     goalBadgeCount = ui.unseenDailyGoalCount,
-                                    glow = i == 3,
-                                    glowScale = redeemGlowScale,
-                                    glowStrength = redeemGlowStrength,
                                 )
                             },
-                            label = { Text(label) },
+                            label = {
+                                Text(
+                                    label,
+                                    color = if (tab == i || (i == 3 && redeemGlowStrength > 0.01f)) {
+                                        BrandAccent
+                                    } else {
+                                        BrandMuted
+                                    },
+                                )
+                            },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedTextColor = BrandAccent,
                                 unselectedTextColor = BrandMuted,
                                 indicatorColor = BrandAccent.copy(
-                                    alpha = if (i == 3) 0.18f + 0.22f * redeemGlowStrength else 0.18f,
+                                    alpha = if (i == 3) 0.18f + 0.32f * redeemGlowStrength else 0.18f,
                                 ),
                             ),
                         )
@@ -287,45 +299,6 @@ fun MainShell(
                 AchievementsScreen(ui = ui, onClose = { showAchievements = false })
             }
         }
-    }
-}
-
-@Composable
-private fun RedeemTabIcon(
-    selected: Boolean,
-    showGoalBadge: Boolean,
-    goalBadgeCount: Int,
-    glow: Boolean,
-    glowScale: Float,
-    glowStrength: Float,
-) {
-    if (!glow) {
-        TabGlyph(selected = selected, showGoalBadge = showGoalBadge, goalBadgeCount = goalBadgeCount)
-        return
-    }
-    Box(
-        Modifier
-            .graphicsLayer {
-                scaleX = glowScale
-                scaleY = glowScale
-            }
-            .size(36.dp)
-            .drawBehind {
-                if (glowStrength > 0.01f) {
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                BrandAccent.copy(alpha = 0.55f * glowStrength),
-                                Color.Transparent,
-                            ),
-                        ),
-                        radius = size.maxDimension * 0.95f,
-                    )
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        TabGlyph(selected = selected, showGoalBadge = showGoalBadge, goalBadgeCount = goalBadgeCount)
     }
 }
 
