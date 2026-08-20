@@ -41,7 +41,17 @@ fun StoreScreen(ui: UiState) {
             Spacer(Modifier.height(16.dp))
             Panel("Extra tokens") {
                 Text(
-                    "Buy +1 permanent Ad Token, one at a time. ${p.iapAdsPurchased} / ${p.iapBonusAdsMax} purchased. Purchases and Restore purchases are available on iOS.",
+                    "Buy +1 permanent Ad Token, one at a time.",
+                    color = BrandMuted,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    "${p.iapAdsPurchased} / ${p.iapBonusAdsMax} purchased.",
+                    color = BrandMuted,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    "Purchases and Restore purchases are available on iOS.",
                     color = BrandMuted,
                     fontSize = 13.sp,
                 )

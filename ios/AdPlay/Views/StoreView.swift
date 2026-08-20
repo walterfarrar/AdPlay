@@ -52,6 +52,9 @@ struct StoreView: View {
             Text(slotCopy)
                 .font(.footnote)
                 .foregroundStyle(Color("BrandMuted"))
+            Text("\(progress.iapAdsPurchased) / \(progress.iapBonusAdsMax) purchased.")
+                .font(.footnote)
+                .foregroundStyle(Color("BrandMuted"))
             if let err = store.errorMessage {
                 Text(err)
                     .font(.footnote)
@@ -110,11 +113,10 @@ struct StoreView: View {
     }
 
     private var slotCopy: String {
-        let counts = "\(progress.iapAdsPurchased) / \(progress.iapBonusAdsMax) purchased."
         if let price = store.product?.displayPrice {
-            return "Buy +1 permanent Ad Token for \(price), one at a time. \(counts)"
+            return "Buy +1 permanent Ad Token for \(price), one at a time."
         }
-        return "Buy +1 permanent Ad Token, one at a time. \(counts)"
+        return "Buy +1 permanent Ad Token, one at a time."
     }
 
     private func buySlot() async {
