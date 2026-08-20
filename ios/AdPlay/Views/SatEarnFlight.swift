@@ -23,9 +23,6 @@ struct SatEarnFlightHost<Content: View>: View {
         ZStack {
             content()
             redeemTabAnchor
-            if redeemGlow {
-                redeemGlowMark
-            }
             ForEach(satParticles) { particle in
                 FlyingSatParticleView(particle: particle) {
                     satParticles.removeAll { $0.id == particle.id }
@@ -41,7 +38,7 @@ struct SatEarnFlightHost<Content: View>: View {
                     .onAppear { flight.canvasSize = geo.size }
                     .onChange(of: geo.size) { _, newSize in flight.canvasSize = newSize }
                     .background(
-                        RedeemTabBarProbe { windowPoint in
+                        RedeemTabBarProbe(glow: redeemGlow) { windowPoint in
                             let next = CGPoint(
                                 x: windowPoint.x - global.minX,
                                 y: windowPoint.y - global.minY
@@ -97,19 +94,6 @@ struct SatEarnFlightHost<Content: View>: View {
         .allowsHitTesting(false)
     }
 
-    private var redeemGlowMark: some View {
-        Circle()
-            .fill(Color("BrandAccent").opacity(0.28))
-            .frame(width: 48, height: 48)
-            .overlay(
-                Circle().stroke(Color("BrandAccent").opacity(0.95), lineWidth: 2)
-            )
-            .shadow(color: Color("BrandAccent").opacity(0.85), radius: 16)
-            .scaleEffect(1.08)
-            .position(redeemTarget)
-            .allowsHitTesting(false)
-    }
-
     private var redeemTarget: CGPoint {
         if flight.redeem != .zero { return flight.redeem }
         let size = flight.canvasSize
@@ -162,8 +146,9 @@ struct SatEarnFlightHost<Content: View>: View {
     }
 }
 
-/// Reads the trailing UITabBar button so the orb lands on Redeem, not an estimate.
+/// Reads the trailing UITabBar button so the orb lands on Redeem, and pulses that item.
 private struct RedeemTabBarProbe: UIViewRepresentable {
+    var glow: Bool
     var onWindowPoint: (CGPoint) -> Void
 
     func makeUIView(context: Context) -> ProbeView {
@@ -174,20 +159,34 @@ private struct RedeemTabBarProbe: UIViewRepresentable {
 
     func updateUIView(_ uiView: ProbeView, context: Context) {
         uiView.onWindowPoint = onWindowPoint
+        uiView.setGlow(glow)
         uiView.reportSoon()
     }
 
     final class ProbeView: UIView {
         var onWindowPoint: ((CGPoint) -> Void)?
+        private var glowing = false
+        private weak var lastButton: UIView?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            if window == nil {
+                applyGlow(to: lastButton, on: false, animated: false)
+            }
             reportSoon()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
             reportSoon()
+        }
+
+        func setGlow(_ on: Bool) {
+            let button = redeemButton()
+            let changed = glowing != on || lastButton !== button
+            glowing = on
+            lastButton = button
+            applyGlow(to: button, on: on, animated: changed)
         }
 
         func reportSoon() {
@@ -198,8 +197,40 @@ private struct RedeemTabBarProbe: UIViewRepresentable {
 
         private func report() {
             guard let button = redeemButton() else { return }
+            lastButton = button
+            if glowing {
+                applyGlow(to: button, on: true, animated: false)
+            }
             let center = CGPoint(x: button.bounds.midX, y: button.bounds.midY)
             onWindowPoint?(button.convert(center, to: nil))
+        }
+
+        private func applyGlow(to button: UIView?, on: Bool, animated: Bool) {
+            guard let button else { return }
+            let accent = UIColor(named: "BrandAccent")
+                ?? UIColor(red: 0.969, green: 0.580, blue: 0.102, alpha: 1)
+            let updates = {
+                button.layer.masksToBounds = false
+                button.layer.shadowColor = accent.cgColor
+                button.layer.shadowOffset = .zero
+                button.layer.shadowRadius = on ? 12 : 0
+                button.layer.shadowOpacity = on ? 0.95 : 0
+                button.transform = on
+                    ? CGAffineTransform(scaleX: 1.08, y: 1.08)
+                    : .identity
+            }
+            if animated {
+                UIView.animate(
+                    withDuration: on ? 0.28 : 0.45,
+                    delay: 0,
+                    usingSpringWithDamping: on ? 0.55 : 1,
+                    initialSpringVelocity: 0.35,
+                    options: [.allowUserInteraction, .beginFromCurrentState],
+                    animations: updates
+                )
+            } else {
+                updates()
+            }
         }
 
         private func redeemButton() -> UIView? {
