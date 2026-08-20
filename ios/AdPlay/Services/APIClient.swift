@@ -18,9 +18,21 @@ final class APIClient {
     private let functions = Functions.functions(region: "us-central1")
 
     func ensureSignedIn() async throws {
-        if Auth.auth().currentUser == nil {
-            _ = try await Auth.auth().signInAnonymously()
+        if Auth.auth().currentUser != nil { return }
+        var lastError: Error?
+        for attempt in 0..<5 {
+            do {
+                _ = try await Auth.auth().signInAnonymously()
+                return
+            } catch {
+                lastError = error
+                let text = error.localizedDescription.lowercased()
+                guard text.contains("keychain"), attempt < 4 else { throw error }
+                let delay = UInt64((attempt + 1) * 400_000_000)
+                try await Task.sleep(nanoseconds: delay)
+            }
         }
+        throw lastError!
     }
 
     func fetchState() async throws -> (GameState, Tunables?, PlayerProgress?) {

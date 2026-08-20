@@ -96,6 +96,8 @@ workflows:
           UDID=$(xcrun simctl create "AdPlay iPad 13" "$DEVICE_TYPE" "$RUNTIME")
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
+          # Give securityd time before we install a signed app that uses Keychain.
+          sleep 3
           xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100
           printf '%s' "$UDID" > "$CM_BUILD_DIR/ios/.sim_udid"
           echo "Booted $DEVICE_TYPE / $RUNTIME / $UDID"
@@ -105,6 +107,9 @@ workflows:
           UDID=$(cat "$CM_BUILD_DIR/ios/.sim_udid")
           cd "$CM_BUILD_DIR/ios"
           xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
+          # Ad-hoc sign so Firebase Auth can use the Simulator keychain.
+          # CODE_SIGNING_ALLOWED=NO strips entitlements and surfaces the
+          # "error occurred when accessing the keychain" splash.
           xcodebuild build \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -112,22 +117,49 @@ workflows:
             -destination "id=$UDID" \
             -configuration Release \
             -derivedDataPath "$CM_BUILD_DIR/ios/build" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGN_IDENTITY="-" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM=
       - name: Launch Play and screenshot
         script: |
           set -euo pipefail
           UDID=$(cat "$CM_BUILD_DIR/ios/.sim_udid")
           APP="$CM_BUILD_DIR/ios/build/Build/Products/Release-iphonesimulator/AdPlay.app"
+          mkdir -p "$CM_BUILD_DIR/screenshots"
+          LOG="$CM_BUILD_DIR/screenshots/sim-launch.log"
           xcrun simctl install "$UDID" "$APP"
           xcrun simctl spawn "$UDID" defaults write "$BUNDLE_ID" adplay.hasCompletedOnboarding -bool true
           xcrun simctl privacy "$UDID" grant tracking "$BUNDLE_ID" || true
-          xcrun simctl launch "$UDID" "$BUNDLE_ID"
-          sleep 18
-          mkdir -p "$CM_BUILD_DIR/screenshots"
+          xcrun simctl privacy "$UDID" grant notifications "$BUNDLE_ID" || true
+          # securityd is not always ready on a freshly booted Simulator.
+          sleep 6
+          xcrun simctl spawn "$UDID" log stream --style compact --level info \
+            --predicate 'subsystem == "com.adplay.app"' > "$LOG" 2>&1 &
+          LOGPID=$!
+          sleep 1
+          xcrun simctl launch "$UDID" "$BUNDLE_ID" -AdPlayScreenshot
+          READY=0
+          for _ in $(seq 1 45); do
+            if grep -q "AdPlay session ready" "$LOG"; then
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          sleep 2
           xcrun simctl io "$UDID" screenshot "$CM_BUILD_DIR/screenshots/ipad-13-play.png"
           sips -g pixelWidth -g pixelHeight "$CM_BUILD_DIR/screenshots/ipad-13-play.png"
+          kill "$LOGPID" 2>/dev/null || true
+          if [ "$READY" -ne 1 ]; then
+            echo "Play never became ready; last simulator logs:" >&2
+            tail -n 80 "$LOG" >&2 || true
+            exit 1
+          fi
     artifacts:
       - screenshots/*.png
+      - screenshots/*.log
       - /tmp/xcodebuild_logs/*.log
     publishing:
       email:

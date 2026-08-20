@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 @MainActor
 final class SessionStore: ObservableObject {
@@ -39,6 +40,8 @@ final class SessionStore: ObservableObject {
     private var skipLerpTask: Task<Void, Never>?
     private static let skipLerpSeconds: TimeInterval = 3
 
+    private static let log = Logger(subsystem: "com.adplay.app", category: "session")
+
     /// Debug builds only (`DEBUG_BYPASS_ADS`). Never available in Release / TestFlight.
     var bypassAdsAvailable: Bool {
         DebugAdBypass.available
@@ -52,12 +55,13 @@ final class SessionStore: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            GameReminderScheduler.requestPermissionIfNeeded()
             try await refresh(force: true)
             adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "waterfall")
             isReady = true
             foreground = true
             ensureTicker()
+            Self.log.notice("AdPlay session ready")
+            GameReminderScheduler.requestPermissionIfNeeded()
             // Warm AdMob after home is up so the ATT prompt is not under the splash.
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 400_000_000)
@@ -67,6 +71,7 @@ final class SessionStore: ObservableObject {
         } catch {
             isReady = false
             errorMessage = error.localizedDescription
+            Self.log.error("AdPlay session failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

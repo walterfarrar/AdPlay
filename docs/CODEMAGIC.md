@@ -21,7 +21,9 @@ No Mac needed. This does **not** upload to TestFlight.
 3. Download `ipad-13-play.png` from **Artifacts**.
 4. Upload it to App Store Connect → the version → **iPad 13" Display**.
 
-The workflow boots an iPad Pro 13-inch simulator, builds **Release** (so Skip ads / Reset are not in the shot), skips onboarding, and captures Play. Auto tapper only appears if Auto is already running after launch; the listing shot is still the real SwiftUI UI.
+The workflow boots an iPad Pro 13-inch simulator, builds a **signed Release** simulator app (so Skip ads / Reset are not in the shot and Firebase Auth can use the keychain), skips onboarding, suppresses permission sheets, waits until Play is ready, then captures. Auto tapper only appears if Auto is already running after launch; the listing shot is still the real SwiftUI UI.
+
+If a run still shows a system alert or a keychain error, re-run **iOS iPad screenshot** — the capture is failed on purpose when Play never becomes ready.
 
 ## Local note
 

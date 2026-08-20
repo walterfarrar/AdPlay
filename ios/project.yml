@@ -22,6 +22,7 @@ targets:
       - path: AdPlay
         excludes:
           - Info.plist
+          - AdPlay.entitlements
     dependencies:
       - package: firebase-ios-sdk
         product: FirebaseCore
@@ -33,9 +34,12 @@ targets:
         product: GoogleMobileAds
       - sdk: AppTrackingTransparency.framework
       - sdk: StoreKit.framework
+    entitlements:
+      path: AdPlay/AdPlay.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.adplay.app
+        CODE_SIGN_ENTITLEMENTS: AdPlay/AdPlay.entitlements
         INFOPLIST_FILE: AdPlay/Info.plist
         GENERATE_INFOPLIST_FILE: false
         TARGETED_DEVICE_FAMILY: "1,2"

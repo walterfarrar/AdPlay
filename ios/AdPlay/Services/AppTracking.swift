@@ -10,6 +10,9 @@ enum AppTracking {
     @MainActor
     @discardableResult
     static func requestIfNeeded() async -> ATTrackingManager.AuthorizationStatus {
+        if ScreenshotLaunch.isActive {
+            return ATTrackingManager.trackingAuthorizationStatus
+        }
         let current = ATTrackingManager.trackingAuthorizationStatus
         if current != .notDetermined {
             return current

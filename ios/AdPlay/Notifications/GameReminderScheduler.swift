@@ -8,6 +8,7 @@ enum GameReminderScheduler {
     private static let idAds = "adplay.ads_available"
 
     static func requestPermissionIfNeeded() {
+        guard !ScreenshotLaunch.isActive else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .notDetermined else { return }
