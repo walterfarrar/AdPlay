@@ -598,8 +598,6 @@ struct SatEarnStage: View {
 
     private func satEarnTimeline(at now: Date) -> some View {
         let look = ThemeLook.named(settings.selectedLookId)
-        let lifetimeSats = session.progress.lifetimeSats
-        let minerStage = MinerStage.from(lifetimeSats: lifetimeSats)
         let continuous = displayedBarProgress(
             progress: progress,
             total: total,
@@ -653,8 +651,6 @@ struct SatEarnStage: View {
                     .monospacedDigit()
 
                 ZStack {
-                    MinerStageBackdrop(stage: minerStage)
-                    .offset(y: 18)
                     SatWheelView(
                         fraction: fraction,
                         flash: wheelFlash,
