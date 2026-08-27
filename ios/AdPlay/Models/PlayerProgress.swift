@@ -34,6 +34,7 @@ struct PlayerProgress: Codable, Equatable {
     var achievements: [Achievement]
     var iapAdsPurchased: Int
     var iapBonusAdsMax: Int
+    var lifetimeSatsEarned: Int?
 
     static let empty = PlayerProgress(
         adBank: AdBankBreakdown(
@@ -45,8 +46,11 @@ struct PlayerProgress: Codable, Equatable {
         dailyGoals: [],
         achievements: [],
         iapAdsPurchased: 0,
-        iapBonusAdsMax: 5
+        iapBonusAdsMax: 5,
+        lifetimeSatsEarned: 0
     )
+
+    var lifetimeSats: Int { lifetimeSatsEarned ?? 0 }
 
     var displayedDailyGoals: [DailyGoal] {
         ProgressCatalog.goals(merging: dailyGoals)
@@ -66,8 +70,12 @@ struct PlayerProgress: Codable, Equatable {
     func syncedWith(state: GameState, tunables: Tunables?, adsWatched: Int) -> PlayerProgress {
         let cap = max(tunables?.dailyTapCap ?? 500, 1)
         let tapsUsed = max(0, cap - state.tapsRemaining)
-        let auto = (state.autoFillActive || state.lastBoostType == "activate") ? 1 : 0
-        let next = displayedDailyGoals.map { goal -> DailyGoal in
+        let goals = displayedDailyGoals
+        // Auto spanning midnight is still running, but the UTC goal resets. Don't
+        // treat autoFillActive as "activated today" — that inflated the token hold.
+        let autoFromServer = goals.first(where: { $0.id == "auto" })?.current ?? 0
+        let auto = max(autoFromServer, state.lastBoostType == "activate" ? 1 : 0)
+        let next = goals.map { goal -> DailyGoal in
             let derived: Int
             switch goal.id {
             case "taps", "taps_stretch": derived = tapsUsed

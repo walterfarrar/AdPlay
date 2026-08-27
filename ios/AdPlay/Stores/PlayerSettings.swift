@@ -15,6 +15,9 @@ final class PlayerSettings: ObservableObject {
     @Published var hasCompletedOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: Keys.onboarding) }
     }
+    @Published var selectedLookId: String {
+        didSet { UserDefaults.standard.set(selectedLookId, forKey: Keys.look) }
+    }
 
     @Published private(set) var seenDailyGoalDay: String
     @Published private(set) var seenDailyGoalIds: [String]
@@ -25,6 +28,7 @@ final class PlayerSettings: ObservableObject {
         hapticsEnabled = d.object(forKey: Keys.haptics) as? Bool ?? true
         soundEnabled = d.object(forKey: Keys.sound) as? Bool ?? true
         hasCompletedOnboarding = d.bool(forKey: Keys.onboarding)
+        selectedLookId = d.string(forKey: Keys.look) ?? ThemeLook.ember.id
         seenDailyGoalDay = d.string(forKey: Keys.seenGoalDay) ?? ""
         seenDailyGoalIds = d.stringArray(forKey: Keys.seenGoalIds) ?? []
     }
@@ -33,6 +37,8 @@ final class PlayerSettings: ObservableObject {
         let seen = seenDailyGoalDay == Self.utcDayKey() ? Set(seenDailyGoalIds) : []
         return goals.filter { $0.completed && !seen.contains($0.id) }.count
     }
+
+    var selectedLook: ThemeLook { ThemeLook.named(selectedLookId) }
 
     func acknowledgeDailyGoals(_ goals: [DailyGoal]) {
         seenDailyGoalDay = Self.utcDayKey()
@@ -54,6 +60,7 @@ final class PlayerSettings: ObservableObject {
         static let haptics = "adplay.hapticsEnabled"
         static let sound = "adplay.soundEnabled"
         static let onboarding = "adplay.hasCompletedOnboarding"
+        static let look = "adplay.selectedLookId"
         static let seenGoalDay = "adplay.seenDailyGoalDay"
         static let seenGoalIds = "adplay.seenDailyGoalIds"
     }

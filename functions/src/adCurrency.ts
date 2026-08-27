@@ -228,6 +228,7 @@ export function playerProgress(g: GameStateDoc, t: Tunables): PlayerProgress {
     achievements: publicAchievements(g),
     iapAdsPurchased: g.iapAdsPurchased || 0,
     iapBonusAdsMax: t.iapBonusAdsMax,
+    lifetimeSatsEarned: g.lifetimeSatsEarned || 0,
   };
 }
 

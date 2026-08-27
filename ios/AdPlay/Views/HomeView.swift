@@ -12,9 +12,10 @@ struct HomeView: View {
 
     var body: some View {
         let state = session.state
+        let look = ThemeLook.named(settings.selectedLookId)
 
         ZStack {
-            AtmosphereBackground(look: settings.selectedLook)
+            AtmosphereBackground(look: look)
 
             GeometryReader { geo in
                 let filled = VStack(spacing: 0) {
@@ -23,7 +24,7 @@ struct HomeView: View {
                     GeometryReader { mid in
                         let wheel = min(
                             mid.size.width * 0.48,
-                            max(160, mid.size.height - 168)
+                            max(CGFloat(160), mid.size.height - 168)
                         )
                         VStack(spacing: 0) {
                             SatEarnStage(
@@ -61,7 +62,7 @@ struct HomeView: View {
                                 autoActive: state.autoFillActive,
                                 autoFillUntil: state.autoFillUntil,
                                 wheelFlash: barFlash,
-                                wheelSize: min(240, geo.size.width * 0.50)
+                                wheelSize: min(CGFloat(240), geo.size.width * 0.50)
                             )
                             .padding(.top, 20)
                             tapHint(state: state)
@@ -118,14 +119,17 @@ struct HomeView: View {
     }
 
     private var headerBar: some View {
-        HStack(alignment: .center) {
+        let look = ThemeLook.named(settings.selectedLookId)
+        let lifetimeSats = session.progress.lifetimeSats
+        let stageTitle = MinerStage.from(lifetimeSats: lifetimeSats).title
+        return HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AdPlay")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(Color("BrandInk"))
-                Text(MinerStage.from(lifetimeSats: session.progress.lifetimeSats).title)
+                Text(stageTitle)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(settings.selectedLook.accent)
+                    .foregroundStyle(look.accent)
             }
             Spacer()
             if session.bypassAdsAvailable {
@@ -410,7 +414,7 @@ private func struckSyncedProgress(
     }
     let knockerHits = floor(min(knockerProgress, cap + power) / power + 1e-9)
     let quantized = knockerHits * power
-    let extra = max(0, continuous - knockerProgress)
+    let extra = Swift.max(0.0, continuous - knockerProgress)
     return min(cap, quantized + extra)
 }
 
@@ -533,118 +537,7 @@ struct SatEarnStage: View {
     var body: some View {
         VStack(spacing: 0) {
             TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { context in
-                let continuous = displayedBarProgress(
-                    progress: progress,
-                    total: total,
-                    fillRate: fillRate,
-                    autoActive: autoActive,
-                    anchorProgress: anchorProgress,
-                    anchorDate: anchorDate,
-                    now: context.date
-                )
-                let tapsPerSec = tapsPerSecond(fillRate: fillRate, tapPower: tapPower)
-                let knockerElapsed = autoActive && fillRate > 0
-                    ? context.date.timeIntervalSince(knockerAnchorDate)
-                    : 0
-                let knockerProgress = knockerAnchorProgress + fillRate * knockerElapsed
-                let rawDisplay = struckSyncedProgress(
-                    continuous: continuous,
-                    knockerProgress: knockerProgress,
-                    tapPower: tapPower,
-                    autoActive: autoActive,
-                    fillRate: fillRate,
-                    total: total
-                )
-                let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
-                let fraction = total > 0 ? min(1, display / Double(total)) : 0
-                let comboT = ComboTunables.from(session.tunables)
-                let comboLive = ComboEngine.at(session.state.combo, now: context.date, tunables: comboT)
-                let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT)
-                let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
-                let comboMult = comboT.multiplier(of: comboLive)
-                let pose = knockerPose(
-                    elapsedSec: knockerElapsed,
-                    originUnits: knockerAnchorProgress,
-                    tapsPerSec: tapsPerSec,
-                    tapPower: tapPower,
-                    autoActive: autoActive
-                )
-
-                VStack(spacing: 0) {
-                    BtcBalanceView(
-                        satsBalance: satsBalance,
-                        barProgress: display,
-                        total: total
-                    )
-
-                    Spacer().frame(height: 20)
-
-                    VStack(spacing: 8) {
-                        Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(settings.selectedLook.accent)
-                            .monospacedDigit()
-
-                        ZStack {
-                            MinerStageBackdrop(
-                                stage: MinerStage.from(lifetimeSats: session.progress.lifetimeSats)
-                            )
-                            .offset(y: 18)
-                            SatWheelView(
-                                fraction: fraction,
-                                flash: wheelFlash,
-                                comboFractions: comboMeters,
-                                comboTracks: comboTracks,
-                                comboMultiplier: comboMult,
-                                look: settings.selectedLook
-                            )
-                            .frame(width: wheelSize, height: wheelSize)
-                            .scaleEffect(tapPulse ? 0.96 : 1)
-                            .animation(.spring(response: 0.18, dampingFraction: 0.55), value: tapPulse)
-                            .contentShape(Circle())
-                            .onTapGesture {
-                                tapPulse = true
-                                if settings.hapticsEnabled {
-                                    let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
-                                    UIImpactFeedbackGenerator(style: leveled ? .medium : .light)
-                                        .impactOccurred()
-                                }
-                                Task { await session.tap() }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                                    tapPulse = false
-                                }
-                            }
-                            .background(wheelTipReporter)
-                            .overlay {
-                                AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
-                                    .scaleEffect(wheelSize / 220)
-                                    .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
-                                    .allowsHitTesting(false)
-                            }
-                            .overlay {
-                                SharedAutoTimerView(
-                                    autoFillUntil: autoFillUntil,
-                                    autoActive: autoActive
-                                )
-                                .frame(width: 92)
-                                .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
-                                .allowsHitTesting(false)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: wheelSize + 40)
-
-                        Text(String(format: "%.1f / %d taps", display, total))
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color("BrandInk"))
-                            .monospacedDigit()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 16)
-                }
-                .onChange(of: display) { _, newValue in
-                    heldVisual = newValue
-                }
+                satEarnTimeline(at: context.date)
             }
             .onChange(of: progress) { oldValue, newValue in
                 // Raise the tap floor. Knocker stays auto-only unless the bar wrapped.
@@ -674,17 +567,22 @@ struct SatEarnStage: View {
             }
             .onChange(of: autoActive) { _, active in
                 if active {
-                    knockerAnchorProgress = progress
-                    knockerAnchorDate = .now
-                    heldVisual = progress
+                    let currentProgress = progress
+                    let now = Date.now
+                    knockerAnchorProgress = currentProgress
+                    knockerAnchorDate = now
+                    let visual = currentProgress
+                    heldVisual = visual
                 }
             }
             .onAppear {
-                anchorProgress = progress
-                anchorDate = .now
-                knockerAnchorProgress = progress
-                knockerAnchorDate = .now
-                heldVisual = progress
+                let currentProgress = progress
+                let now = Date.now
+                anchorProgress = currentProgress
+                anchorDate = now
+                knockerAnchorProgress = currentProgress
+                knockerAnchorDate = now
+                heldVisual = currentProgress
             }
 
             BarRateStatusView(
@@ -695,6 +593,122 @@ struct SatEarnStage: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 12)
             .padding(.horizontal, 20)
+        }
+    }
+
+    private func satEarnTimeline(at now: Date) -> some View {
+        let look = ThemeLook.named(settings.selectedLookId)
+        let lifetimeSats = session.progress.lifetimeSats
+        let minerStage = MinerStage.from(lifetimeSats: lifetimeSats)
+        let continuous = displayedBarProgress(
+            progress: progress,
+            total: total,
+            fillRate: fillRate,
+            autoActive: autoActive,
+            anchorProgress: anchorProgress,
+            anchorDate: anchorDate,
+            now: now
+        )
+        let tapsPerSec = tapsPerSecond(fillRate: fillRate, tapPower: tapPower)
+        let knockerElapsed = autoActive && fillRate > 0
+            ? now.timeIntervalSince(knockerAnchorDate)
+            : 0
+        let knockerProgress = knockerAnchorProgress + fillRate * knockerElapsed
+        let rawDisplay = struckSyncedProgress(
+            continuous: continuous,
+            knockerProgress: knockerProgress,
+            tapPower: tapPower,
+            autoActive: autoActive,
+            fillRate: fillRate,
+            total: total
+        )
+        let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
+        let fraction = total > 0 ? min(1.0, display / Double(total)) : 0.0
+        let comboT = ComboTunables.from(session.tunables)
+        let comboLive = ComboEngine.at(session.state.combo, now: now, tunables: comboT)
+        let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT)
+        let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
+        let comboMult = comboT.multiplier(of: comboLive)
+        let pose = knockerPose(
+            elapsedSec: knockerElapsed,
+            originUnits: knockerAnchorProgress,
+            tapsPerSec: tapsPerSec,
+            tapPower: tapPower,
+            autoActive: autoActive
+        )
+
+        return VStack(spacing: 0) {
+            BtcBalanceView(
+                satsBalance: satsBalance,
+                barProgress: display,
+                total: total
+            )
+
+            Spacer().frame(height: 20)
+
+            VStack(spacing: 8) {
+                Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(look.accent)
+                    .monospacedDigit()
+
+                ZStack {
+                    MinerStageBackdrop(stage: minerStage)
+                    .offset(y: 18)
+                    SatWheelView(
+                        fraction: fraction,
+                        flash: wheelFlash,
+                        comboFractions: comboMeters,
+                        comboTracks: comboTracks,
+                        comboMultiplier: comboMult,
+                        look: look
+                    )
+                    .frame(width: wheelSize, height: wheelSize)
+                    .scaleEffect(tapPulse ? 0.96 : 1)
+                    .animation(.spring(response: 0.18, dampingFraction: 0.55), value: tapPulse)
+                    .contentShape(Circle())
+                    .onTapGesture {
+                        tapPulse = true
+                        if settings.hapticsEnabled {
+                            let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
+                            UIImpactFeedbackGenerator(style: leveled ? .medium : .light)
+                                .impactOccurred()
+                        }
+                        Task { await session.tap() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            tapPulse = false
+                        }
+                    }
+                    .background(wheelTipReporter)
+                    .overlay {
+                        AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+                            .scaleEffect(wheelSize / 220)
+                            .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
+                            .allowsHitTesting(false)
+                    }
+                    .overlay {
+                        SharedAutoTimerView(
+                            autoFillUntil: autoFillUntil,
+                            autoActive: autoActive
+                        )
+                        .frame(width: 92)
+                        .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
+                        .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: wheelSize + 40)
+
+                Text(String(format: "%.1f / %d taps", display, total))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color("BrandInk"))
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+        }
+        .onChange(of: display) { _, newValue in
+            heldVisual = newValue
         }
     }
 
@@ -783,12 +797,12 @@ private func knockerPose(
 }
 
 private func easeOutQuad(_ t: Double) -> Double {
-    let x = min(1, max(0, t))
+    let x = Swift.min(1.0, Swift.max(0.0, t))
     return 1 - (1 - x) * (1 - x)
 }
 
 private func easeInOutCubic(_ t: Double) -> Double {
-    let x = min(1, max(0, t))
+    let x = Swift.min(1.0, Swift.max(0.0, t))
     return x < 0.5 ? 4 * x * x * x : 1 - pow(-2 * x + 2, 3) / 2
 }
 

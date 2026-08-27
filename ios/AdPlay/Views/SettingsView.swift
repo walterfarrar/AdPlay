@@ -44,7 +44,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .background(AtmosphereBackground())
+            .background(AtmosphereBackground(look: ThemeLook.named(settings.selectedLookId)))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Color(red: 0.055, green: 0.059, blue: 0.102), for: .navigationBar)

@@ -53,15 +53,15 @@ struct ComboTunables: Equatable {
 
     func ringMaxValue(_ ring: Int) -> Double {
         guard ring >= 0, ring < ringMax.count else { return 0 }
-        return max(0, ringMax[ring])
+        return Swift.max(0.0, ringMax[ring])
     }
 
     func multiplier(of state: ComboState) -> Double {
-        let b = base > 0 ? base : 1
-        let cap = absMax > 0 ? absMax : 3
+        let b = base > 0 ? base : 1.0
+        let cap = absMax > 0 ? absMax : 3.0
         var bonus = 0.0
         for r in state.rings { bonus += r.contribution }
-        return nice(min(cap, b + bonus))
+        return nice(Swift.min(cap, b + bonus))
     }
 
     func formatMultiplier(_ m: Double) -> String {
@@ -123,10 +123,10 @@ enum ComboEngine {
     }
 
     static func at(_ state: ComboState, now: Date, tunables t: ComboTunables) -> ComboState {
-        var cur = normalize(state, t: t)
+        let cur = normalize(state, t: t)
         guard let last = cur.lastTapAt else { return cur }
         if now <= last { return cur }
-        let grace = max(0, t.idleGraceSeconds)
+        let grace = Swift.max(0.0, t.idleGraceSeconds)
         let dt = now.timeIntervalSince(last)
         if dt <= grace {
             return applyDrain(cur, amount: drainAmount(dt, idle: false, t: t), t: t)
@@ -148,7 +148,7 @@ enum ComboEngine {
     }
 
     private static func clamp01(_ n: Double) -> Double {
-        min(1, max(0, n))
+        Swift.min(1.0, Swift.max(0.0, n))
     }
 
     private static func normalize(_ state: ComboState, t: ComboTunables) -> ComboState {
@@ -156,7 +156,7 @@ enum ComboEngine {
         for i in 0..<ComboTunables.ringCount {
             let src = i < state.rings.count ? state.rings[i] : .empty
             let level = max(0, src.level)
-            var contrib = max(0, src.contribution)
+            var contrib = Swift.max(0.0, src.contribution)
             if contrib <= 0 && level > 0 {
                 contrib = derivedContribution(level: level, ring: i, t: t)
             }
@@ -207,10 +207,10 @@ enum ComboEngine {
 
     private static func applyCompletion(_ state: inout ComboState, ring: Int, t: ComboTunables) {
         let inc = completionIncrement(state, ring: ring, t: t)
-        let cap = t.absMax > 0 ? t.absMax : 3
-        let base = t.base > 0 ? t.base : 1
-        let room = max(0, cap - base - totalBonus(state))
-        let applied = min(inc, room)
+        let cap = t.absMax > 0 ? t.absMax : 3.0
+        let base = t.base > 0 ? t.base : 1.0
+        let room = Swift.max(0.0, cap - base - totalBonus(state))
+        let applied = Swift.min(inc, room)
         state.rings[ring].level += 1
         state.rings[ring].contribution = nice(state.rings[ring].contribution + applied)
         if ring + 1 < ComboTunables.ringCount {
@@ -236,11 +236,11 @@ enum ComboEngine {
             ? overflowStep(innerMaxed: innerMaxedCount(state, ring: ring, t: t), t: t)
             : step
         state.rings[ring].level -= 1
-        state.rings[ring].contribution = nice(max(0, state.rings[ring].contribution - inc))
+        state.rings[ring].contribution = nice(Swift.max(0.0, state.rings[ring].contribution - inc))
         if state.rings[ring].level < ml {
-            state.rings[ring].contribution = nice(min(state.rings[ring].contribution, Double(state.rings[ring].level) * step))
+            state.rings[ring].contribution = nice(Swift.min(state.rings[ring].contribution, Double(state.rings[ring].level) * step))
         } else if state.rings[ring].level == ml {
-            state.rings[ring].contribution = nice(min(state.rings[ring].contribution, t.ringMaxValue(ring)))
+            state.rings[ring].contribution = nice(Swift.min(state.rings[ring].contribution, t.ringMaxValue(ring)))
         }
         if state.rings[ring].level <= 0 {
             state.rings[ring].level = 0
@@ -272,12 +272,12 @@ enum ComboEngine {
 
     private static func drainAmount(_ dt: TimeInterval, idle: Bool, t: ComboTunables) -> Double {
         let rate = idle ? t.drainPerSecondIdle : t.drainPerSecondActive
-        return max(0, dt) * max(0, rate)
+        return Swift.max(0.0, dt) * Swift.max(0.0, rate)
     }
 
     private static func applyDrain(_ state: ComboState, amount: Double, t: ComboTunables) -> ComboState {
         var next = normalize(state, t: t)
-        var remain = max(0, amount)
+        var remain = Swift.max(0.0, amount)
         while remain > 1e-12 {
             var i = -1
             var r = 0
@@ -290,7 +290,7 @@ enum ComboEngine {
             }
             if i < 0 { break }
             if next.rings[i].meter > 1e-12 {
-                let take = min(next.rings[i].meter, remain)
+                let take = Swift.min(next.rings[i].meter, remain)
                 next.rings[i].meter = nice(next.rings[i].meter - take)
                 remain = nice(remain - take)
             } else if next.rings[i].level > 0 {
