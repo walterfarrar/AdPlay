@@ -10,6 +10,12 @@ val BrandInk = Color(0xFFF4F5FA)
 val BrandMuted = Color(0xFF969CB0)
 val BrandAccent = Color(0xFFF7931A)
 val BrandAccentHot = Color(0xFFFF6B2C)
+/** Combo ring 0 — copper / ember. */
+val ComboRing0 = BrandAccent
+/** Combo ring 1 — hotter gold / amber. */
+val ComboRing1 = Color(0xFFFFC14A)
+/** Combo ring 2 — white-hot core. */
+val ComboRing2 = Color(0xFFFFF3C4)
 /** Longer / shared auto timer */
 val BrandTime = Color(0xFF5BB8FF)
 /** Faster / taps per second */

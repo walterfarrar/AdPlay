@@ -94,5 +94,15 @@ export function freshGame(t: Tunables, now = new Date()): import("./types").Game
     hasActivatedAuto: false,
     hasActivatedToday: false,
     hasPaidRedeem: false,
+    comboMeter: 0,
+    comboLevel: 0,
+    comboContrib: 0,
+    comboMeter1: 0,
+    comboLevel1: 0,
+    comboContrib1: 0,
+    comboMeter2: 0,
+    comboLevel2: 0,
+    comboContrib2: 0,
+    lastManualTapAt: null,
   };
 }

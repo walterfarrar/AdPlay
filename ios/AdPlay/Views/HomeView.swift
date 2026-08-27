@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
@@ -7,12 +8,13 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var showAchievements = false
     @State private var barFlash = false
+    @State private var satEarnPrimed = false
 
     var body: some View {
         let state = session.state
 
         ZStack {
-            AtmosphereBackground()
+            AtmosphereBackground(look: settings.selectedLook)
 
             GeometryReader { geo in
                 let filled = VStack(spacing: 0) {
@@ -72,6 +74,11 @@ struct HomeView: View {
             }
         }
         .onChange(of: session.state.satsBalance) { oldValue, newValue in
+            guard session.isReady else { return }
+            if !satEarnPrimed {
+                satEarnPrimed = true
+                return
+            }
             let gained = newValue - oldValue
             guard gained > 0 else { return }
             flashWheelForSatEarn(gained: gained)
@@ -111,10 +118,15 @@ struct HomeView: View {
     }
 
     private var headerBar: some View {
-        HStack {
-            Text("AdPlay")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundStyle(Color("BrandInk"))
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("AdPlay")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color("BrandInk"))
+                Text(MinerStage.from(lifetimeSats: session.progress.lifetimeSats).title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(settings.selectedLook.accent)
+            }
             Spacer()
             if session.bypassAdsAvailable {
                 Button(session.bypassAds ? "Skip ads" : "Real ads") {
@@ -379,9 +391,9 @@ private func displayedBarProgress(
     return min(Double(total), anchorProgress + fillRate * elapsed)
 }
 
-/// Wheel / tap-count / BTC progress: advances only on whole knocker (or manual) hits.
-/// Both clocks are quantized to the tapPower lattice so dual-timer drift can't jitter
-/// the last BTC digit between frames.
+/// Wheel / tap-count / BTC: knocker hits always add, even if the player also tapped.
+/// The knocker clock is auto-only (no combo). Manual taps sit on top as `extra`.
+/// Knocker may run past the bar (keeps striking); clamp for the counter, don't snap the arm.
 private func struckSyncedProgress(
     continuous: Double,
     knockerProgress: Double,
@@ -392,16 +404,34 @@ private func struckSyncedProgress(
 ) -> Double {
     guard autoActive, fillRate > 0 else { return continuous }
     let power = max(tapPower, 0.01)
-    // Bar wrap / reset left the knocker clock on the previous bar.
-    if knockerProgress > continuous + max(power * 2, 5) {
-        return continuous
+    let cap = Double(total)
+    if knockerProgress > continuous + cap * 0.5 && knockerProgress > cap + power {
+        return min(cap, continuous)
     }
-    // Epsilon keeps float edges from flickering across a hit boundary.
-    let knockerHits = floor(knockerProgress / power + 1e-9)
-    let continuousHits = floor(continuous / power + 1e-9)
-    // Manual taps bump `continuous` by ~power; take the lead without raw float residue.
-    let hits = max(knockerHits, continuousHits)
-    return min(Double(total), hits * power)
+    let knockerHits = floor(min(knockerProgress, cap + power) / power + 1e-9)
+    let quantized = knockerHits * power
+    let extra = max(0, continuous - knockerProgress)
+    return min(cap, quantized + extra)
+}
+
+/// Never let BTC / tap-count walk backward except on a real bar wrap.
+private func holdMonotonicProgress(_ held: Double, raw: Double, wrapSlop: Double = 5) -> Double {
+    raw + wrapSlop < held ? raw : max(held, raw)
+}
+
+/// Strike phase from wall-clock. `originUnits / power` preserves phase across rebases.
+private func knockerCyclePhase(
+    elapsedSec: Double,
+    tapsPerSec: Double,
+    originUnits: Double,
+    tapPower: Double
+) -> Double {
+    guard tapsPerSec > 0 else { return 0 }
+    let power = max(tapPower, 0.01)
+    let originFrac = originUnits / power
+    let frac = originFrac - floor(originFrac)
+    let raw = elapsedSec * tapsPerSec + frac
+    return raw - floor(raw)
 }
 
 /// Fixed-point 1e-13 BTC quanta. 1 sat = 1e-8 BTC = 100_000 quanta.
@@ -479,6 +509,7 @@ struct SatParticle: Identifiable {
 /// BTC balance + centered sat wheel + overlapping auto knocker.
 struct SatEarnStage: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var settings: PlayerSettings
     @EnvironmentObject private var satEarn: SatEarnFlight
 
     let satsBalance: Int
@@ -496,6 +527,8 @@ struct SatEarnStage: View {
     /// Auto-only clock for the knocker — ignores manual tap progress jumps.
     @State private var knockerAnchorProgress: Double = 0
     @State private var knockerAnchorDate: Date = .now
+    @State private var heldVisual: Double = 0
+    @State private var tapPulse = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -510,10 +543,11 @@ struct SatEarnStage: View {
                     now: context.date
                 )
                 let tapsPerSec = tapsPerSecond(fillRate: fillRate, tapPower: tapPower)
-                let knockerProgress = autoActive && fillRate > 0
-                    ? knockerAnchorProgress + fillRate * context.date.timeIntervalSince(knockerAnchorDate)
-                    : knockerAnchorProgress
-                let display = struckSyncedProgress(
+                let knockerElapsed = autoActive && fillRate > 0
+                    ? context.date.timeIntervalSince(knockerAnchorDate)
+                    : 0
+                let knockerProgress = knockerAnchorProgress + fillRate * knockerElapsed
+                let rawDisplay = struckSyncedProgress(
                     continuous: continuous,
                     knockerProgress: knockerProgress,
                     tapPower: tapPower,
@@ -521,9 +555,16 @@ struct SatEarnStage: View {
                     fillRate: fillRate,
                     total: total
                 )
+                let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
                 let fraction = total > 0 ? min(1, display / Double(total)) : 0
+                let comboT = ComboTunables.from(session.tunables)
+                let comboLive = ComboEngine.at(session.state.combo, now: context.date, tunables: comboT)
+                let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT)
+                let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
+                let comboMult = comboT.multiplier(of: comboLive)
                 let pose = knockerPose(
-                    displayProgress: knockerProgress,
+                    elapsedSec: knockerElapsed,
+                    originUnits: knockerAnchorProgress,
                     tapsPerSec: tapsPerSec,
                     tapPower: tapPower,
                     autoActive: autoActive
@@ -541,14 +582,37 @@ struct SatEarnStage: View {
                     VStack(spacing: 8) {
                         Text(formatSatsPerHour(fillRate: fillRate, unitsPerSat: total, autoActive: autoActive))
                             .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color("BrandAccent"))
+                            .foregroundStyle(settings.selectedLook.accent)
                             .monospacedDigit()
 
-                        SatWheelView(fraction: fraction, flash: wheelFlash)
+                        ZStack {
+                            MinerStageBackdrop(
+                                stage: MinerStage.from(lifetimeSats: session.progress.lifetimeSats)
+                            )
+                            .offset(y: 18)
+                            SatWheelView(
+                                fraction: fraction,
+                                flash: wheelFlash,
+                                comboFractions: comboMeters,
+                                comboTracks: comboTracks,
+                                comboMultiplier: comboMult,
+                                look: settings.selectedLook
+                            )
                             .frame(width: wheelSize, height: wheelSize)
+                            .scaleEffect(tapPulse ? 0.96 : 1)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.55), value: tapPulse)
                             .contentShape(Circle())
                             .onTapGesture {
+                                tapPulse = true
+                                if settings.hapticsEnabled {
+                                    let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
+                                    UIImpactFeedbackGenerator(style: leveled ? .medium : .light)
+                                        .impactOccurred()
+                                }
                                 Task { await session.tap() }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                    tapPulse = false
+                                }
                             }
                             .background(wheelTipReporter)
                             .overlay {
@@ -566,10 +630,11 @@ struct SatEarnStage: View {
                                 .offset(x: 153 * wheelSize / 220, y: 74 * wheelSize / 220)
                                 .allowsHitTesting(false)
                             }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: wheelSize + 40)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: wheelSize + 40)
 
-                        Text("\(Int(display.rounded(.down))) / \(total) taps")
+                        Text(String(format: "%.1f / %d taps", display, total))
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color("BrandInk"))
                             .monospacedDigit()
@@ -577,33 +642,41 @@ struct SatEarnStage: View {
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
                 }
-            }
-            .onChange(of: progress) { _, newValue in
-                // Wheel / BTC follow taps; knocker keeps its auto-only clock
-                // unless the bar wrapped (progress rewound).
-                anchorProgress = newValue
-                anchorDate = .now
-                if newValue + 5 < knockerAnchorProgress {
-                    knockerAnchorProgress = newValue
-                    knockerAnchorDate = .now
+                .onChange(of: display) { _, newValue in
+                    heldVisual = newValue
                 }
             }
-            .onChange(of: fillRate) { _, _ in
-                anchorProgress = progress
+            .onChange(of: progress) { oldValue, newValue in
+                // Raise the tap floor. Knocker stays auto-only unless the bar wrapped.
+                anchorProgress = newValue
                 anchorDate = .now
-                knockerAnchorProgress = progress
-                knockerAnchorDate = .now
+                if newValue + 5 < oldValue {
+                    knockerAnchorProgress = newValue
+                    knockerAnchorDate = .now
+                    heldVisual = newValue
+                }
+            }
+            .onChange(of: fillRate) { oldRate, _ in
+                let now = Date()
+                let knockerNow = knockerAnchorProgress + oldRate * now.timeIntervalSince(knockerAnchorDate)
+                knockerAnchorProgress = knockerNow
+                knockerAnchorDate = now
+                let contNow = min(Double(total), anchorProgress + oldRate * now.timeIntervalSince(anchorDate))
+                anchorProgress = contNow
+                anchorDate = now
             }
             .onChange(of: tapPower) { _, _ in
-                anchorProgress = progress
-                anchorDate = .now
-                knockerAnchorProgress = progress
-                knockerAnchorDate = .now
+                // Keep current auto units so phase stays put; period changes with power.
+                let now = Date()
+                let knockerNow = knockerAnchorProgress + fillRate * now.timeIntervalSince(knockerAnchorDate)
+                knockerAnchorProgress = knockerNow
+                knockerAnchorDate = now
             }
             .onChange(of: autoActive) { _, active in
                 if active {
                     knockerAnchorProgress = progress
                     knockerAnchorDate = .now
+                    heldVisual = progress
                 }
             }
             .onAppear {
@@ -611,6 +684,7 @@ struct SatEarnStage: View {
                 anchorDate = .now
                 knockerAnchorProgress = progress
                 knockerAnchorDate = .now
+                heldVisual = progress
             }
 
             BarRateStatusView(
@@ -664,20 +738,22 @@ private let knockerWindUp: Double = 0.07
 /// Seconds the contact flash lasts.
 private let knockerImpactFade: Double = 0.16
 
-/// Strike cycle for the auto tapper.
-/// One strike per tap. Progress is in units (`taps/s × power`), so divide by
-/// `tapPower` — Stronger hits harder (snappier swing), Faster raises frequency.
+/// Strike cycle for the auto tapper. Phase is wall-clock, not accumulated progress.
 private func knockerPose(
-    displayProgress: Double,
+    elapsedSec: Double,
+    originUnits: Double,
     tapsPerSec: Double,
     tapPower: Double,
     autoActive: Bool
 ) -> KnockerPose {
     guard autoActive, tapsPerSec > 0 else { return KnockerPose() }
-    let power = max(tapPower, 0.01)
-    let tapIndex = displayProgress / power
     let period = 1.0 / tapsPerSec
-    let phase = tapIndex - floor(tapIndex) // 0 = just struck
+    let phase = knockerCyclePhase(
+        elapsedSec: elapsedSec,
+        tapsPerSec: tapsPerSec,
+        originUnits: originUnits,
+        tapPower: tapPower
+    )
 
     // Segments of one tap, as fractions of the period.
     let strike = min(0.34, max(0.06, knockerStrikeDuration(tapPower: tapPower) / period))
@@ -719,35 +795,56 @@ private func easeInOutCubic(_ t: Double) -> Double {
 struct SatWheelView: View {
     let fraction: Double
     var flash: Bool = false
+    var comboFractions: [Double] = [0, 0, 0]
+    var comboTracks: [Bool] = [true, false, false]
+    var comboMultiplier: Double = 1
+    var look: ThemeLook = .ember
 
     var body: some View {
         GeometryReader { geo in
             let size = min(geo.size.width, geo.size.height)
             let rim = size * 0.06
+            let comboRim = rim * 0.50
+            let comboPitch = comboRim * 1.35
+            let pad0 = rim * 1.15
+            let pad1 = pad0 + comboPitch
+            let pad2 = pad0 + comboPitch * 2
+            let pads = [pad0, pad1, pad2]
+            let fracs = [
+                comboFractions.count > 0 ? comboFractions[0] : 0,
+                comboFractions.count > 1 ? comboFractions[1] : 0,
+                comboFractions.count > 2 ? comboFractions[2] : 0,
+            ]
+            let shown = [
+                (comboTracks.count > 0 ? comboTracks[0] : true) || fracs[0] > 0.001,
+                (comboTracks.count > 1 ? comboTracks[1] : false) || fracs[1] > 0.001,
+                (comboTracks.count > 2 ? comboTracks[2] : false) || fracs[2] > 0.001,
+            ]
+            let innerIdx = shown[2] ? 2 : (shown[1] ? 1 : 0)
+            let innerRadius = size / 2 - pads[innerIdx]
+            let pegOrbit = max(size * 0.16, innerRadius - comboRim * 0.55 - 5)
+            let comboLabel = ComboEngine.formatMultiplier(comboMultiplier)
             ZStack {
-                // Track ring
                 Circle()
                     .stroke(Color("BrandInk").opacity(0.08), lineWidth: rim)
 
-                // Progress arc from 12 o'clock clockwise
                 Circle()
                     .trim(from: 0, to: CGFloat(fraction))
                     .stroke(
                         AngularGradient(
                             colors: flash
-                                ? [Color("BrandAccent"), Color.white, Color("BrandAccent")]
-                                : [Color("BrandFill"), Color("BrandFillHot"), Color("BrandFill")],
+                                ? [look.accent, Color.white, look.accent]
+                                : [look.fill, look.fillHot, look.fill],
                             center: .center
                         ),
                         style: StrokeStyle(lineWidth: rim, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
                     .shadow(
-                        color: (flash ? Color("BrandAccent") : Color("BrandFill")).opacity(flash ? 0.9 : 0.45),
+                        color: (flash ? look.accent : look.fill).opacity(flash ? 0.9 : 0.45),
                         radius: flash ? 16 : 8
                     )
 
-                // Rotating face + ticks
                 ZStack {
                     Circle()
                         .fill(
@@ -763,6 +860,13 @@ struct SatWheelView: View {
                         )
                         .padding(rim * 0.85)
 
+                    ForEach(0..<60, id: \.self) { i in
+                        Capsule()
+                            .fill(Color("BrandInk").opacity(0.10))
+                            .frame(width: 0.8, height: 5)
+                            .offset(y: -(size * 0.365))
+                            .rotationEffect(.degrees(Double(i) * 6))
+                    }
                     ForEach(0..<12, id: \.self) { i in
                         Capsule()
                             .fill(Color("BrandInk").opacity(i % 3 == 0 ? 0.35 : 0.16))
@@ -770,19 +874,53 @@ struct SatWheelView: View {
                             .offset(y: -(size * 0.38))
                             .rotationEffect(.degrees(Double(i) * 30))
                     }
-
-                    // Hub peg marker at the "start" of the wheel face (aligns with tip at 0)
-                    Circle()
-                        .fill(Color("BrandAccent").opacity(0.85))
-                        .frame(width: 8, height: 8)
-                        .offset(y: -(size * 0.30))
                 }
+                .rotationEffect(.degrees(fraction * 360))
+                .animation(nil, value: fraction)
+
+                ForEach(0..<3, id: \.self) { ring in
+                    ComboBandView(
+                        pad: pads[ring],
+                        rim: comboRim,
+                        size: size,
+                        frac: fracs[ring],
+                        showTrack: shown[ring],
+                        fill: look.comboFill(ring),
+                        trackOpacity: 0.10 + Double(ring) * 0.04,
+                        tickCount: ring == 0 ? 60 : (ring == 1 ? 48 : 36)
+                    )
+                }
+
+                if shown[innerIdx] {
+                    ForEach(0..<18, id: \.self) { i in
+                        Capsule()
+                            .fill(Color("BrandInk").opacity(0.30))
+                            .frame(width: 1.3, height: comboRim * 0.5)
+                            .offset(y: -(innerRadius - comboRim * 0.82))
+                            .rotationEffect(.degrees(Double(i) * 20))
+                    }
+                }
+
+                // Peg rides just inside the innermost drawn combo stroke, on top.
+                ZStack {
+                    Circle()
+                        .fill(Color("BrandInk").opacity(0.55))
+                        .frame(width: 10, height: 10)
+                    Circle()
+                        .fill(look.accent.opacity(0.95))
+                        .frame(width: 7, height: 7)
+                    Circle()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 2.4, height: 2.4)
+                        .offset(x: -1.1, y: -1.1)
+                }
+                .offset(y: -pegOrbit)
                 .rotationEffect(.degrees(fraction * 360))
                 .animation(nil, value: fraction)
 
                 // Fixed 12 o'clock pointer
                 Triangle()
-                    .fill(flash ? Color("BrandAccent") : Color("BrandInk").opacity(0.75))
+                    .fill(flash ? look.accent : Color("BrandInk").opacity(0.75))
                     .frame(width: 14, height: 12)
                     .offset(y: -(size * 0.5) + 4)
 
@@ -796,7 +934,7 @@ struct SatWheelView: View {
                     .frame(width: 9, height: 26)
                     .offset(x: size * 0.5)
 
-                // Center hub
+                // Center hub — combo multiplier when stacked
                 Circle()
                     .fill(
                         LinearGradient(
@@ -809,19 +947,95 @@ struct SatWheelView: View {
                     .overlay(
                         Circle().stroke(Color("BrandInk").opacity(0.12), lineWidth: 1)
                     )
-                    .overlay(
-                        Circle()
-                            .fill(Color("BrandAccent").opacity(flash ? 0.55 : 0.2))
-                            .frame(width: size * 0.08, height: size * 0.08)
-                    )
+                    .overlay {
+                        if !comboLabel.isEmpty {
+                            Text(comboLabel)
+                                .font(.system(size: size * 0.07, weight: .bold, design: .rounded))
+                                .foregroundStyle(look.combo)
+                                .monospacedDigit()
+                                .minimumScaleFactor(0.7)
+                                .lineLimit(1)
+                        } else {
+                            Circle()
+                                .fill(look.accent.opacity(flash ? 0.55 : 0.2))
+                                .frame(width: size * 0.08, height: size * 0.08)
+                        }
+                    }
 
                 if flash {
                     Circle()
-                        .stroke(Color("BrandAccent").opacity(0.85), lineWidth: 2)
+                        .stroke(look.accent.opacity(0.85), lineWidth: 2)
                 }
             }
             .frame(width: size, height: size)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct ComboBandView: View {
+    let pad: CGFloat
+    let rim: CGFloat
+    let size: CGFloat
+    let frac: Double
+    let showTrack: Bool
+    let fill: Color
+    let trackOpacity: Double
+    let tickCount: Int
+
+    var body: some View {
+        let radius = size / 2 - pad
+        let drawArc = frac > 0.001
+        let fresh = drawArc && frac < 0.18
+        ZStack {
+            if showTrack || drawArc {
+                Circle()
+                    .stroke(Color("BrandInk").opacity(0.22), lineWidth: rim * 1.22)
+                    .padding(pad)
+                Circle()
+                    .stroke(Color("BrandInk").opacity(trackOpacity), lineWidth: rim)
+                    .padding(pad)
+                ForEach(0..<tickCount, id: \.self) { i in
+                    let major = tickCount >= 12 && i % max(1, tickCount / 12) == 0
+                    Capsule()
+                        .fill(Color("BrandInk").opacity(major ? 0.32 : 0.11))
+                        .frame(width: major ? 1.5 : 0.7, height: major ? rim * 0.88 : rim * 0.42)
+                        .offset(y: -radius)
+                        .rotationEffect(.degrees(Double(i) * 360 / Double(tickCount)))
+                }
+                ForEach(0..<4, id: \.self) { i in
+                    Circle()
+                        .fill(Color("BrandInk").opacity(0.42))
+                        .frame(width: 3.1, height: 3.1)
+                        .overlay(Circle().stroke(Color("BrandInk").opacity(0.2), lineWidth: 0.5))
+                        .offset(y: -(radius - rim * 0.12))
+                        .rotationEffect(.degrees(Double(i) * 90))
+                }
+            }
+            if drawArc {
+                Circle()
+                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
+                    .stroke(
+                        fill.opacity(fresh ? 0.55 : 0.28),
+                        style: StrokeStyle(lineWidth: rim * (fresh ? 1.85 : 1.55), lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .padding(pad)
+                    .blur(radius: fresh ? 3.5 : 1.8)
+                Circle()
+                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
+                    .stroke(
+                        Color("BrandInk").opacity(0.38),
+                        style: StrokeStyle(lineWidth: rim, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .padding(pad)
+                Circle()
+                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
+                    .stroke(fill, style: StrokeStyle(lineWidth: rim * 0.70, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .padding(pad)
+            }
         }
     }
 }
@@ -1311,7 +1525,10 @@ struct RollingDigitsLabel: View {
             if fromQuanta == nil { fromQuanta = quanta }
         }
         .onChange(of: quanta) { _, newValue in
-            // Body already rendered glyphs against the previous baseline; advance after.
+            if (fromQuanta ?? 0) <= 0 && newValue >= 100_000 {
+                fromQuanta = newValue
+                return
+            }
             Task { @MainActor in
                 fromQuanta = newValue
             }
@@ -1666,22 +1883,15 @@ func remainingSeconds(untilIso: String?, now: Date = Date()) -> Int {
     return max(0, Int(until.timeIntervalSince(now)))
 }
 
-func parseIso8601(_ value: String) -> Date? {
-    let withFractional = ISO8601DateFormatter()
-    withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = withFractional.date(from: value) { return date }
-    let plain = ISO8601DateFormatter()
-    plain.formatOptions = [.withInternetDateTime]
-    return plain.date(from: value)
-}
-
 struct AtmosphereBackground: View {
+    var look: ThemeLook = .ember
+
     var body: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.071, green: 0.075, blue: 0.122), // #12131F
-                Color(red: 0.055, green: 0.059, blue: 0.102), // #0E0F1A
-                Color(red: 0.039, green: 0.043, blue: 0.071), // #0A0B12
+                Color(red: 0.071, green: 0.075, blue: 0.122),
+                Color(red: 0.055, green: 0.059, blue: 0.102),
+                Color(red: 0.039, green: 0.043, blue: 0.071),
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -1689,12 +1899,12 @@ struct AtmosphereBackground: View {
         .ignoresSafeArea()
         .overlay {
             Circle()
-                .fill(Color("BrandAccent").opacity(0.22))
+                .fill(look.glow.opacity(0.22))
                 .frame(width: 340, height: 340)
                 .blur(radius: 80)
                 .offset(x: -120, y: -240)
             Circle()
-                .fill(Color(red: 0.42, green: 0.36, blue: 0.95).opacity(0.16)) // indigo glow
+                .fill(look.fill.opacity(0.14))
                 .frame(width: 360, height: 360)
                 .blur(radius: 90)
                 .offset(x: 150, y: 280)

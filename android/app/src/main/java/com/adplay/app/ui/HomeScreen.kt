@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableDoubleStateOf
@@ -82,6 +83,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adplay.app.UiState
+import com.adplay.app.data.ComboEngine
+import com.adplay.app.data.ComboState
+import com.adplay.app.data.ComboTunables
+import com.adplay.app.data.MinerStage
 import com.adplay.app.data.Tunables
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -202,7 +207,6 @@ fun HomeScreen(
                     state.adCooldownSecondsLeft == 0
                 // Faster / Stronger unlock once Auto Tapper is running.
                 val canWatchSecondary = canWatch && state.autoFillActive
-                var displayProgress by remember { mutableDoubleStateOf(state.progress) }
                 var barFlash by remember { mutableFloatStateOf(0f) }
                 var previousSats by remember { mutableStateOf<Int?>(null) }
                 val barFlashAnimated by animateFloatAsState(
@@ -235,29 +239,6 @@ fun HomeScreen(
                     }
                 }
 
-                // Smooth local fill between server polls — shared by BTC balance + wheel.
-                LaunchedEffect(state.progress, state.fillRate, state.autoFillActive, state.unitsPerSat) {
-                    if (state.progress + 5.0 < displayProgress) {
-                        // Bar completed (progress wrapped) or debug reset
-                        displayProgress = state.progress
-                    } else if (state.progress > displayProgress) {
-                        displayProgress = state.progress
-                    }
-                    if (!state.autoFillActive || state.fillRate <= 0.0 || state.unitsPerSat <= 0) {
-                        return@LaunchedEffect
-                    }
-                    val start = displayProgress
-                    val startMs = System.currentTimeMillis()
-                    while (true) {
-                        delay(50)
-                        val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
-                        val next = start + state.fillRate * elapsed
-                        // Hold server progress as a floor so a late animation restart can't erase a tap
-                        displayProgress = maxOf(state.progress, next).coerceIn(0.0, state.unitsPerSat.toDouble())
-                        if (next >= state.unitsPerSat) break
-                    }
-                }
-
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -275,7 +256,15 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("AdPlay", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
+                        Column {
+                            Text("AdPlay", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
+                            Text(
+                                MinerStage.from(ui.progress.lifetimeSatsEarned).title,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = BrandAccent,
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (ui.bypassAdsAvailable) {
                                 TextButton(onClick = onToggleBypassAds) {
@@ -334,12 +323,14 @@ fun HomeScreen(
 
                     SatEarnStage(
                         satsBalance = state.satsBalance,
-                        displayProgress = displayProgress,
+                        displayProgress = state.progress,
                         unitsPerSat = state.unitsPerSat,
                         autoActive = state.autoFillActive,
                         autoFillUntil = state.autoFillUntil,
                         fillRate = state.fillRate,
                         tapPower = state.tapPower,
+                        combo = state.combo,
+                        tunables = ui.tunables,
                         onTap = onTap,
                         wheelFlash = barFlashAnimated,
                         onWheelTipPositioned = onWheelTipPositioned,
@@ -631,9 +622,15 @@ private fun RollingDigitsLabel(
     modifier: Modifier = Modifier,
 ) {
     var fromQuanta by remember { mutableLongStateOf(quanta) }
-    val glyphs = remember(quanta, fromQuanta) { btcGlyphs(fromQuanta, quanta) }
+    var primed by remember { mutableStateOf(false) }
+    val rollFrom = if (!primed || (fromQuanta <= 0L && quanta >= 100_000L)) quanta else fromQuanta
+    val glyphs = remember(quanta, rollFrom) { btcGlyphs(rollFrom, quanta) }
     LaunchedEffect(quanta) {
-        // Slots already captured steps for this roll via rollId=quanta.
+        if (!primed || (fromQuanta <= 0L && quanta >= 100_000L)) {
+            fromQuanta = quanta
+            primed = true
+            return@LaunchedEffect
+        }
         fromQuanta = quanta
     }
 
@@ -826,9 +823,9 @@ internal fun tapsPerSecond(fillRate: Double, tapPower: Double): Double {
 }
 
 /**
- * Wheel / tap-count / BTC progress: advances only on whole knocker (or manual) hits.
- * Both clocks are quantized to the tapPower lattice so dual-timer drift can't jitter
- * the last BTC digit between frames.
+ * Wheel / tap-count / BTC: knocker hits always add, even if the player also tapped.
+ * Knocker clock is auto-only (no combo). Manual taps sit on top as `extra`.
+ * Knocker may run past the bar (keeps striking); clamp for the counter, don't snap the arm.
  */
 internal fun struckSyncedProgress(
     continuous: Double,
@@ -840,16 +837,34 @@ internal fun struckSyncedProgress(
 ): Double {
     if (!autoActive || fillRate <= 0.0) return continuous
     val power = tapPower.coerceAtLeast(0.01)
-    // Bar wrap / reset left the knocker clock on the previous bar.
-    if (knockerProgress > continuous + maxOf(power * 2, 5.0)) {
-        return continuous
+    val cap = total.toDouble()
+    // Stale clock from a previous bar — only then drop back to continuous.
+    if (knockerProgress > continuous + cap * 0.5 && knockerProgress > cap + power) {
+        return minOf(cap, continuous)
     }
-    // Epsilon keeps float edges from flickering across a hit boundary.
-    val knockerHits = floor(knockerProgress / power + 1e-9)
-    val continuousHits = floor(continuous / power + 1e-9)
-    // Manual taps bump `continuous` by ~power; take the lead without raw float residue.
-    val hits = maxOf(knockerHits, continuousHits)
-    return minOf(total.toDouble(), hits * power)
+    val knockerHits = floor(minOf(knockerProgress, cap + power) / power + 1e-9)
+    val quantized = knockerHits * power
+    val extra = maxOf(0.0, continuous - knockerProgress)
+    return minOf(cap, quantized + extra)
+}
+
+/** Never let BTC / tap-count walk backward except on a real bar wrap. */
+internal fun holdMonotonicProgress(held: Double, raw: Double, wrapSlop: Double = 5.0): Double =
+    if (raw + wrapSlop < held) raw else maxOf(held, raw)
+
+/** Strike phase from wall-clock. `originUnits / power` preserves phase across rebases. */
+internal fun knockerCyclePhase(
+    elapsedSec: Double,
+    tapsPerSec: Double,
+    originUnits: Double,
+    tapPower: Double,
+): Double {
+    if (tapsPerSec <= 0.0) return 0.0
+    val power = tapPower.coerceAtLeast(0.01)
+    val originFrac = originUnits / power
+    val frac = originFrac - floor(originFrac)
+    val raw = elapsedSec * tapsPerSec + frac
+    return raw - floor(raw)
 }
 
 /** Sats earned per hour from the current auto fill rate (0 when idle). */
@@ -884,47 +899,101 @@ private fun SatEarnStage(
     autoFillUntil: String?,
     fillRate: Double,
     tapPower: Double,
+    combo: ComboState = ComboState(),
+    tunables: Tunables? = null,
     onTap: () -> Unit,
     wheelFlash: Float = 0f,
     onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val tapsPerSec = tapsPerSecond(fillRate, tapPower)
-    // Auto-only clock for the knocker — ignores manual tap progress jumps.
-    var knockerProgress by remember { mutableDoubleStateOf(displayProgress) }
-    LaunchedEffect(displayProgress) {
-        // Bar wrap / big rewind — resync so strikes track the new bar.
-        if (displayProgress + 5.0 < knockerProgress) {
-            knockerProgress = displayProgress
-        }
-    }
-    LaunchedEffect(fillRate, tapPower, autoActive, unitsPerSat) {
-        knockerProgress = displayProgress
-        if (!autoActive || fillRate <= 0.0) return@LaunchedEffect
-        val start = knockerProgress
-        val startMs = System.currentTimeMillis()
+    val comboT = ComboTunables.from(tunables)
+    var comboNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
         while (true) {
-            delay(16)
-            val elapsed = (System.currentTimeMillis() - startMs) / 1000.0
-            knockerProgress = start + fillRate * elapsed
+            comboNow = System.currentTimeMillis()
+            delay(32)
         }
     }
-    // Wheel / tap count: step on knocker hits; manual taps still show immediately.
-    val visualProgress = struckSyncedProgress(
-        continuous = displayProgress,
+    val comboLive = ComboEngine.at(combo, comboNow, comboT)
+    val comboMult = comboT.multiplier(comboLive)
+    val comboMeters = ComboEngine.displayMeters(comboLive, comboT)
+    val comboTracks = ComboEngine.displayTracks(comboLive, comboT)
+    val tapsPerSec = tapsPerSecond(fillRate, tapPower)
+    // Auto-only knocker clock. Never follow displayProgress (that includes combo taps).
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var knockerEpochMs by remember { mutableLongStateOf(nowMs) }
+    var knockerOrigin by remember { mutableDoubleStateOf(displayProgress) }
+    var lastDisplay by remember { mutableDoubleStateOf(displayProgress) }
+    var heldVisual by remember { mutableDoubleStateOf(displayProgress) }
+    var wasAuto by remember { mutableStateOf(false) }
+    var prevFill by remember { mutableDoubleStateOf(fillRate) }
+    var prevPower by remember { mutableDoubleStateOf(tapPower) }
+
+    LaunchedEffect(autoActive, fillRate) {
+        if (!autoActive || fillRate <= 0.0) return@LaunchedEffect
+        while (true) {
+            val now = System.currentTimeMillis()
+            val elapsed = (now - knockerEpochMs) / 1000.0
+            if (elapsed > 60.0) {
+                knockerOrigin += fillRate * elapsed
+                knockerEpochMs = now
+            }
+            nowMs = now
+            delay(16)
+        }
+    }
+    LaunchedEffect(displayProgress) {
+        // True bar wrap / reset only — knocker ahead of the bar is normal.
+        if (displayProgress + 5.0 < lastDisplay) {
+            knockerOrigin = displayProgress
+            knockerEpochMs = System.currentTimeMillis()
+            heldVisual = displayProgress
+        }
+        lastDisplay = displayProgress
+    }
+    LaunchedEffect(fillRate, tapPower, autoActive) {
+        val now = System.currentTimeMillis()
+        if (autoActive && !wasAuto) {
+            knockerOrigin = displayProgress
+            knockerEpochMs = now
+        } else if (autoActive && (fillRate != prevFill || tapPower != prevPower)) {
+            val current = knockerOrigin + prevFill.coerceAtLeast(0.0) * (now - knockerEpochMs) / 1000.0
+            knockerOrigin = current
+            knockerEpochMs = now
+        }
+        wasAuto = autoActive
+        prevFill = fillRate
+        prevPower = tapPower
+    }
+    val knockerElapsed = if (autoActive && fillRate > 0.0) {
+        (nowMs - knockerEpochMs) / 1000.0
+    } else {
+        0.0
+    }
+    val knockerProgress = knockerOrigin + fillRate.coerceAtLeast(0.0) * knockerElapsed
+    val continuous = if (!autoActive || fillRate <= 0.0) {
+        displayProgress
+    } else {
+        maxOf(displayProgress, knockerProgress).coerceIn(0.0, unitsPerSat.toDouble())
+    }
+    val rawVisual = struckSyncedProgress(
+        continuous = continuous,
         knockerProgress = knockerProgress,
         tapPower = tapPower,
         autoActive = autoActive,
         fillRate = fillRate,
         total = unitsPerSat,
     )
+    val visualProgress = holdMonotonicProgress(heldVisual, rawVisual)
+    SideEffect { heldVisual = visualProgress }
     val fraction = if (unitsPerSat > 0) {
         (visualProgress / unitsPerSat).toFloat().coerceIn(0f, 1f)
     } else {
         0f
     }
     val pose = knockerPose(
-        displayProgress = knockerProgress,
+        elapsedSec = knockerElapsed,
+        originUnits = knockerOrigin,
         tapsPerSec = tapsPerSec,
         tapPower = tapPower,
         autoActive = autoActive,
@@ -978,6 +1047,9 @@ private fun SatEarnStage(
                 SatWheelView(
                     fraction = fraction,
                     flash = wheelFlash,
+                    comboFractions = comboMeters,
+                    comboTracks = comboTracks,
+                    comboMultiplier = comboMult,
                     onTap = onTap,
                     modifier = Modifier
                         .size(wheelSize)
@@ -998,7 +1070,7 @@ private fun SatEarnStage(
         }
 
         Text(
-            "${floor(visualProgress).toInt()} / $unitsPerSat taps",
+            String.format("%.1f / %d taps", visualProgress, unitsPerSat),
             fontWeight = FontWeight.SemiBold,
             color = BrandInk,
             fontSize = 15.sp,
@@ -1036,18 +1108,17 @@ private const val KNOCKER_WIND_UP = 0.07
 /** Seconds the contact flash lasts. */
 private const val KNOCKER_IMPACT_FADE = 0.16
 
-/** Strike cycle for the auto tapper. Contact lands as floor(progress) increments. */
+/** Strike cycle for the auto tapper. Phase is wall-clock, not accumulated progress. */
 private fun knockerPose(
-    displayProgress: Double,
+    elapsedSec: Double,
+    originUnits: Double,
     tapsPerSec: Double,
     tapPower: Double,
     autoActive: Boolean,
 ): KnockerPose {
     if (!autoActive || tapsPerSec <= 0.0) return KnockerPose()
-    val power = tapPower.coerceAtLeast(0.01)
-    val tapIndex = displayProgress / power
     val period = 1.0 / tapsPerSec
-    val phase = tapIndex - floor(tapIndex) // 0 = just struck
+    val phase = knockerCyclePhase(elapsedSec, tapsPerSec, originUnits, tapPower)
 
     // Segments of one tap, as fractions of the period.
     val strike = minOf(0.34, maxOf(0.06, knockerStrikeDuration(tapPower) / period))
@@ -1080,9 +1151,13 @@ private fun knockerPose(
 private fun SatWheelView(
     fraction: Float,
     flash: Float,
+    comboFractions: List<Double> = listOf(0.0, 0.0, 0.0),
+    comboTracks: List<Boolean> = listOf(true, false, false),
+    comboMultiplier: Double = 1.0,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val comboLabel = ComboEngine.formatMultiplier(comboMultiplier)
     Box(
         modifier = modifier
             .clip(CircleShape)
@@ -1094,6 +1169,97 @@ private fun SatWheelView(
             val rim = sizeMin * 0.06f
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = sizeMin / 2f - rim / 2f
+            val outerFrac = comboFractions.getOrNull(0)?.toFloat() ?: 0f
+            val innerFrac = comboFractions.getOrNull(1)?.toFloat() ?: 0f
+            val coreFrac = comboFractions.getOrNull(2)?.toFloat() ?: 0f
+            val show0 = comboTracks.getOrNull(0) == true
+            val show1 = comboTracks.getOrNull(1) == true
+            val show2 = comboTracks.getOrNull(2) == true
+
+            fun drawComboRing(
+                ringRadius: Float,
+                stroke: Float,
+                frac: Float,
+                color: Color,
+                showTrack: Boolean,
+                trackAlpha: Float,
+                tickCount: Int,
+            ) {
+                val drawArc = frac > 0.001f
+                if (showTrack || drawArc) {
+                    drawCircle(
+                        color = BrandInk.copy(alpha = 0.22f),
+                        radius = ringRadius,
+                        center = center,
+                        style = Stroke(width = stroke * 1.22f),
+                    )
+                    drawCircle(
+                        color = BrandInk.copy(alpha = trackAlpha),
+                        radius = ringRadius,
+                        center = center,
+                        style = Stroke(width = stroke),
+                    )
+                    val majorEvery = (tickCount / 12).coerceAtLeast(1)
+                    for (i in 0 until tickCount) {
+                        val major = i % majorEvery == 0
+                        val angleRad = Math.toRadians(i * 360.0 / tickCount - 90.0)
+                        val half = if (major) stroke * 0.44f else stroke * 0.21f
+                        val cosA = cos(angleRad).toFloat()
+                        val sinA = sin(angleRad).toFloat()
+                        drawLine(
+                            color = BrandInk.copy(alpha = if (major) 0.32f else 0.11f),
+                            start = Offset(center.x + cosA * (ringRadius - half), center.y + sinA * (ringRadius - half)),
+                            end = Offset(center.x + cosA * (ringRadius + half), center.y + sinA * (ringRadius + half)),
+                            strokeWidth = if (major) 1.5f else 0.7f,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                    for (i in 0 until 4) {
+                        val angleRad = Math.toRadians(i * 90.0 - 90.0)
+                        val rivetR = ringRadius - stroke * 0.12f
+                        drawCircle(
+                            color = BrandInk.copy(alpha = 0.42f),
+                            radius = 1.6f,
+                            center = Offset(
+                                center.x + cos(angleRad).toFloat() * rivetR,
+                                center.y + sin(angleRad).toFloat() * rivetR,
+                            ),
+                        )
+                    }
+                }
+                if (!drawArc) return
+                val sweep = 360f * frac.coerceIn(0f, 1f)
+                val fresh = frac < 0.18f
+                val box = Offset(center.x - ringRadius, center.y - ringRadius)
+                val boxSize = Size(ringRadius * 2f, ringRadius * 2f)
+                drawArc(
+                    color = color.copy(alpha = if (fresh) 0.42f else 0.22f),
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = box,
+                    size = boxSize,
+                    style = Stroke(width = stroke * if (fresh) 1.85f else 1.55f, cap = StrokeCap.Round),
+                )
+                drawArc(
+                    color = BrandInk.copy(alpha = 0.38f),
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = box,
+                    size = boxSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+                drawArc(
+                    color = color,
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = box,
+                    size = boxSize,
+                    style = Stroke(width = stroke * 0.70f, cap = StrokeCap.Round),
+                )
+            }
 
             drawCircle(
                 color = BrandInk.copy(alpha = 0.08f),
@@ -1122,6 +1288,24 @@ private fun SatWheelView(
                 )
             }
 
+            val comboRim = rim * 0.50f
+            val comboGap = comboRim * 0.35f
+            val comboPitch = comboRim + comboGap
+            val comboRadius = radius - rim * 1.05f
+            val ring1Radius = comboRadius - comboPitch
+            val ring2Radius = ring1Radius - comboPitch
+            val innerShown = when {
+                show2 || coreFrac > 0.001f -> 2
+                show1 || innerFrac > 0.001f -> 1
+                else -> 0
+            }
+            val innerComboR = when (innerShown) {
+                2 -> ring2Radius
+                1 -> ring1Radius
+                else -> comboRadius
+            }
+            val pegOrbit = maxOf(sizeMin * 0.16f, innerComboR - comboRim * 0.55f - 5f)
+
             rotate(degrees = fraction * 360f, pivot = center) {
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -1135,6 +1319,20 @@ private fun SatWheelView(
                     radius = sizeMin * 0.42f,
                     center = center,
                 )
+                for (i in 0 until 60) {
+                    val angleRad = Math.toRadians(i * 6.0 - 90.0)
+                    val outer = sizeMin * 0.365f
+                    val inner = outer - 5f
+                    val cosA = cos(angleRad).toFloat()
+                    val sinA = sin(angleRad).toFloat()
+                    drawLine(
+                        color = BrandInk.copy(alpha = 0.10f),
+                        start = Offset(center.x + cosA * inner, center.y + sinA * inner),
+                        end = Offset(center.x + cosA * outer, center.y + sinA * outer),
+                        strokeWidth = 0.8f,
+                        cap = StrokeCap.Round,
+                    )
+                }
                 for (i in 0 until 12) {
                     val angleRad = Math.toRadians(i * 30.0 - 90.0)
                     val outer = sizeMin * 0.38f
@@ -1149,11 +1347,40 @@ private fun SatWheelView(
                         cap = StrokeCap.Round,
                     )
                 }
-                // Hub peg at the wheel face "start" (top when fraction == 0)
+            }
+
+            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f, tickCount = 60)
+            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, tickCount = 48)
+            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, tickCount = 36)
+
+            if (show0 || outerFrac > 0.001f || show1 || innerFrac > 0.001f || show2 || coreFrac > 0.001f) {
+                for (i in 0 until 18) {
+                    val angleRad = Math.toRadians(i * 20.0 - 90.0)
+                    val toothOuter = innerComboR - comboRim * 0.57f
+                    val toothInner = toothOuter - comboRim * 0.5f
+                    val cosA = cos(angleRad).toFloat()
+                    val sinA = sin(angleRad).toFloat()
+                    drawLine(
+                        color = BrandInk.copy(alpha = 0.30f),
+                        start = Offset(center.x + cosA * toothInner, center.y + sinA * toothInner),
+                        end = Offset(center.x + cosA * toothOuter, center.y + sinA * toothOuter),
+                        strokeWidth = 1.3f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+
+            // Peg just inside the innermost drawn combo stroke, on top of the rings.
+            rotate(degrees = fraction * 360f, pivot = center) {
                 drawCircle(
-                    color = BrandAccent.copy(alpha = 0.85f),
-                    radius = 4f,
-                    center = Offset(center.x, center.y - sizeMin * 0.30f),
+                    color = BrandInk.copy(alpha = 0.55f),
+                    radius = 5f,
+                    center = Offset(center.x, center.y - pegOrbit),
+                )
+                drawCircle(
+                    color = BrandAccent.copy(alpha = 0.95f),
+                    radius = 3.5f,
+                    center = Offset(center.x, center.y - pegOrbit),
                 )
             }
 
@@ -1205,11 +1432,13 @@ private fun SatWheelView(
                 center = center,
                 style = Stroke(width = 1f),
             )
-            drawCircle(
-                color = BrandAccent.copy(alpha = if (flash > 0.3f) 0.55f else 0.2f),
-                radius = sizeMin * 0.04f,
-                center = center,
-            )
+            if (comboLabel.isEmpty()) {
+                drawCircle(
+                    color = BrandAccent.copy(alpha = if (flash > 0.3f) 0.55f else 0.2f),
+                    radius = sizeMin * 0.04f,
+                    center = center,
+                )
+            }
 
             if (flash > 0.3f) {
                 drawCircle(
@@ -1219,6 +1448,14 @@ private fun SatWheelView(
                     style = Stroke(width = 2f),
                 )
             }
+        }
+        if (comboLabel.isNotEmpty()) {
+            Text(
+                comboLabel,
+                color = BrandAccent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+            )
         }
     }
 }

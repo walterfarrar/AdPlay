@@ -14,6 +14,7 @@ import com.adplay.app.data.PlayerProgress
 import com.adplay.app.data.PlayerSettings
 import com.adplay.app.data.Tunables
 import com.adplay.app.data.Withdrawal
+import com.adplay.app.data.parseIso8601Millis
 import com.adplay.app.notifications.GameReminderScheduler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -162,7 +163,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     fun tap() {
         if (skipAnimating) return
         var probe = confirmedState
-        repeat(unackedTaps) { probe = probe.applyingManualTap() }
+        repeat(unackedTaps) { probe = probe.applyingManualTap(_ui.value.tunables) }
         if (probe.tapsRemaining <= 0) return
 
         unackedTaps += 1
@@ -174,7 +175,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /** Recompute display from confirmed server state + unacked optimistic taps. */
     private fun publishOptimisticTaps() {
         var s = confirmedState
-        repeat(unackedTaps) { s = s.applyingManualTap() }
+        repeat(unackedTaps) { s = s.applyingManualTap(_ui.value.tunables) }
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
         _ui.update { it.copy(state = project(s, System.currentTimeMillis())) }
@@ -198,10 +199,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     val credit = api.tap()
                     if (generation != tapFlushGeneration) return@launch
                     credit.state.updatedAt?.let { lastUpdatedAt = it }
-                    confirmedState = credit.state
+                    val nowMs = System.currentTimeMillis()
+                    // Combo ring + live-tap units (Stronger × combo) must survive gameTap
+                    // ACKs. Deployed functions may still credit tapPower only; keep the
+                    // optimistic tap math. Do not reset the auto-fill anchor — project()
+                    // still owns auto catch-up (no combo) from the existing clock.
+                    val afterTap = confirmedState.applyingManualTap(_ui.value.tunables, nowMs)
+                    confirmedState = credit.state.takingLiveTapUnits(afterTap)
                     unackedTaps = (unackedTaps - 1).coerceAtLeast(0)
-                    // Confirmed snapshot already includes auto catch-up through now.
-                    anchorMs = System.currentTimeMillis()
                     windowEndHandled = false
                     publishOptimisticTaps()
                     applyProgress(credit.progress)
@@ -351,7 +356,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val credit = api.debugReset()
                 adsWatchedToday = 0
-                applyState(credit.state, force = true)
+                applyState(credit.state, force = true, keepCombo = false)
                 applyProgress(credit.progress)
                 _ui.update { it.copy(withdrawals = emptyList(), loading = false) }
             } catch (e: Exception) {
@@ -435,33 +440,70 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
      * `discardOptimisticTaps` is true for mutations that already include those taps
      * (boost, reset, redeem). getState refresh keeps taps that landed during the fetch.
      */
-    private fun applyState(state: GameState, force: Boolean, discardOptimisticTaps: Boolean = true) {
+    private fun applyState(
+        state: GameState,
+        force: Boolean,
+        discardOptimisticTaps: Boolean = true,
+        keepCombo: Boolean = true,
+    ) {
         val incoming = state.updatedAt
         val prev = lastUpdatedAt
         if (!force && incoming != null && prev != null && incoming < prev) {
             return // stale response lost a race with a newer tap/boost
         }
         if (incoming != null) lastUpdatedAt = incoming
+        val preserveLiveTaps = keepCombo && comboRecentlyTapped(_ui.value.state)
+        val adopted = if (preserveLiveTaps) {
+            if (discardOptimisticTaps) {
+                state.keepingComboFrom(_ui.value.state)
+            } else {
+                // getState: keep Stronger × combo tap units; auto stays on the local clock.
+                state.takingLiveTapUnits(confirmedState)
+            }
+        } else {
+            state
+        }
         if (discardOptimisticTaps) {
             // Invalidate any in-flight optimistic tap flush; those responses are stale
             // relative to this authoritative snapshot (boost / reset / redeem).
             tapFlushGeneration += 1
             unackedTaps = 0
-            confirmedState = state
-            serverState = state
+            confirmedState = adopted
+            serverState = adopted
             anchorMs = System.currentTimeMillis()
             windowEndHandled = false
-            val projected = project(state, anchorMs)
+            val projected = project(adopted, anchorMs)
             _ui.update { it.copy(state = projected) }
             GameReminderScheduler.sync(appContext, projected)
         } else {
-            confirmedState = state
-            anchorMs = System.currentTimeMillis()
+            confirmedState = adopted
+            if (!preserveLiveTaps) {
+                anchorMs = System.currentTimeMillis()
+            }
             windowEndHandled = false
             publishOptimisticTaps()
             GameReminderScheduler.sync(appContext, _ui.value.state)
         }
         ensureTicker()
+    }
+
+    private fun GameState.keepingComboFrom(from: GameState): GameState = copy(
+        comboMeter = from.comboMeter,
+        comboLevel = from.comboLevel,
+        comboContrib = from.comboContrib,
+        comboMeter1 = from.comboMeter1,
+        comboLevel1 = from.comboLevel1,
+        comboContrib1 = from.comboContrib1,
+        comboMeter2 = from.comboMeter2,
+        comboLevel2 = from.comboLevel2,
+        comboContrib2 = from.comboContrib2,
+        lastManualTapAt = from.lastManualTapAt,
+        comboMultiplier = from.comboMultiplier,
+    )
+
+    private fun comboRecentlyTapped(s: GameState): Boolean {
+        val last = parseIso8601Millis(s.lastManualTapAt ?: return false) ?: return false
+        return System.currentTimeMillis() - last < 15_000L
     }
 
     private fun syncProgress() {
@@ -472,14 +514,17 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val adsFromServer = server?.dailyGoals?.firstOrNull { it.id == "ads" }?.current
         if (adsFromServer != null) adsWatchedToday = adsFromServer
         _ui.update { ui ->
-            val next = ui.progress.takingServer(server).syncedWith(
+            val incoming = ui.progress.takingServer(server)
+            val next = incoming.syncedWith(
                 state = ui.state,
                 tunables = ui.tunables,
                 adsWatched = adsWatchedToday,
             )
-            val oldMax = ui.progress.adBank.max
+            // Server remaining already includes tokens for this hold. Only grant slots
+            // that local goal completion added on top (optimistic taps / this session).
+            val grantAbove = if (server != null) incoming.adBank.max else ui.progress.adBank.max
             val oldRemaining = ui.state.adsRemainingToday
-            val gained = (next.adBank.max - oldMax).coerceAtLeast(0)
+            val gained = (next.adBank.max - grantAbove).coerceAtLeast(0)
             val state = if (gained > 0 && ui.state.adsRemainingToday <= oldRemaining) {
                 grantCharges(ui.state, gained, next.adBank.max)
             } else {
@@ -535,8 +580,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val shown = _ui.value.state
-                val adsMax = _ui.value.tunables?.adsPerCycle
-                    ?: _ui.value.progress.adBank.max.coerceAtLeast(1)
+                val adsMax = adsHoldMax(shown)
                 val waitingRegen = shown.adRegenSecondsLeft > 0 && shown.adsRemainingToday < adsMax
                 if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0 && !waitingRegen) break
                 delay(1_000)
@@ -552,8 +596,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         val autoActive = s.autoFillActive && untilMs != null && untilMs > nowMs
         // When the shared auto window just ended, show a full ad bank until refresh lands.
         val windowExpired = s.autoFillActive && !autoActive
-        val maxCharges = _ui.value.tunables?.adsPerCycle?.coerceAtLeast(0)
-            ?: _ui.value.progress.adBank.max.coerceAtLeast(maxOf(s.adsRemainingToday, 1))
+        val maxCharges = adsHoldMax(s)
         val (adsLeft, regenLeft) = if (windowExpired) {
             maxCharges to 0
         } else {
@@ -640,6 +683,16 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             speedBoostCount = if (autoActive) s.speedBoostCount else 0,
             tapStrengthBoostCount = if (autoActive) s.tapStrengthBoostCount else 0,
         )
+    }
+
+    /**
+     * Hold size for regen / display. Never below the server remaining we just loaded,
+     * so a stale default bank of 5 cannot recap a full 13-token hold.
+     */
+    private fun adsHoldMax(s: GameState): Int {
+        val bank = _ui.value.progress.adBank.max
+        val cycle = _ui.value.tunables?.adsPerCycle ?: 0
+        return maxOf(bank, cycle, s.adsRemainingToday, 1)
     }
 
     private fun projectChargeBank(

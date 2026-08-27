@@ -3,6 +3,9 @@
   --muted: #969cb0;
   --accent: #f7931a;
   --accent-hot: #ffb020;
+  --combo-0: #f7931a;
+  --combo-1: #ffc14a;
+  --combo-2: #fff3c4;
   --time: #5bb8ff;
   --speed: #f7931a;
   --power: #ff5e7a;
@@ -156,10 +159,123 @@ body {
   overflow: visible;
 }
 
-.wheel-track {
+.player-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.combo-track {
   fill: none;
-  stroke: rgba(244, 245, 250, 0.08);
-  stroke-width: 13;
+  stroke: rgba(244, 245, 250, 0.1);
+  stroke-width: 8;
+}
+
+.combo-groove {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.22);
+  stroke-width: 10;
+}
+
+.combo-hash {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.12);
+  stroke-width: 7;
+  stroke-dasharray: 1.2 4.8;
+  transform: rotate(-90deg);
+  transform-origin: 110px 110px;
+}
+
+.combo-hash-major {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.3);
+  stroke-width: 8;
+  stroke-dasharray: 2 28;
+  transform: rotate(-90deg);
+  transform-origin: 110px 110px;
+}
+
+.combo-rivet {
+  fill: rgba(244, 245, 250, 0.42);
+}
+
+.combo-arc,
+.combo-arc-glow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 0 100;
+  transform: rotate(-90deg);
+  transform-origin: 110px 110px;
+}
+
+.combo-arc {
+  stroke: var(--combo-0);
+  stroke-width: 5.6;
+}
+
+.combo-arc-glow {
+  stroke: var(--combo-0);
+  stroke-width: 12;
+  opacity: 0.28;
+  filter: blur(1.5px);
+}
+
+.combo-track-inner {
+  stroke: rgba(244, 245, 250, 0.14);
+  stroke-width: 8;
+}
+
+.combo-track-core {
+  stroke: rgba(244, 245, 250, 0.18);
+  stroke-width: 8;
+}
+
+.combo-arc-inner {
+  stroke: var(--combo-1);
+}
+
+.combo-arc-core {
+  stroke: var(--combo-2);
+}
+
+.combo-arc-glow-inner {
+  stroke: var(--combo-1);
+  opacity: 0.4;
+}
+
+.combo-arc-glow-core {
+  stroke: var(--combo-2);
+  opacity: 0.5;
+}
+
+.combo-gear-ring {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.3);
+  stroke-width: 4;
+  stroke-dasharray: 2 18;
+}
+
+.face-hash {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.1);
+  stroke-width: 5;
+  stroke-dasharray: 0.8 5.2;
+}
+
+.hub-peg-orbit {
+  transform-origin: 110px 110px;
+}
+
+.hub-peg-seat {
+  fill: rgba(244, 245, 250, 0.55);
+}
+
+.combo-badge {
+  fill: var(--accent);
+  font-size: 14px;
+  font-weight: 800;
+  font-family: Outfit, sans-serif;
 }
 
 .wheel-arc {

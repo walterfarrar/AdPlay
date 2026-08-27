@@ -30,6 +30,17 @@ struct GameState: Codable, Equatable {
     var tapStrengthActive: Bool?
     var tapStrengthUntil: String?
     var tapPower: Double?
+    var comboMeter: Double?
+    var comboLevel: Int?
+    var comboContrib: Double?
+    var comboMeter1: Double?
+    var comboLevel1: Int?
+    var comboContrib1: Double?
+    var comboMeter2: Double?
+    var comboLevel2: Int?
+    var comboContrib2: Double?
+    var lastManualTapAt: String?
+    var comboMultiplier: Double?
     var adCooldownSecondsLeft: Int
     var lastBoostType: String?
     var minWithdrawSats: Int
@@ -43,15 +54,58 @@ struct GameState: Codable, Equatable {
 
     var effectiveTapPower: Double { tapPower ?? 1 }
 
+    var combo: ComboState {
+        ComboState(
+            rings: [
+                ComboRingState(
+                    meter: comboMeter ?? 0,
+                    level: comboLevel ?? 0,
+                    contribution: comboContrib ?? 0
+                ),
+                ComboRingState(
+                    meter: comboMeter1 ?? 0,
+                    level: comboLevel1 ?? 0,
+                    contribution: comboContrib1 ?? 0
+                ),
+                ComboRingState(
+                    meter: comboMeter2 ?? 0,
+                    level: comboLevel2 ?? 0,
+                    contribution: comboContrib2 ?? 0
+                ),
+            ],
+            lastTapAt: parseIso8601(lastManualTapAt ?? "")
+        )
+    }
+
     var effectiveSkipAdsRemaining: Int { skipAdsRemaining ?? 0 }
 
+    mutating func writeCombo(_ next: ComboState) {
+        let r0 = next.rings.count > 0 ? next.rings[0] : .empty
+        let r1 = next.rings.count > 1 ? next.rings[1] : .empty
+        let r2 = next.rings.count > 2 ? next.rings[2] : .empty
+        comboMeter = r0.meter
+        comboLevel = r0.level
+        comboContrib = r0.contribution
+        comboMeter1 = r1.meter
+        comboLevel1 = r1.level
+        comboContrib1 = r1.contribution
+        comboMeter2 = r2.meter
+        comboLevel2 = r2.level
+        comboContrib2 = r2.contribution
+        lastManualTapAt = next.lastTapAt.map { iso8601String($0) }
+    }
+
     /// Local preview of one manual tap (matches server `applyManualTapInMemory`).
-    func applyingManualTap() -> GameState {
+    func applyingManualTap(tunables: Tunables?, now: Date = Date()) -> GameState {
         var g = self
         guard g.tapsRemaining > 0 else { return g }
         g.tapsRemaining -= 1
+        let comboT = ComboTunables.from(tunables)
+        let nextCombo = ComboEngine.applyTap(g.combo, now: now, tunables: comboT)
+        g.writeCombo(nextCombo)
+        g.comboMultiplier = comboT.multiplier(of: nextCombo)
         let units = max(1, g.unitsPerSat)
-        var progress = g.progress + g.effectiveTapPower
+        var progress = g.progress + g.effectiveTapPower * comboT.multiplier(of: nextCombo)
         var earned = 0
         let cap = g.dailySatsEarnCap
         while progress >= Double(units) {
@@ -65,6 +119,27 @@ struct GameState: Codable, Equatable {
         g.progress = progress
         g.satsBalance += earned
         g.satsEarnedToday += earned
+        return g
+    }
+
+    /// Overlay live-tap units (Stronger × combo) plus combo fields from `from`.
+    /// Used when a server snapshot omitted combo on progress.
+    func takingLiveTapUnits(from: GameState) -> GameState {
+        var g = self
+        g.progress = from.progress
+        g.satsBalance = from.satsBalance
+        g.satsEarnedToday = from.satsEarnedToday
+        g.comboMeter = from.comboMeter
+        g.comboLevel = from.comboLevel
+        g.comboContrib = from.comboContrib
+        g.comboMeter1 = from.comboMeter1
+        g.comboLevel1 = from.comboLevel1
+        g.comboContrib1 = from.comboContrib1
+        g.comboMeter2 = from.comboMeter2
+        g.comboLevel2 = from.comboLevel2
+        g.comboContrib2 = from.comboContrib2
+        g.lastManualTapAt = from.lastManualTapAt
+        g.comboMultiplier = from.comboMultiplier
         return g
     }
 
@@ -99,6 +174,17 @@ struct GameState: Codable, Equatable {
         tapStrengthActive: false,
         tapStrengthUntil: nil,
         tapPower: 1,
+        comboMeter: 0,
+        comboLevel: 0,
+        comboContrib: 0,
+        comboMeter1: 0,
+        comboLevel1: 0,
+        comboContrib1: 0,
+        comboMeter2: 0,
+        comboLevel2: 0,
+        comboContrib2: 0,
+        lastManualTapAt: nil,
+        comboMultiplier: 1,
         adCooldownSecondsLeft: 0,
         lastBoostType: nil,
         minWithdrawSats: 100,
@@ -129,6 +215,17 @@ struct Tunables: Codable, Equatable {
     var resetHourUtc: Int
     var adProvider: String
     var debugReset: Bool?
+    var comboTapsPerLevel: Int?
+    var comboStep: Double?
+    var comboMax: Double?
+    var comboBase: Double?
+    var comboAbsMax: Double?
+    var comboRing0Max: Double?
+    var comboRing1Max: Double?
+    var comboRing2Max: Double?
+    var comboIdleGraceSeconds: Double?
+    var comboDrainPerSecondActive: Double?
+    var comboDrainPerSecondIdle: Double?
 }
 
 enum BoostType: String, Codable {

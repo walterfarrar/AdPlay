@@ -22,6 +22,13 @@ import {
   recordBoostAdWatch,
   syncAdProgress,
 } from "./adCurrency";
+import {
+  applyComboTap,
+  comboAt,
+  comboMultiplier,
+  type ComboParams,
+  type ComboState,
+} from "./combo";
 import type { PlayerProgress } from "./types";
 
 const db = () => admin.firestore();
@@ -88,7 +95,72 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
     g.skipAdChargesAt = g.adChargesAt || g.lastTickAt || nowIso();
   }
   if (!g.skipAdChargesAt) g.skipAdChargesAt = g.adChargesAt || g.lastTickAt || nowIso();
+  if (typeof g.comboMeter !== "number" || Number.isNaN(g.comboMeter)) g.comboMeter = 0;
+  if (typeof g.comboLevel !== "number" || Number.isNaN(g.comboLevel)) g.comboLevel = 0;
+  if (typeof g.comboContrib !== "number" || Number.isNaN(g.comboContrib)) g.comboContrib = 0;
+  if (typeof g.comboMeter1 !== "number" || Number.isNaN(g.comboMeter1)) g.comboMeter1 = 0;
+  if (typeof g.comboLevel1 !== "number" || Number.isNaN(g.comboLevel1)) g.comboLevel1 = 0;
+  if (typeof g.comboContrib1 !== "number" || Number.isNaN(g.comboContrib1)) g.comboContrib1 = 0;
+  if (typeof g.comboMeter2 !== "number" || Number.isNaN(g.comboMeter2)) g.comboMeter2 = 0;
+  if (typeof g.comboLevel2 !== "number" || Number.isNaN(g.comboLevel2)) g.comboLevel2 = 0;
+  if (typeof g.comboContrib2 !== "number" || Number.isNaN(g.comboContrib2)) g.comboContrib2 = 0;
+  if (g.lastManualTapAt === undefined) g.lastManualTapAt = null;
   return g;
+}
+
+function comboParams(t: Tunables): ComboParams {
+  return {
+    comboTapsPerLevel: t.comboTapsPerLevel ?? 100,
+    comboStep: t.comboStep ?? 0.1,
+    comboBase: t.comboBase ?? 1.0,
+    comboAbsMax: t.comboAbsMax ?? 3.0,
+    comboRing0Max: t.comboRing0Max ?? 1.0,
+    comboRing1Max: t.comboRing1Max ?? 1.0,
+    comboRing2Max: t.comboRing2Max ?? 1.0,
+    comboIdleGraceSeconds: t.comboIdleGraceSeconds ?? 1.5,
+    comboDrainPerSecondActive: t.comboDrainPerSecondActive ?? 0.002,
+    comboDrainPerSecondIdle: t.comboDrainPerSecondIdle ?? 0.5,
+  };
+}
+
+function persistedCombo(g: GameStateDoc): ComboState {
+  return {
+    rings: [
+      {
+        meter: g.comboMeter || 0,
+        level: g.comboLevel || 0,
+        contribution: g.comboContrib || 0,
+      },
+      {
+        meter: g.comboMeter1 || 0,
+        level: g.comboLevel1 || 0,
+        contribution: g.comboContrib1 || 0,
+      },
+      {
+        meter: g.comboMeter2 || 0,
+        level: g.comboLevel2 || 0,
+        contribution: g.comboContrib2 || 0,
+      },
+    ],
+    lastTapAtMs: parseIso(g.lastManualTapAt)?.getTime() ?? null,
+  };
+}
+
+function writeCombo(g: GameStateDoc, next: ComboState): void {
+  const r0 = next.rings[0] || { meter: 0, level: 0, contribution: 0 };
+  const r1 = next.rings[1] || { meter: 0, level: 0, contribution: 0 };
+  const r2 = next.rings[2] || { meter: 0, level: 0, contribution: 0 };
+  g.comboMeter = r0.meter;
+  g.comboLevel = r0.level;
+  g.comboContrib = r0.contribution;
+  g.comboMeter1 = r1.meter;
+  g.comboLevel1 = r1.level;
+  g.comboContrib1 = r1.contribution;
+  g.comboMeter2 = r2.meter;
+  g.comboLevel2 = r2.level;
+  g.comboContrib2 = r2.contribution;
+  g.lastManualTapAt =
+    next.lastTapAtMs == null ? null : new Date(next.lastTapAtMs).toISOString();
 }
 
 function adsMax(g: GameStateDoc, t: Tunables): number {
@@ -233,11 +305,15 @@ function autoFillRate(g: GameStateDoc, t: Tunables): number {
   return t.baseFillRate;
 }
 
+/** Stronger only. Combo never applies to Auto Tapper or offline catch-up. */
+function autoTapPower(g: GameStateDoc, t: Tunables, now: Date): number {
+  return effectiveTapPower(g, t, now);
+}
+
 function effectiveFillRate(g: GameStateDoc, t: Tunables, now: Date): number {
   const autoUntil = parseIso(g.autoFillUntil);
   if (!autoUntil || autoUntil <= now) return 0;
-  // Stronger scales auto the same way it scales manual taps (taps/sec × tapPower).
-  return autoFillRate(g, t) * effectiveTapPower(g, t, now);
+  return autoFillRate(g, t) * autoTapPower(g, t, now);
 }
 
 function effectiveTapPower(g: GameStateDoc, t: Tunables, now: Date): number {
@@ -301,6 +377,8 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
   const speedActive = autoActive && speedCount > 0;
   const durationActive = autoActive && durationCount > 0;
   const regen = regenPublic(g, t, now);
+  const comboT = comboParams(t);
+  const liveCombo = comboAt(persistedCombo(g), now.getTime(), comboT);
   return {
     progress: Math.min(g.progress, t.unitsPerSat),
     unitsPerSat: t.unitsPerSat,
@@ -327,6 +405,17 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     tapStrengthActive: tapActive,
     tapStrengthUntil: tapActive ? g.autoFillUntil : null,
     tapPower: effectiveTapPower(g, t, now),
+    comboMeter: g.comboMeter || 0,
+    comboLevel: g.comboLevel || 0,
+    comboContrib: g.comboContrib || 0,
+    comboMeter1: g.comboMeter1 || 0,
+    comboLevel1: g.comboLevel1 || 0,
+    comboContrib1: g.comboContrib1 || 0,
+    comboMeter2: g.comboMeter2 || 0,
+    comboLevel2: g.comboLevel2 || 0,
+    comboContrib2: g.comboContrib2 || 0,
+    lastManualTapAt: g.lastManualTapAt || null,
+    comboMultiplier: comboMultiplier(liveCombo, comboT),
     adCooldownSecondsLeft: cooldownLeft,
     lastBoostType: g.lastBoostType,
     minWithdrawSats: t.minWithdrawSats,
@@ -368,7 +457,8 @@ function catchUpSlice(
   to: Date,
 ): { earned: number; credits: LedgerCredit[] } {
   const earnSec = Math.max(0, (to.getTime() - from.getTime()) / 1000);
-  const rate = autoFillRate(g, t) * effectiveTapPower(g, t, to);
+  // Offline / background auto uses Stronger only — never comboMultiplier.
+  const rate = autoFillRate(g, t) * autoTapPower(g, t, to);
   if (earnSec <= 0 || rate <= 0) return { earned: 0, credits: [] };
   return applyProgressUnits(g, t, rate * earnSec);
 }
@@ -435,7 +525,13 @@ function applyManualTapInMemory(
   }
 
   g.tapsRemaining -= 1;
-  const applied = applyProgressUnits(g, t, effectiveTapPower(g, t, at));
+  const comboT = comboParams(t);
+  const nextCombo = applyComboTap(persistedCombo(g), at.getTime(), comboT);
+  writeCombo(g, nextCombo);
+  // Combo stacks with Stronger for this live tap only. Auto catch-up already
+  // ran in runGameTx via advanceInMemory (no combo).
+  const units = autoTapPower(g, t, at) * comboMultiplier(nextCombo, comboT);
+  const applied = applyProgressUnits(g, t, units);
   g.satsEarnedToday += applied.earned;
   g.satsBalance += applied.earned;
   g.lifetimeSatsEarned = (g.lifetimeSatsEarned || 0) + applied.earned;

@@ -39,6 +39,7 @@ let tapFlushPromise = null;
 let tapFlushGeneration = 0;
 /** @type {any} */
 let tunables = null;
+let playerProgress = null;
 let anchorMs = 0;
 let lastUpdatedAt = null;
 let windowEndHandled = false;
@@ -54,6 +55,8 @@ let displayAnchorProgress = 0;
 let displayAnchorMs = 0;
 let knockerAnchorProgress = 0;
 let knockerAnchorMs = 0;
+let lastFillRate = 0;
+let heldDisplay = 0;
 
 const KNOCKER = {
   pivot: { x: 350, y: 78 },
@@ -64,6 +67,282 @@ const KNOCKER = {
   windUp: 0.07,
   impactFade: 0.16,
 };
+
+const RING_COUNT = 3;
+
+const DEFAULT_COMBO = {
+  comboTapsPerLevel: 100,
+  comboStep: 0.1,
+  comboBase: 1.0,
+  comboAbsMax: 3.0,
+  comboRing0Max: 1.0,
+  comboRing1Max: 1.0,
+  comboRing2Max: 1.0,
+  comboIdleGraceSeconds: 1.5,
+  comboDrainPerSecondActive: 0.002,
+  comboDrainPerSecondIdle: 0.5,
+};
+
+function comboParams() {
+  const merged = { ...DEFAULT_COMBO, ...(tunables || {}) };
+  if (!(merged.comboAbsMax > 0)) merged.comboAbsMax = DEFAULT_COMBO.comboAbsMax;
+  if (merged.comboRing0Max == null) merged.comboRing0Max = DEFAULT_COMBO.comboRing0Max;
+  if (merged.comboRing1Max == null) merged.comboRing1Max = DEFAULT_COMBO.comboRing1Max;
+  if (merged.comboRing2Max == null) merged.comboRing2Max = DEFAULT_COMBO.comboRing2Max;
+  return merged;
+}
+
+function nice(n) {
+  return Math.round(n * 1e8) / 1e8;
+}
+
+function clamp01(n) {
+  return Math.max(0, Math.min(1, n));
+}
+
+function stepOf(t) {
+  return t.comboStep > 0 ? t.comboStep : 0.1;
+}
+
+function ringMaxOf(ring, t) {
+  const raw = [t.comboRing0Max, t.comboRing1Max, t.comboRing2Max][ring] ?? 0;
+  return Math.max(0, raw);
+}
+
+function maxLevels(ring, t) {
+  const mx = ringMaxOf(ring, t);
+  if (mx <= 0) return 0;
+  return Math.max(0, Math.round(mx / stepOf(t)));
+}
+
+function isAtMax(state, ring, t) {
+  const ml = maxLevels(ring, t);
+  if (ml <= 0) return false;
+  return state.rings[ring].level >= ml;
+}
+
+function innerMaxedCount(state, ring, t) {
+  let n = 0;
+  for (let j = ring + 1; j < RING_COUNT; j++) {
+    if (isAtMax(state, j, t)) n += 1;
+  }
+  return n;
+}
+
+function overflowStep(innerMaxed, t) {
+  const exp = 1 + Math.max(0, innerMaxed);
+  return nice(stepOf(t) / Math.pow(10, exp));
+}
+
+function completionIncrement(state, ring, t) {
+  const ml = maxLevels(ring, t);
+  if (state.rings[ring].level < ml) return stepOf(t);
+  return overflowStep(innerMaxedCount(state, ring, t), t);
+}
+
+function derivedContribution(level, ring, t) {
+  const step = stepOf(t);
+  const ml = maxLevels(ring, t);
+  const stepLv = Math.min(level, ml);
+  const overflowLv = Math.max(0, level - ml);
+  return nice(stepLv * step + overflowLv * overflowStep(0, t));
+}
+
+function normalizeCombo(state, t) {
+  const rings = [];
+  for (let i = 0; i < RING_COUNT; i++) {
+    const r = (state && state.rings && state.rings[i]) || { meter: 0, level: 0, contribution: 0 };
+    const level = Math.max(0, Math.floor(r.level || 0));
+    let contribution = Math.max(0, r.contribution || 0);
+    if (contribution <= 0 && level > 0) contribution = derivedContribution(level, i, t);
+    rings.push({ meter: clamp01(r.meter || 0), level, contribution: nice(contribution) });
+  }
+  return { rings, lastTapAtMs: state ? state.lastTapAtMs : null };
+}
+
+function totalBonus(state) {
+  return state.rings.reduce((n, r) => n + r.contribution, 0);
+}
+
+function comboMultiplier(state, t) {
+  const base = t.comboBase > 0 ? t.comboBase : 1;
+  const abs = t.comboAbsMax > 0 ? t.comboAbsMax : 3;
+  return nice(Math.min(abs, base + totalBonus(state)));
+}
+
+function formatComboMultiplier(m) {
+  if (!(m > 1.001)) return "";
+  const tenths = Math.round(m * 10) / 10;
+  if (Math.abs(m - tenths) < 5e-4) return `×${tenths.toFixed(1)}`;
+  const hundredths = Math.round(m * 100) / 100;
+  if (Math.abs(m - hundredths) < 5e-5) return `×${hundredths.toFixed(2)}`;
+  const thousandths = Math.round(m * 1000) / 1000;
+  if (Math.abs(m - thousandths) < 5e-6) return `×${thousandths.toFixed(3)}`;
+  return `×${(Math.round(m * 10000) / 10000).toFixed(4)}`;
+}
+
+function displayMeters(state, t) {
+  return state.rings.map((r, i) => {
+    if (maxLevels(i, t) <= 0) return 0;
+    if (isAtMax(state, i, t)) return 1;
+    return clamp01(r.meter);
+  });
+}
+
+function displayTracks(state, t) {
+  const meters = displayMeters(state, t);
+  return state.rings.map((r, i) => {
+    if (maxLevels(i, t) <= 0) return false;
+    if (meters[i] > 0.001) return true;
+    if (isAtMax(state, i, t)) return true;
+    return r.level > 0 || r.contribution > 1e-12;
+  });
+}
+
+function applyCompletion(state, ring, t) {
+  const inc = completionIncrement(state, ring, t);
+  const abs = t.comboAbsMax > 0 ? t.comboAbsMax : 3;
+  const base = t.comboBase > 0 ? t.comboBase : 1;
+  const room = Math.max(0, abs - base - totalBonus(state));
+  const applied = Math.min(inc, room);
+  state.rings[ring].level += 1;
+  state.rings[ring].contribution = nice(state.rings[ring].contribution + applied);
+  if (ring + 1 < RING_COUNT) {
+    addFill(state, ring + 1, 1 / Math.max(1, maxLevels(ring, t)), t);
+  }
+}
+
+function addFill(state, ring, amount, t) {
+  if (maxLevels(ring, t) <= 0 || !(amount > 0)) return;
+  state.rings[ring].meter = nice(state.rings[ring].meter + amount);
+  while (state.rings[ring].meter >= 1 - 1e-12) {
+    state.rings[ring].meter = nice(state.rings[ring].meter - 1);
+    applyCompletion(state, ring, t);
+  }
+}
+
+function reverseCompletion(state, ring, t) {
+  const r = state.rings[ring];
+  if (r.level <= 0) return;
+  const ml = maxLevels(ring, t);
+  const step = stepOf(t);
+  const inc = r.level > ml ? overflowStep(innerMaxedCount(state, ring, t), t) : step;
+  r.level -= 1;
+  r.contribution = nice(Math.max(0, r.contribution - inc));
+  if (r.level < ml) r.contribution = nice(Math.min(r.contribution, r.level * step));
+  else if (r.level === ml) r.contribution = nice(Math.min(r.contribution, ringMaxOf(ring, t)));
+  if (r.level <= 0) {
+    r.level = 0;
+    r.contribution = 0;
+  }
+  if (ring + 1 < RING_COUNT) {
+    unwindFill(state, ring + 1, 1 / Math.max(1, maxLevels(ring, t)), t);
+  }
+}
+
+function unwindFill(state, ring, amount, t) {
+  if (maxLevels(ring, t) <= 0 || !(amount > 0)) return;
+  state.rings[ring].meter = nice(state.rings[ring].meter - amount);
+  while (state.rings[ring].meter < -1e-12) {
+    if (state.rings[ring].level <= 0) {
+      state.rings[ring].meter = 0;
+      break;
+    }
+    reverseCompletion(state, ring, t);
+    state.rings[ring].meter = nice(state.rings[ring].meter + 1);
+  }
+}
+
+function peelRing(state, ring, t) {
+  reverseCompletion(state, ring, t);
+  state.rings[ring].meter = 1;
+}
+
+function comboDrainAmount(dt, idle, t) {
+  const rate = idle ? t.comboDrainPerSecondIdle : t.comboDrainPerSecondActive;
+  return Math.max(0, dt) * Math.max(0, rate);
+}
+
+function applyComboDrain(state, drain, t) {
+  const next = normalizeCombo(state, t);
+  let remain = Math.max(0, drain);
+  while (remain > 1e-12) {
+    let i = -1;
+    for (let r = 0; r < RING_COUNT; r++) {
+      if (next.rings[r].meter > 1e-12 || next.rings[r].level > 0) {
+        i = r;
+        break;
+      }
+    }
+    if (i < 0) break;
+    const ring = next.rings[i];
+    if (ring.meter > 1e-12) {
+      const take = Math.min(ring.meter, remain);
+      ring.meter = nice(ring.meter - take);
+      remain = nice(remain - take);
+    } else if (ring.level > 0) {
+      peelRing(next, i, t);
+    } else {
+      break;
+    }
+  }
+  return next;
+}
+
+function persistedCombo(s) {
+  const last = s?.lastManualTapAt ? Date.parse(s.lastManualTapAt) : NaN;
+  return {
+    rings: [
+      { meter: s?.comboMeter || 0, level: s?.comboLevel || 0, contribution: s?.comboContrib || 0 },
+      { meter: s?.comboMeter1 || 0, level: s?.comboLevel1 || 0, contribution: s?.comboContrib1 || 0 },
+      { meter: s?.comboMeter2 || 0, level: s?.comboLevel2 || 0, contribution: s?.comboContrib2 || 0 },
+    ],
+    lastTapAtMs: Number.isFinite(last) ? last : null,
+  };
+}
+
+function writeComboFields(next) {
+  const r0 = next.rings[0] || { meter: 0, level: 0, contribution: 0 };
+  const r1 = next.rings[1] || { meter: 0, level: 0, contribution: 0 };
+  const r2 = next.rings[2] || { meter: 0, level: 0, contribution: 0 };
+  return {
+    comboMeter: r0.meter,
+    comboLevel: r0.level,
+    comboContrib: r0.contribution,
+    comboMeter1: r1.meter,
+    comboLevel1: r1.level,
+    comboContrib1: r1.contribution,
+    comboMeter2: r2.meter,
+    comboLevel2: r2.level,
+    comboContrib2: r2.contribution,
+    lastManualTapAt: next.lastTapAtMs == null ? null : new Date(next.lastTapAtMs).toISOString(),
+  };
+}
+
+function comboAt(state, nowMs, t) {
+  const cur = normalizeCombo(state, t);
+  if (cur.lastTapAtMs == null) return cur;
+  if (nowMs <= cur.lastTapAtMs) return cur;
+  const grace = Math.max(0, t.comboIdleGraceSeconds);
+  const dt = (nowMs - cur.lastTapAtMs) / 1000;
+  if (dt <= grace) return applyComboDrain(cur, comboDrainAmount(dt, false, t), t);
+  const after = applyComboDrain(cur, comboDrainAmount(grace, false, t), t);
+  return applyComboDrain(after, comboDrainAmount(dt - grace, true, t), t);
+}
+
+function applyComboTap(state, nowMs, t) {
+  const cur = comboAt(state, nowMs, t);
+  const per = Math.max(1, t.comboTapsPerLevel);
+  addFill(cur, 0, 1 / per, t);
+  return { rings: cur.rings, lastTapAtMs: nowMs };
+}
+
+function minerTitle(lifetime) {
+  if (lifetime >= 500) return "Rig Boss";
+  if (lifetime >= 50) return "Farm Hand";
+  if (lifetime >= 1) return "Satoshi Scout";
+  return "Spark";
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -220,13 +499,24 @@ function knockerImpactScale(tapPower) {
   return 1 + ((p - 1) / 9) * 1.25;
 }
 
-/** Strike cycle for the auto tapper — same segments as iOS. */
-function knockerPose(displayProgress, tapsPerSec, tapPower, autoActive) {
-  if (!autoActive || tapsPerSec <= 0) return { arm: 0, impact: 0, phase: 0 };
+function knockerCyclePhase(elapsedSec, tapsPerSec, originUnits, tapPower) {
+  if (tapsPerSec <= 0) return 0;
   const power = Math.max(tapPower, 0.01);
-  const tapIndex = displayProgress / power;
+  const originFrac = originUnits / power;
+  const frac = originFrac - Math.floor(originFrac);
+  const raw = elapsedSec * tapsPerSec + frac;
+  return raw - Math.floor(raw);
+}
+
+function holdMonotonicProgress(held, raw, wrapSlop = 5) {
+  return raw + wrapSlop < held ? raw : Math.max(held, raw);
+}
+
+/** Strike cycle for the auto tapper — phase is wall-clock, not accumulated progress. */
+function knockerPose(elapsedSec, originUnits, tapsPerSec, tapPower, autoActive) {
+  if (!autoActive || tapsPerSec <= 0) return { arm: 0, impact: 0, phase: 0 };
   const period = 1 / tapsPerSec;
-  const phase = tapIndex - Math.floor(tapIndex);
+  const phase = knockerCyclePhase(elapsedSec, tapsPerSec, originUnits, tapPower);
 
   const strike = Math.min(0.34, Math.max(0.06, knockerStrikeDuration(tapPower) / period));
   const recoil = Math.min(0.2, Math.max(0.05, 0.07 / period));
@@ -266,17 +556,31 @@ function struckSyncedProgress(
 ) {
   if (!autoActive || fillRate <= 0) return continuous;
   const power = Math.max(tapPower, 0.01);
-  if (knockerProgress > continuous + Math.max(power * 2, 5)) return continuous;
-  const knockerHits = Math.floor(knockerProgress / power + 1e-9);
-  const continuousHits = Math.floor(continuous / power + 1e-9);
-  const hits = Math.max(knockerHits, continuousHits);
-  return Math.min(total, hits * power);
+  const cap = total;
+  if (knockerProgress > continuous + cap * 0.5 && knockerProgress > cap + power) {
+    return Math.min(cap, continuous);
+  }
+  const knockerHits = Math.floor(Math.min(knockerProgress, cap + power) / power + 1e-9);
+  const quantized = knockerHits * power;
+  const extra = Math.max(0, continuous - knockerProgress);
+  return Math.min(cap, quantized + extra);
+}
+
+function rebaseKnockerClock(oldFillRate, nowMs = Date.now()) {
+  const rate = oldFillRate > 0 ? oldFillRate : 0;
+  knockerAnchorProgress += rate * ((nowMs - knockerAnchorMs) / 1000);
+  knockerAnchorMs = nowMs;
 }
 
 function syncDisplayAnchors(progress, { resetKnocker = false, wrap = false } = {}) {
   displayAnchorProgress = progress;
   displayAnchorMs = Date.now();
-  if (resetKnocker || wrap) {
+  if (wrap) {
+    knockerAnchorProgress = progress;
+    knockerAnchorMs = Date.now();
+    heldDisplay = progress;
+  } else if (resetKnocker) {
+    // Auto start only — never yank the arm onto combo extras.
     knockerAnchorProgress = progress;
     knockerAnchorMs = Date.now();
   }
@@ -430,7 +734,10 @@ function project(s, nowMs) {
 function applyingManualTap(s) {
   if (!s || s.tapsRemaining <= 0) return s;
   const units = Math.max(1, s.unitsPerSat || 1);
-  const power = s.tapPower > 0 ? s.tapPower : 1;
+  const t = comboParams();
+  const nowMs = Date.now();
+  const nextCombo = applyComboTap(persistedCombo(s), nowMs, t);
+  const power = (s.tapPower > 0 ? s.tapPower : 1) * comboMultiplier(nextCombo, t);
   let progress = s.progress + power;
   let earned = 0;
   const cap = s.dailySatsEarnCap || 0;
@@ -448,7 +755,35 @@ function applyingManualTap(s) {
     progress,
     satsBalance: s.satsBalance + earned,
     satsEarnedToday: s.satsEarnedToday + earned,
+    ...writeComboFields(nextCombo),
+    comboMultiplier: comboMultiplier(nextCombo, t),
   };
+}
+
+function overlayLiveTapUnits(server, local) {
+  if (!server || !local) return server;
+  return {
+    ...server,
+    progress: local.progress,
+    satsBalance: local.satsBalance,
+    satsEarnedToday: local.satsEarnedToday,
+    comboMeter: local.comboMeter,
+    comboLevel: local.comboLevel,
+    comboContrib: local.comboContrib,
+    comboMeter1: local.comboMeter1,
+    comboLevel1: local.comboLevel1,
+    comboContrib1: local.comboContrib1,
+    comboMeter2: local.comboMeter2,
+    comboLevel2: local.comboLevel2,
+    comboContrib2: local.comboContrib2,
+    lastManualTapAt: local.lastManualTapAt,
+    comboMultiplier: local.comboMultiplier,
+  };
+}
+
+function comboRecentlyTapped(s) {
+  const last = Date.parse(s?.lastManualTapAt || "");
+  return Number.isFinite(last) && Date.now() - last < 15_000;
 }
 
 function publishOptimisticTaps() {
@@ -457,10 +792,13 @@ function publishOptimisticTaps() {
   for (let i = 0; i < unackedTaps; i++) s = applyingManualTap(s);
   const prevProgress = serverState?.progress ?? s.progress;
   serverState = s;
-  if (s.progress + 5 < prevProgress) {
-    syncDisplayAnchors(s.progress, { wrap: true });
+  const projected = project(s, Date.now());
+  // Anchor the wheel to projected progress (auto included) so extra = combo
+  // units on top of the knocker clock, not snapshot-without-auto.
+  if (projected.progress + 5 < prevProgress) {
+    syncDisplayAnchors(projected.progress, { wrap: true });
   } else {
-    syncDisplayAnchors(s.progress);
+    syncDisplayAnchors(projected.progress);
   }
 }
 
@@ -474,10 +812,12 @@ async function ensureTapFlush() {
         const result = await callTap();
         if (generation !== tapFlushGeneration) return;
         const next = result.data.state;
+        if (result.data.progress) playerProgress = result.data.progress;
         if (next.updatedAt) lastUpdatedAt = next.updatedAt;
-        confirmedState = next;
+        const afterTap = applyingManualTap(confirmedState);
+        // Keep Stronger × combo tap units; do not reset the auto-fill clock.
+        confirmedState = overlayLiveTapUnits(next, afterTap);
         unackedTaps = Math.max(0, unackedTaps - 1);
-        anchorMs = Date.now();
         windowEndHandled = false;
         publishOptimisticTaps();
       } catch {
@@ -502,26 +842,38 @@ function applyState(state, force = false) {
   if (!force && incoming && lastUpdatedAt && incoming < lastUpdatedAt) return;
   if (incoming) lastUpdatedAt = incoming;
   const prev = serverState;
+  const preserveLiveTaps = !force && comboRecentlyTapped(confirmedState);
+  const adopted = preserveLiveTaps
+    ? overlayLiveTapUnits(state, confirmedState)
+    : state;
   tapFlushGeneration += 1;
   unackedTaps = 0;
-  confirmedState = state;
-  serverState = state;
-  anchorMs = Date.now();
+  confirmedState = adopted;
+  serverState = adopted;
+  if (!preserveLiveTaps) {
+    anchorMs = Date.now();
+  }
   windowEndHandled = false;
 
-  const wrap = Boolean(prev && state.progress + 5 < (prev.progress ?? 0));
-  const fillChanged = Boolean(prev && prev.fillRate !== state.fillRate);
-  const powerChanged = Boolean(prev && prev.tapPower !== state.tapPower);
-  const autoStarted = Boolean(state.autoFillActive && (!prev || !prev.autoFillActive));
-  syncDisplayAnchors(state.progress, {
-    resetKnocker: wrap || fillChanged || powerChanged || autoStarted || !prev,
-    wrap,
-  });
-
-  if (lastRenderedSats != null && state.satsBalance > lastRenderedSats) {
-    celebrateSatEarn(state.satsBalance - lastRenderedSats);
+  const wrap = Boolean(prev && adopted.progress + 5 < (prev.progress ?? 0));
+  const fillChanged = Boolean(prev && prev.fillRate !== adopted.fillRate);
+  const powerChanged = Boolean(prev && prev.tapPower !== adopted.tapPower);
+  const autoStarted = Boolean(adopted.autoFillActive && (!prev || !prev.autoFillActive));
+  if (fillChanged || powerChanged) {
+    rebaseKnockerClock(prev?.fillRate ?? lastFillRate);
   }
-  lastRenderedSats = state.satsBalance;
+  if (!preserveLiveTaps) {
+    syncDisplayAnchors(adopted.progress, {
+      resetKnocker: autoStarted || !prev,
+      wrap,
+    });
+  }
+  lastFillRate = adopted.fillRate ?? 0;
+
+  if (lastRenderedSats != null && adopted.satsBalance > lastRenderedSats) {
+    celebrateSatEarn(adopted.satsBalance - lastRenderedSats);
+  }
+  lastRenderedSats = adopted.satsBalance;
   ensureLoop();
 }
 
@@ -713,11 +1065,10 @@ function renderFrame(state, _rafNow) {
     autoActive,
     nowMs,
   );
-  const knockerProgress =
-    autoActive && fillRate > 0
-      ? knockerAnchorProgress + fillRate * ((nowMs - knockerAnchorMs) / 1000)
-      : knockerAnchorProgress;
-  const display = struckSyncedProgress(
+  const knockerElapsed =
+    autoActive && fillRate > 0 ? (nowMs - knockerAnchorMs) / 1000 : 0;
+  const knockerProgress = knockerAnchorProgress + fillRate * knockerElapsed;
+  const rawDisplay = struckSyncedProgress(
     continuous,
     knockerProgress,
     tapPower,
@@ -725,18 +1076,67 @@ function renderFrame(state, _rafNow) {
     fillRate,
     total,
   );
+  const display = holdMonotonicProgress(heldDisplay, rawDisplay);
+  heldDisplay = display;
   const fraction = Math.min(1, Math.max(0, display / total));
   const tps = tapsPerSecond(fillRate, tapPower);
-  const pose = knockerPose(knockerProgress, tps, tapPower, autoActive);
+  const pose = knockerPose(knockerElapsed, knockerAnchorProgress, tps, tapPower, autoActive);
 
   $("btc-amount").textContent = formatBtcAmount(state.satsBalance, display, total);
   $("sats-per-hour").textContent = formatSatsPerHour(fillRate, total, autoActive);
-  $("tap-count").textContent = `${Math.floor(display)} / ${total} taps`;
+  $("tap-count").textContent = `${display.toFixed(1)} / ${total} taps`;
   renderRateLine(autoActive, fillRate, tapPower);
 
   const arc = $("wheel-arc");
   arc.setAttribute("stroke-dasharray", `${fraction * 100} 100`);
   $("wheel-face").style.transform = `rotate(${fraction * 360}deg)`;
+  const comboT = comboParams();
+  const comboLive = comboAt(persistedCombo(state), nowMs, comboT);
+  const meters = displayMeters(comboLive, comboT);
+  const tracks = displayTracks(comboLive, comboT);
+  function paintComboArc(id, glowId, frac, showTrack, bandId) {
+    const el = $(id);
+    if (!el) return;
+    const drawArc = frac > 0.001;
+    const dash = drawArc ? Math.min(1, frac) * 100 : 0;
+    el.setAttribute("stroke-dasharray", `${dash} 100`);
+    el.classList.toggle("hidden", !drawArc);
+    const glow = glowId ? $(glowId) : null;
+    if (glow) {
+      glow.setAttribute("stroke-dasharray", `${dash} 100`);
+      glow.classList.toggle("hidden", !drawArc);
+      glow.style.opacity = drawArc && frac < 0.18 ? "0.5" : "";
+    }
+    const band = bandId ? $(bandId) : null;
+    if (band) band.classList.toggle("hidden", !showTrack && !drawArc);
+  }
+  paintComboArc("combo-arc", "combo-glow-0", meters[0] || 0, true, "combo-band-0");
+  paintComboArc("combo-arc-1", "combo-glow-1", meters[1] || 0, !!tracks[1], "combo-band-1");
+  paintComboArc("combo-arc-2", "combo-glow-2", meters[2] || 0, !!tracks[2], "combo-band-2");
+  const innerR = (tracks[2] || (meters[2] || 0) > 0.001)
+    ? 66
+    : (tracks[1] || (meters[1] || 0) > 0.001) ? 76 : 86;
+  const pegOrbit = Math.max(35, innerR - 4 - 3.5 - 2);
+  const peg = $("hub-peg");
+  const pegSeat = document.querySelector(".hub-peg-seat");
+  if (peg) peg.setAttribute("cy", String(110 - pegOrbit));
+  if (pegSeat) pegSeat.setAttribute("cy", String(110 - pegOrbit));
+  const pegOrbitEl = $("hub-peg-orbit");
+  if (pegOrbitEl) pegOrbitEl.style.transform = `rotate(${fraction * 360}deg)`;
+  const gear = $("combo-gear");
+  if (gear) {
+    gear.classList.toggle("hidden", !(tracks[0] || (meters[0] || 0) > 0.001));
+    const gearRing = gear.querySelector(".combo-gear-ring");
+    if (gearRing) gearRing.setAttribute("r", String(innerR - 5));
+  }
+  const comboBadge = $("combo-badge");
+  if (comboBadge) {
+    comboBadge.textContent = formatComboMultiplier(comboMultiplier(comboLive, comboT));
+  }
+  const titleEl = $("player-title");
+  if (titleEl) {
+    titleEl.textContent = minerTitle(playerProgress?.lifetimeSatsEarned || 0);
+  }
 
   const flashing = nowMs < wheelFlashUntil;
   $("sat-wheel").classList.toggle("flashing", flashing);
@@ -834,6 +1234,7 @@ async function refresh(force = false) {
   const result = await callGetState();
   const data = result.data;
   tunables = data.tunables ?? null;
+  playerProgress = data.progress ?? playerProgress;
   applyState(data.state, force);
 }
 

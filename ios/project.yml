@@ -34,6 +34,8 @@ targets:
         product: GoogleMobileAds
       - sdk: AppTrackingTransparency.framework
       - sdk: StoreKit.framework
+      - sdk: GameKit.framework
+      - sdk: ActivityKit.framework
     entitlements:
       path: AdPlay/AdPlay.entitlements
     settings:

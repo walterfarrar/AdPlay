@@ -1,4 +1,6 @@
 package com.adplay.app.data
+
+import java.time.Instant
 data class GameState(
     val progress: Double = 0.0,
     val unitsPerSat: Int = 1000,
@@ -29,6 +31,17 @@ data class GameState(
     val tapStrengthActive: Boolean = false,
     val tapStrengthUntil: String? = null,
     val tapPower: Double = 1.0,
+    val comboMeter: Double = 0.0,
+    val comboLevel: Int = 0,
+    val comboContrib: Double = 0.0,
+    val comboMeter1: Double = 0.0,
+    val comboLevel1: Int = 0,
+    val comboContrib1: Double = 0.0,
+    val comboMeter2: Double = 0.0,
+    val comboLevel2: Int = 0,
+    val comboContrib2: Double = 0.0,
+    val lastManualTapAt: String? = null,
+    val comboMultiplier: Double = 1.0,
     val adCooldownSecondsLeft: Int = 0,
     val lastBoostType: String? = null,
     val minWithdrawSats: Int = 100,
@@ -38,11 +51,41 @@ data class GameState(
     val progressFraction: Float
         get() = if (unitsPerSat <= 0) 0f else (progress / unitsPerSat).toFloat().coerceIn(0f, 1f)
 
+    val combo: ComboState
+        get() = ComboState(
+            rings = listOf(
+                ComboRingState(comboMeter, comboLevel, comboContrib),
+                ComboRingState(comboMeter1, comboLevel1, comboContrib1),
+                ComboRingState(comboMeter2, comboLevel2, comboContrib2),
+            ),
+            lastTapAtMs = lastManualTapAt?.let { parseIso8601Millis(it) },
+        )
+
+    fun writingCombo(next: ComboState, nowMs: Long? = null): GameState {
+        val r0 = next.rings.getOrNull(0) ?: ComboRingState()
+        val r1 = next.rings.getOrNull(1) ?: ComboRingState()
+        val r2 = next.rings.getOrNull(2) ?: ComboRingState()
+        return copy(
+            comboMeter = r0.meter,
+            comboLevel = r0.level,
+            comboContrib = r0.contribution,
+            comboMeter1 = r1.meter,
+            comboLevel1 = r1.level,
+            comboContrib1 = r1.contribution,
+            comboMeter2 = r2.meter,
+            comboLevel2 = r2.level,
+            comboContrib2 = r2.contribution,
+            lastManualTapAt = (nowMs ?: next.lastTapAtMs)?.let { iso8601String(it) } ?: lastManualTapAt,
+        )
+    }
+
     /** Local preview of one manual tap (matches server `applyManualTapInMemory`). */
-    fun applyingManualTap(): GameState {
+    fun applyingManualTap(tunables: Tunables? = null, nowMs: Long = System.currentTimeMillis()): GameState {
         if (tapsRemaining <= 0) return this
+        val comboT = ComboTunables.from(tunables)
+        val nextCombo = ComboEngine.applyTap(combo, nowMs, comboT)
         val units = unitsPerSat.coerceAtLeast(1)
-        var nextProgress = progress + tapPower.coerceAtLeast(0.0)
+        var nextProgress = progress + tapPower.coerceAtLeast(0.0) * comboT.multiplier(nextCombo)
         var earned = 0
         while (nextProgress >= units) {
             if (dailySatsEarnCap > 0 && satsEarnedToday + earned >= dailySatsEarnCap) {
@@ -52,13 +95,35 @@ data class GameState(
             nextProgress -= units
             earned += 1
         }
-        return copy(
+        return writingCombo(nextCombo, nowMs).copy(
             tapsRemaining = tapsRemaining - 1,
             progress = nextProgress,
             satsBalance = satsBalance + earned,
             satsEarnedToday = satsEarnedToday + earned,
+            comboMultiplier = comboT.multiplier(nextCombo),
         )
     }
+
+    /**
+     * Overlay live-tap units (Stronger × combo) plus combo fields from [from].
+     * Used when a server snapshot omitted combo on progress.
+     */
+    fun takingLiveTapUnits(from: GameState): GameState = copy(
+        progress = from.progress,
+        satsBalance = from.satsBalance,
+        satsEarnedToday = from.satsEarnedToday,
+        comboMeter = from.comboMeter,
+        comboLevel = from.comboLevel,
+        comboContrib = from.comboContrib,
+        comboMeter1 = from.comboMeter1,
+        comboLevel1 = from.comboLevel1,
+        comboContrib1 = from.comboContrib1,
+        comboMeter2 = from.comboMeter2,
+        comboLevel2 = from.comboLevel2,
+        comboContrib2 = from.comboContrib2,
+        lastManualTapAt = from.lastManualTapAt,
+        comboMultiplier = from.comboMultiplier,
+    )
 }
 data class Tunables(
     val unitsPerSat: Int = 1000,
@@ -82,6 +147,17 @@ data class Tunables(
     val resetHourUtc: Int = 0,
     val adProvider: String = "waterfall",
     val debugReset: Boolean = false,
+    val comboTapsPerLevel: Int = 100,
+    val comboStep: Double = 0.1,
+    val comboMax: Double = 2.0,
+    val comboBase: Double = 1.0,
+    val comboAbsMax: Double? = null,
+    val comboRing0Max: Double? = null,
+    val comboRing1Max: Double? = null,
+    val comboRing2Max: Double? = null,
+    val comboIdleGraceSeconds: Double = 1.5,
+    val comboDrainPerSecondActive: Double = 0.002,
+    val comboDrainPerSecondIdle: Double = 0.5,
 )
 data class Withdrawal(
     val id: String,
@@ -128,6 +204,7 @@ data class PlayerProgress(
     val achievements: List<Achievement> = emptyList(),
     val iapAdsPurchased: Int = 0,
     val iapBonusAdsMax: Int = 5,
+    val lifetimeSatsEarned: Int = 0,
 ) {
     val displayedDailyGoals: List<DailyGoal> get() = ProgressCatalog.goals(dailyGoals)
     val displayedAchievements: List<Achievement> get() = ProgressCatalog.achievements(achievements)
@@ -142,8 +219,12 @@ data class PlayerProgress(
     fun syncedWith(state: GameState, tunables: Tunables?, adsWatched: Int): PlayerProgress {
         val cap = (tunables?.dailyTapCap ?: 500).coerceAtLeast(1)
         val tapsUsed = (cap - state.tapsRemaining).coerceAtLeast(0)
-        val auto = if (state.autoFillActive || state.lastBoostType == "activate") 1 else 0
-        val next = displayedDailyGoals.map { goal ->
+        val goals = displayedDailyGoals
+        // Auto spanning midnight is still running, but the UTC goal resets. Don't
+        // treat autoFillActive as "activated today" — that inflated the token hold.
+        val autoFromServer = goals.firstOrNull { it.id == "auto" }?.current ?: 0
+        val auto = maxOf(autoFromServer, if (state.lastBoostType == "activate") 1 else 0)
+        val next = goals.map { goal ->
             val derived = when (goal.id) {
                 "taps", "taps_stretch" -> tapsUsed
                 "sats" -> state.satsEarnedToday.coerceAtLeast(0)
@@ -294,3 +375,9 @@ enum class BoostType(val apiValue: String) {
     TAP_STRENGTH("tap_strength"),
     SKIP_TIME("skip_time"),
 }
+
+fun parseIso8601Millis(iso: String): Long? =
+    runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
+
+fun iso8601String(epochMs: Long): String = Instant.ofEpochMilli(epochMs).toString()
+

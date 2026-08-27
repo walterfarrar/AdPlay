@@ -60,6 +60,29 @@ export type Tunables = {
   /** Max sats from bars per UTC day. 0 = unlimited. */
   dailySatsEarnCap: number;
   minWithdrawSats: number;
+  /** Taps to fill one outermost combo cycle. */
+  comboTapsPerLevel: number;
+  /** Multiplier added each non-overflow ring completion. */
+  comboStep: number;
+  /**
+   * Legacy single-ring cap. Ignored by the nested engine (uses comboAbsMax).
+   * Kept so existing Firestore docs still merge cleanly.
+   */
+  comboMax: number;
+  /** Combo multiplier with empty rings. */
+  comboBase: number;
+  /** Hard cap on comboMultiplier (base + all rings). */
+  comboAbsMax: number;
+  /** Max contribution from the outermost ring before overflow. */
+  comboRing0Max: number;
+  comboRing1Max: number;
+  comboRing2Max: number;
+  /** Seconds after the last tap before idle drain. */
+  comboIdleGraceSeconds: number;
+  /** Combo ring drain per second while tapping. */
+  comboDrainPerSecondActive: number;
+  /** Combo ring drain per second after the grace window. */
+  comboDrainPerSecondIdle: number;
 };
 /** Defaults — also seeded to Firestore config/tunables (server-only writes). */
 export const DEFAULT_TUNABLES: Tunables = {
@@ -91,6 +114,17 @@ export const DEFAULT_TUNABLES: Tunables = {
   skipAdsPerCycle: 10,
   dailySatsEarnCap: 0,
   minWithdrawSats: 100,
+  comboTapsPerLevel: 100,
+  comboStep: 0.1,
+  comboMax: 2.0,
+  comboBase: 1.0,
+  comboAbsMax: 3.0,
+  comboRing0Max: 1.0,
+  comboRing1Max: 1.0,
+  comboRing2Max: 1.0,
+  comboIdleGraceSeconds: 1.5,
+  comboDrainPerSecondActive: 0.002,
+  comboDrainPerSecondIdle: 0.5,
 };
 export type GameStateDoc = {
   progress: number;
@@ -142,6 +176,22 @@ export type GameStateDoc = {
   hasPaidRedeem: boolean;
   /** Last applied hold max; used to grant charges when the max grows. */
   adsHoldMax?: number;
+  /** Ring 0 fill 0–1, captured at last manual tap. */
+  comboMeter: number;
+  /** Ring 0 completed cycles (including overflow cycles). */
+  comboLevel: number;
+  /** Ring 0 contribution to the multiplier. */
+  comboContrib: number;
+  /** Ring 1 fill 0–1. */
+  comboMeter1: number;
+  comboLevel1: number;
+  comboContrib1: number;
+  /** Ring 2 fill 0–1. */
+  comboMeter2: number;
+  comboLevel2: number;
+  comboContrib2: number;
+  /** ISO of last manual tap; null if the player has never tapped. */
+  lastManualTapAt: string | null;
 };
 export type PublicGameState = {
   progress: number;
@@ -183,6 +233,19 @@ export type PublicGameState = {
   tapStrengthUntil: string | null;
   /** Effective progress units per tap right now (also scales auto fill). */
   tapPower: number;
+  /** Ring 0 fill 0–1 at last tap (clients drain locally for display). */
+  comboMeter: number;
+  comboLevel: number;
+  comboContrib: number;
+  comboMeter1: number;
+  comboLevel1: number;
+  comboContrib1: number;
+  comboMeter2: number;
+  comboLevel2: number;
+  comboContrib2: number;
+  lastManualTapAt: string | null;
+  /** Combo multiplier drained to now (manual taps only; stacks with Stronger). */
+  comboMultiplier: number;
   adCooldownSecondsLeft: number;
   lastBoostType: BoostType | null;
   minWithdrawSats: number;
@@ -225,4 +288,5 @@ export type PlayerProgress = {
   achievements: AchievementPublic[];
   iapAdsPurchased: number;
   iapBonusAdsMax: number;
+  lifetimeSatsEarned: number;
 };

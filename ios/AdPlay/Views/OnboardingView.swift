@@ -11,6 +11,11 @@ struct OnboardingView: View {
             "circle.hexagongrid.fill"
         ),
         (
+            "Keep a combo",
+            "Combo rings fill as you tap. Each outer complete raises a live-tap multiplier (up to ×3) that stacks with Stronger. Stop tapping and it drains.",
+            "flame.fill"
+        ),
+        (
             "Ad Tokens",
             "Spend one Ad Token to watch a Boost Ad. Daily goals, login streaks, achievements, and extras raise how many tokens you can keep.",
             "play.rectangle.fill"

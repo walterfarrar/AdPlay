@@ -60,6 +60,8 @@ final class SessionStore: ObservableObject {
             isReady = true
             foreground = true
             ensureTicker()
+            GameCenterService.start()
+            publishPlayPresence()
             Self.log.notice("AdPlay session ready")
             GameReminderScheduler.requestPermissionIfNeeded()
             // Warm AdMob after home is up so the ATT prompt is not under the splash.
@@ -103,6 +105,7 @@ final class SessionStore: ObservableObject {
         }
         // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
         GameReminderScheduler.sync(project(serverState, now: Date()))
+        publishPlayPresence()
     }
 
     func refresh(force: Bool = false) async throws {
@@ -150,7 +153,7 @@ final class SessionStore: ObservableObject {
         guard !skipAnimating else { return }
         var probe = confirmedState
         for _ in 0..<unackedTaps {
-            probe = probe.applyingManualTap()
+            probe = probe.applyingManualTap(tunables: tunables)
         }
         guard probe.tapsRemaining > 0 else { return }
 
@@ -163,12 +166,13 @@ final class SessionStore: ObservableObject {
     private func publishOptimisticTaps() {
         var s = confirmedState
         for _ in 0..<unackedTaps {
-            s = s.applyingManualTap()
+            s = s.applyingManualTap(tunables: tunables)
         }
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
         state = project(s, now: Date())
         replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
+        publishPlayPresence()
     }
 
     /// Finish uploading optimistic taps so the next getState includes them.
@@ -195,10 +199,11 @@ final class SessionStore: ObservableObject {
                     if let u = next.updatedAt {
                         self.lastUpdatedAt = u
                     }
-                    self.confirmedState = next
+                    let afterTap = self.confirmedState.applyingManualTap(tunables: self.tunables)
+                    // Combo ring + live-tap units (Stronger × combo) must survive gameTap
+                    // ACKs. Keep optimistic tap math; do not reset the auto-fill clock.
+                    self.confirmedState = next.takingLiveTapUnits(from: afterTap)
                     self.unackedTaps = max(0, self.unackedTaps - 1)
-                    // Confirmed snapshot already includes auto catch-up through now.
-                    self.anchorDate = Date()
                     self.windowEndHandled = false
                     self.publishOptimisticTaps()
                     self.applyProgress(p)
@@ -371,33 +376,38 @@ final class SessionStore: ObservableObject {
         do {
             let (s, p) = try await api.debugReset()
             adsWatchedToday = 0
-            apply(s, force: true)
+            apply(s, force: true, keepCombo: false)
             applyProgress(p)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func apply(_ next: GameState, force: Bool) {
-        setServerState(next, force: force)
+    private func apply(_ next: GameState, force: Bool, keepCombo: Bool = true) {
+        setServerState(next, force: force, keepCombo: keepCombo)
     }
 
     private func applyProgress(_ server: PlayerProgress?) {
         if let server, let ads = server.dailyGoals.first(where: { $0.id == "ads" }) {
             adsWatchedToday = ads.current
         }
-        replaceProgress(progress.takingServer(server).syncedWith(
-            state: state,
-            tunables: tunables,
-            adsWatched: adsWatchedToday
-        ))
+        let incoming = progress.takingServer(server)
+        // Server remaining already includes tokens for this hold. Only grant slots
+        // that local goal completion added on top (optimistic taps / this session).
+        let grantAbove = server != nil ? incoming.adBank.max : progress.adBank.max
+        replaceProgress(
+            incoming.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday),
+            grantAbove: grantAbove
+        )
+        GameCenterService.report(progress: progress)
+        publishPlayPresence()
     }
 
-    private func replaceProgress(_ next: PlayerProgress) {
-        let oldMax = progress.adBank.max
+    private func replaceProgress(_ next: PlayerProgress, grantAbove: Int? = nil) {
+        let floor = grantAbove ?? progress.adBank.max
         let oldRemaining = state.adsRemainingToday
         progress = next
-        let gained = max(0, next.adBank.max - oldMax)
+        let gained = max(0, next.adBank.max - floor)
         if gained > 0, state.adsRemainingToday <= oldRemaining {
             grantCharges(gained, cap: next.adBank.max)
         }
@@ -423,31 +433,63 @@ final class SessionStore: ObservableObject {
     ///
     /// `discardOptimisticTaps` is true for mutations that already include those taps
     /// (boost, reset, redeem). getState refresh keeps taps that landed during the fetch.
-    private func setServerState(_ next: GameState, force: Bool, discardOptimisticTaps: Bool = true) {
+    private func setServerState(
+        _ next: GameState,
+        force: Bool,
+        discardOptimisticTaps: Bool = true,
+        keepCombo: Bool = true
+    ) {
         if !force, let incoming = next.updatedAt, let last = lastUpdatedAt, incoming < last {
             return
         }
         if let u = next.updatedAt {
             lastUpdatedAt = u
         }
+        var adopted = next
+        let preserveLiveTaps = keepCombo && comboRecentlyTapped(state)
+            if preserveLiveTaps {
+                if discardOptimisticTaps {
+                    adopted.comboMeter = state.comboMeter
+                    adopted.comboLevel = state.comboLevel
+                    adopted.comboContrib = state.comboContrib
+                    adopted.comboMeter1 = state.comboMeter1
+                    adopted.comboLevel1 = state.comboLevel1
+                    adopted.comboContrib1 = state.comboContrib1
+                    adopted.comboMeter2 = state.comboMeter2
+                    adopted.comboLevel2 = state.comboLevel2
+                    adopted.comboContrib2 = state.comboContrib2
+                    adopted.lastManualTapAt = state.lastManualTapAt
+                    adopted.comboMultiplier = state.comboMultiplier
+                } else {
+                    adopted = next.takingLiveTapUnits(from: confirmedState)
+                }
+            }
         if discardOptimisticTaps {
             // Invalidate any in-flight optimistic tap flush; those responses are stale
             // relative to this authoritative snapshot (boost / reset / redeem).
             tapFlushGeneration += 1
             unackedTaps = 0
-            confirmedState = next
-            serverState = next
+            confirmedState = adopted
+            serverState = adopted
             anchorDate = Date()
             windowEndHandled = false
-            state = project(next, now: anchorDate)
+            state = project(adopted, now: anchorDate)
         } else {
-            confirmedState = next
-            anchorDate = Date()
+            confirmedState = adopted
+            if !preserveLiveTaps {
+                anchorDate = Date()
+            }
             windowEndHandled = false
             publishOptimisticTaps()
         }
         GameReminderScheduler.sync(state)
+        publishPlayPresence()
         ensureTicker()
+    }
+
+    private func comboRecentlyTapped(_ s: GameState) -> Bool {
+        guard let last = parseIso8601(s.lastManualTapAt ?? "") else { return false }
+        return Date().timeIntervalSince(last) < 15
     }
 
     /// Local, network-free animation loop. While an auto window runs everything is
@@ -468,7 +510,7 @@ final class SessionStore: ObservableObject {
                 }
 
                 let regenLeft = self.state.adRegenSecondsLeft ?? 0
-                let adsMax = self.tunables?.adsPerCycle ?? self.progress.adBank.max
+                let adsMax = self.adsHoldMax(for: self.state)
                 let waitingRegen = regenLeft > 0 && self.state.adsRemainingToday < adsMax
                 if !self.state.autoFillActive
                     && self.state.adCooldownSecondsLeft <= 0
@@ -489,8 +531,7 @@ final class SessionStore: ObservableObject {
         let autoActive = s.autoFillActive && (until.map { $0 > now } ?? false)
         // When the shared auto window just ended, show a full ad bank until refresh lands.
         let windowExpired = s.autoFillActive && !autoActive
-        let maxCharges = tunables?.adsPerCycle
-            ?? (progress.adBank.max > 0 ? progress.adBank.max : max(s.adsRemainingToday, 1))
+        let maxCharges = adsHoldMax(for: s)
         let adsLeft: Int
         let regenLeft: Int
         if windowExpired {
@@ -588,6 +629,12 @@ final class SessionStore: ObservableObject {
         return c
     }
 
+    /// Hold size for regen / display. Never below the server remaining we just loaded,
+    /// so a stale default bank of 5 cannot recap a full 13-token hold.
+    private func adsHoldMax(for s: GameState) -> Int {
+        max(progress.adBank.max, tunables?.adsPerCycle ?? 0, s.adsRemainingToday, 1)
+    }
+
     /// Local display of banked charges + regen countdown from the server anchor.
     private func projectChargeBank(
         charges initialCharges: Int,
@@ -631,10 +678,23 @@ final class SessionStore: ObservableObject {
         }
         return (charges, regenLeft)
     }
-}
 
-private func iso8601String(_ date: Date) -> String {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f.string(from: date)
+    private func publishPlayPresence() {
+        let comboT = ComboTunables.from(tunables)
+        let live = ComboEngine.at(state.combo, now: Date(), tunables: comboT)
+        let mult = comboT.multiplier(of: live)
+        let stage = MinerStage.from(lifetimeSats: progress.lifetimeSats)
+        PlaySnapshot.write(
+            .init(
+                satsBalance: state.satsBalance,
+                progress: state.progress,
+                unitsPerSat: max(1, state.unitsPerSat),
+                autoFillUntil: parseIso8601(state.autoFillUntil ?? ""),
+                comboMultiplier: mult,
+                stageTitle: stage.title,
+                updatedAt: Date()
+            )
+        )
+        AutoTapperLiveActivity.sync(state: state, progress: progress, comboMultiplier: mult)
+    }
 }
