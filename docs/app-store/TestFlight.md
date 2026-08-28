@@ -6,7 +6,7 @@
 2. Confirm AdPlay store pages are deployed on FullyVersedWebsite (`/adplay`, `/adplay/privacy`, `/adplay/support`) — unlinked from main site nav/footer.
 3. Set production API URL in the iOS build (`ADPLAY_API_URL`).
 4. Generate Xcode project: `cd ios && xcodegen generate` (requires [XcodeGen](https://github.com/yonaskolb/XcodeGen)).
-5. Enable Sign in with Apple for production auth (optional for internal TestFlight using device sessions).
+5. Enable Sign in with Apple on the App ID (`com.adplay.app`) and in Firebase Authentication → Sign-in method → Apple (Services ID, Team ID, Key ID, private key). Settings → Save progress with Apple links the anonymous session.
 6. Paste [ReviewNotes.md](./ReviewNotes.md) into App Review Notes; use the Privacy / Support / Marketing URLs listed there in App Store Connect.
 7. Archive → Upload → TestFlight internal → external → App Review.
 

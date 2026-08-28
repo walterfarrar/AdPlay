@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var settings: PlayerSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var appleCollision = false
 
     private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149)
     private let panelBorder = Color(red: 0.169, green: 0.176, blue: 0.239)
@@ -28,10 +29,29 @@ struct SettingsView: View {
                                 .foregroundStyle(Color("BrandMuted"))
                                 .textSelection(.enabled)
                         }
+                        if session.appleLinked {
+                            Text("Progress is saved with Apple. Sign in on a new iPhone to restore this account.")
+                                .font(.footnote)
+                                .foregroundStyle(Color("BrandMuted"))
+                        } else {
+                            Text("Keep sats and progress when you get a new phone. Play still starts without signing in.")
+                                .font(.footnote)
+                                .foregroundStyle(Color("BrandMuted"))
+                            Button("Save progress with Apple") {
+                                Task { await saveProgressWithApple() }
+                            }
+                            .foregroundStyle(Color("BrandAccent"))
+                            .disabled(session.isLoading)
+                        }
                         Link("Privacy policy", destination: privacyURL)
                             .foregroundStyle(Color("BrandAccent"))
                         Link("Support", destination: supportURL)
                             .foregroundStyle(Color("BrandAccent"))
+                        if let err = session.errorMessage, !err.isEmpty {
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(Color("BrandPower"))
+                        }
                     }
                     panel(title: "Delete account") {
                         Text("Email support with your Player ID to request deletion of your anonymous session and game data.")
@@ -58,6 +78,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .onAppear { session.refreshAppleLink() }
             .onChange(of: settings.remindersEnabled) { _, enabled in
                 if enabled {
                     GameReminderScheduler.requestPermissionIfNeeded()
@@ -66,8 +87,27 @@ struct SettingsView: View {
                     GameReminderScheduler.clearAll()
                 }
             }
+            .alert("Apple ID already has an account", isPresented: $appleCollision) {
+                Button("Keep this device", role: .cancel) {
+                    session.discardPendingApple()
+                }
+                Button("Use saved Apple account") {
+                    Task { _ = await session.useSavedAppleAccount() }
+                }
+            } message: {
+                Text("This Apple ID is already linked to another AdPlay account. Using it will load that account on this device and leave this device’s unsaved progress behind.")
+            }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func saveProgressWithApple() async {
+        switch await session.saveProgressWithApple() {
+        case .needsChoice:
+            appleCollision = true
+        case .linked, .restored, .canceled:
+            break
+        }
     }
 
     private var playerId: String {

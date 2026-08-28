@@ -1,8 +1,7 @@
 # App Review Notes — AdPlay
 
 ## Demo account
-Sign-in uses an anonymous device session (no password) for Android QA and early TestFlight.  
-Optional: Sign in with Apple will be enabled for iOS production builds once the capability is configured.
+Sign-in starts as an anonymous device session (no password). On iOS, Settings → Save progress with Apple links that session so a new phone can restore it. First launch is never behind a login wall.
 
 ## Local QA (Android / LDPlayer)
 Primary development builds target Android. See `docs/LDPLAYER.md` for API URL / `adb reverse` setup.

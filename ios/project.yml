@@ -33,6 +33,7 @@ targets:
       - package: google-mobile-ads
         product: GoogleMobileAds
       - sdk: AppTrackingTransparency.framework
+      - sdk: AuthenticationServices.framework
       - sdk: StoreKit.framework
       - sdk: GameKit.framework
       - sdk: ActivityKit.framework
