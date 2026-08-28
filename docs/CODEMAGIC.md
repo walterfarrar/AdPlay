@@ -8,7 +8,7 @@ Build numbers use Codemagic’s auto **`$PROJECT_BUILD_NUMBER`** (same pattern a
 
 1. Connect GitHub repo `walterfarrar/AdPlay`.
 2. App Store Connect API integration named **`Codemagic`** (matches other apps).
-3. Enable code signing for `com.adplay.app` (App Store distribution). Use the **AdPlay_New** profile (the one with Sign in with Apple), not the older **AdPlay** profile.
+3. Enable code signing for `com.adplay.app` (App Store distribution). The uploaded profile in Codemagic is **AdPlay_New**.
 4. Ensure the workflow’s **build number** counter is on (Codemagic sets `PROJECT_BUILD_NUMBER`).
 5. Run **iOS TestFlight Build**.
 
