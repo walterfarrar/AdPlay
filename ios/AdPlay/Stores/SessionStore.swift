@@ -425,7 +425,7 @@ final class SessionStore: ObservableObject {
         appleLinked = Auth.auth().currentUser?.providerData.contains { $0.providerID == "apple.com" } == true
     }
 
-    /// Finish Sign in with Apple from the system button (presented on the tap, not a later Task).
+    /// Finish Sign in with Apple from the system button (presented on the tap).
     func saveProgressWithApple(result: Result<ASAuthorization, Error>) async -> AppleLinkOutcome {
         errorMessage = nil
         refreshAppleLink()

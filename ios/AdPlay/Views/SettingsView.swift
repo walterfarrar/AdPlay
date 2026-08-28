@@ -121,17 +121,13 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
     }
 
-    private func saveProgressWithApple(_ result: Result<ASAuthorization, Error>) async {
-        switch await session.saveProgressWithApple(result: result) {
-        case .needsChoice:
-            appleCollision = true
-        case .linked, .restored, .canceled:
-            break
-        }
-    }
-
     private var playerId: String {
         Auth.auth().currentUser?.uid ?? "Not signed in"
+    }
+
+    private func saveProgressWithApple(_ result: Result<ASAuthorization, Error>) async {
+        let outcome = await session.saveProgressWithApple(result: result)
+        if outcome == .needsChoice { appleCollision = true }
     }
 
     private func toggle(_ title: String, isOn: Binding<Bool>) -> some View {

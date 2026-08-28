@@ -33,11 +33,52 @@ workflows:
       - name: Set up code signing settings on Xcode project
         script: |
           xcode-project use-profiles --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT"
+      - name: Confirm signing profile includes Sign in with Apple
+        script: |
+          set -euo pipefail
+          FOUND=0
+          for dir in \
+            "$HOME/Library/MobileDevice/Provisioning Profiles" \
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          do
+            [ -d "$dir" ] || continue
+            shopt -s nullglob
+            for p in "$dir"/*.mobileprovision; do
+              DECODED=$(security cms -D -i "$p" 2>/dev/null || true)
+              echo "$DECODED" | grep -q "com.adplay.app" || continue
+              if echo "$DECODED" | grep -q applesignin; then
+                echo "OK: $(basename "$p") includes applesignin"
+                FOUND=1
+              else
+                echo "MISSING applesignin: $(basename "$p")" >&2
+                echo "$DECODED" | grep -A2 application-identifier || true
+              fi
+            done
+          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No com.adplay.app profile includes com.apple.developer.applesignin." >&2
+            echo "Enable Sign in with Apple on the App ID, then refresh the Codemagic signing profile." >&2
+            exit 1
+          fi
       - name: Build ipa for distribution
         script: |
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
+      - name: Verify Sign in with Apple entitlement
+        script: |
+          set -euo pipefail
+          IPA=$(ls "$CM_BUILD_DIR/build/ios/ipa"/*.ipa | head -1)
+          rm -rf /tmp/adplay-ipa
+          unzip -q "$IPA" -d /tmp/adplay-ipa
+          APP=$(find /tmp/adplay-ipa -name '*.app' | head -1)
+          echo "Signing entitlements:"
+          codesign -d --entitlements :- "$APP" || true
+          if ! codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q applesignin; then
+            echo "IPA is missing com.apple.developer.applesignin." >&2
+            echo "Enable Sign in with Apple on App ID com.adplay.app, then refresh the Codemagic signing profile." >&2
+            exit 1
+          fi
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
