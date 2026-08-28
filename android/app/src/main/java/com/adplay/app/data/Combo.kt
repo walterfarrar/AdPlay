@@ -92,7 +92,6 @@ object ComboEngine {
         val cur = normalize(state, t)
         return (0 until ComboTunables.RING_COUNT).map { i ->
             if (t.maxLevels(i) <= 0) 0.0
-            else if (isAtMax(cur, i, t)) 1.0
             else clamp01(cur.rings[i].meter)
         }
     }

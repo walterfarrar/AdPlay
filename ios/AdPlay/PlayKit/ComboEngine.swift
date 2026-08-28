@@ -120,7 +120,6 @@ enum ComboEngine {
         let cur = normalize(state, t: t)
         return (0..<ComboTunables.ringCount).map { i in
             if t.maxLevels(ring: i) <= 0 { return 0 }
-            if isAtMax(cur, ring: i, t: t) { return 1 }
             return clampMultiplier(cur.rings[i].meter)
         }
     }

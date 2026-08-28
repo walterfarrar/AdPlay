@@ -184,7 +184,6 @@ function formatComboMultiplier(m) {
 function displayMeters(state, t) {
   return state.rings.map((r, i) => {
     if (maxLevels(i, t) <= 0) return 0;
-    if (isAtMax(state, i, t)) return 1;
     return clamp01(r.meter);
   });
 }
