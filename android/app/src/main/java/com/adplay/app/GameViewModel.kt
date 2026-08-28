@@ -162,12 +162,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /** Instant local feedback; Firebase catch-up is serialized in the background. */
     fun tap() {
         if (skipAnimating) return
-        var probe = confirmedState
-        repeat(unackedTaps) { probe = probe.applyingManualTap(_ui.value.tunables) }
-        if (probe.tapsRemaining <= 0) return
+        if (serverState.tapsRemaining <= 0) return
 
         unackedTaps += 1
-        publishOptimisticTaps()
+        serverState = serverState.applyingManualTap(_ui.value.tunables)
+        _ui.update { it.copy(state = project(serverState, System.currentTimeMillis())) }
         syncProgress()
         ensureTapFlush()
     }
@@ -208,9 +207,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     confirmedState = credit.state.takingLiveTapUnits(afterTap)
                     unackedTaps = (unackedTaps - 1).coerceAtLeast(0)
                     windowEndHandled = false
-                    publishOptimisticTaps()
+                    _ui.update { it.copy(state = project(serverState, nowMs)) }
                     applyProgress(credit.progress)
-                    GameReminderScheduler.sync(appContext, _ui.value.state)
                     ensureTicker()
                 } catch (_: Exception) {
                     if (generation != tapFlushGeneration) return@launch

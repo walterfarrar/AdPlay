@@ -154,14 +154,13 @@ final class SessionStore: ObservableObject {
     /// Instant local feedback; Firebase catch-up is serialized in the background.
     func tap() async {
         guard !skipAnimating else { return }
-        var probe = confirmedState
-        for _ in 0..<unackedTaps {
-            probe = probe.applyingManualTap(tunables: tunables)
-        }
-        guard probe.tapsRemaining > 0 else { return }
+        guard serverState.tapsRemaining > 0 else { return }
 
         unackedTaps += 1
-        publishOptimisticTaps()
+        serverState = serverState.applyingManualTap(tunables: tunables)
+        state = project(serverState, now: Date())
+        replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
+        publishPlayPresence()
         ensureTapFlush()
     }
 
@@ -208,9 +207,8 @@ final class SessionStore: ObservableObject {
                     self.confirmedState = next.takingLiveTapUnits(from: afterTap)
                     self.unackedTaps = max(0, self.unackedTaps - 1)
                     self.windowEndHandled = false
-                    self.publishOptimisticTaps()
+                    self.state = self.project(self.serverState, now: Date())
                     self.applyProgress(p)
-                    GameReminderScheduler.sync(self.state)
                     self.ensureTicker()
                 } catch {
                     guard generation == self.tapFlushGeneration else { return }
