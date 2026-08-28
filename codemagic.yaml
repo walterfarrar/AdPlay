@@ -35,21 +35,29 @@ workflows:
           python3 "$CM_BUILD_DIR/ios/scripts/ensure_apple_signin_signing.py"
       - name: Set up code signing settings on Xcode project
         script: |
+          set -euo pipefail
+          ENTITLEMENTS="$CM_BUILD_DIR/ios/AdPlay/AdPlay.entitlements"
+          test -f "$ENTITLEMENTS"
           xcode-project use-profiles \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
             --archive-method app-store \
             --code-signing-setup-verbose-logging
-          # use-profiles can drop CODE_SIGN_ENTITLEMENTS; the IPA then
-          # signs with the profile only and Apple sign-in returns 1000.
           cd "$CM_BUILD_DIR/ios"
           xcodebuild -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME" -showBuildSettings \
             | grep -E 'CODE_SIGN_ENTITLEMENTS|PROVISIONING_PROFILE' || true
+          echo "Using entitlements file: $ENTITLEMENTS"
+          grep -q applesignin "$ENTITLEMENTS"
       - name: Build ipa for distribution
         script: |
+          set -euo pipefail
+          ENTITLEMENTS="$CM_BUILD_DIR/ios/AdPlay/AdPlay.entitlements"
+          test -f "$ENTITLEMENTS"
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
-            --archive-xcargs "COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_ENTITLEMENTS=AdPlay/AdPlay.entitlements"
+            --ipa-directory "$CM_BUILD_DIR/build/ios/ipa" \
+            --archive-directory "$CM_BUILD_DIR/build/ios/xcarchive" \
+            --archive-xcargs "COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_ENTITLEMENTS=$ENTITLEMENTS"
       - name: Verify Sign in with Apple entitlement
         script: |
           set -euo pipefail
