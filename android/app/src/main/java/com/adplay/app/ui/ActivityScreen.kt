@@ -58,7 +58,7 @@ fun ActivityScreen(ui: UiState, onRefresh: () -> Unit) {
                 ) {
                     AdSlotIcon(size = 18.dp)
                     Text(
-                        "Check in once each UTC day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +${bank.streakBonus}.",
+                        "Check in once a day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +${bank.streakBonus}.",
                         color = BrandMuted,
                         fontSize = 13.sp,
                     )
@@ -72,7 +72,7 @@ fun ActivityScreen(ui: UiState, onRefresh: () -> Unit) {
                 ) {
                     AdSlotIcon(size = 18.dp)
                     Text(
-                        "Each completed goal adds +1 Ad Token today. Resets with the UTC day. Now +${bank.dailyBonus}.",
+                        "Each completed goal adds +1 Ad Token today. Resets overnight. Now +${bank.dailyBonus}.",
                         color = BrandMuted,
                         fontSize = 13.sp,
                     )

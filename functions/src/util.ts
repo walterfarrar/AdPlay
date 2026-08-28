@@ -7,7 +7,8 @@ export function debugResetAllowed(): boolean {
 }
 
 export function utcDayKey(resetHourUtc: number, date = new Date()): string {
-  const shifted = new Date(date.getTime() - resetHourUtc * 3600_000);
+  const hour = Number.isFinite(resetHourUtc) ? resetHourUtc : 8;
+  const shifted = new Date(date.getTime() - hour * 3600_000);
   const y = shifted.getUTCFullYear();
   const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
   const d = String(shifted.getUTCDate()).padStart(2, "0");

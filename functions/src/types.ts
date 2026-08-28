@@ -8,6 +8,10 @@ export type Tunables = {
   unitsPerSat: number;
   tapUnits: number;
   dailyTapCap: number;
+  /**
+   * UTC hour (0–23) when the play-day rolls (taps, daily goals, login streak).
+   * Default 8 = 08:00 UTC — overnight in the US (4am EDT / 1am PDT / midnight PST).
+   */
   resetHourUtc: number;
   baseFillRate: number;
   durationBoostSeconds: number;
@@ -89,7 +93,7 @@ export const DEFAULT_TUNABLES: Tunables = {
   unitsPerSat: 1000,
   tapUnits: 1,
   dailyTapCap: 500,
-  resetHourUtc: 0,
+  resetHourUtc: 8,
   baseFillRate: 0,
   durationBoostSeconds: 30 * 60,
   speedBoostAmount: 0.5,

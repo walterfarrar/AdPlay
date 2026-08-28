@@ -7,8 +7,8 @@ Live values: Firestore `config/tunables`
 |---|---|---|
 | `unitsPerSat` | 1000 | Progress units toward 1 sat |
 | `tapUnits` | 1 | Progress per manual tap |
-| `dailyTapCap` | 500 | Manual taps per UTC day |
-| `resetHourUtc` | 0 | Daily counter reset hour |
+| `dailyTapCap` | 500 | Manual taps per UTC play-day |
+| `resetHourUtc` | **8** | UTC hour the play-day rolls (taps, daily goals, streak). 08:00 UTC is overnight in the US (4am EDT / 1am PDT). Stored `0` is treated as this default. |
 | `baseFillRate` | 0 | No fill without a boost starter |
 | `durationBoostSeconds` | 1800 | Longer: +auto seconds |
 | `speedBoostAmount` | 0.5 | Faster: additive taps/s |
@@ -56,7 +56,7 @@ clamped only by `maxAdsPerCycle` (default 23, the sum of the source caps).
 
 - New players start with `baseAdsPerCycle` charges.
 - Watching Longer / Faster / Stronger spends **1 charge**. Activate does not.
-- Daily goals add hold **for that UTC day only**.
+- Daily goals add hold **for that play-day only** (rolls at `resetHourUtc`).
 - Login streak adds hold **while the streak is alive**.
 - Slot achievements and IAP add hold **permanently**.
 - If effective max rises (daily goal, streak, achievement, IAP), that many charges are granted immediately so they can be used without waiting on regen.
