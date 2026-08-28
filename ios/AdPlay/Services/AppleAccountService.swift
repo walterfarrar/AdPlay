@@ -189,6 +189,7 @@ struct AppleSignInButton: UIViewRepresentable {
         Coordinator(onCompletion: onCompletion)
     }
 
+    @MainActor
     final class Coordinator {
         var onCompletion: (Result<ASAuthorization, Error>) -> Void
 
