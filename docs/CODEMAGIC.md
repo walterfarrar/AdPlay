@@ -8,7 +8,7 @@ Build numbers use Codemagic’s auto **`$PROJECT_BUILD_NUMBER`** (same pattern a
 
 1. Connect GitHub repo `walterfarrar/AdPlay`.
 2. App Store Connect API integration named **`Codemagic`** (matches other apps).
-3. Enable code signing for `com.adplay.app` (App Store distribution). Turn on **Sign in with Apple** on the App ID under [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list) (not only an App Store Connect toggle). Then refresh / regenerate the Codemagic profile so the IPA includes `com.apple.developer.applesignin`. The TestFlight workflow fails if the profile or IPA is missing that entitlement.
+3. Enable code signing for `com.adplay.app` (App Store distribution). The TestFlight workflow enables **Sign in with Apple** on that App ID (via the App Store Connect API key) and regenerates the App Store profile when it is missing `com.apple.developer.applesignin`. The IPA step still fails if the signed binary lacks that entitlement. The API key needs permission to edit identifiers; if enablement fails, turn the capability on by hand under [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list) and rerun.
 4. Ensure the workflow’s **build number** counter is on (Codemagic sets `PROJECT_BUILD_NUMBER`).
 5. Run **iOS TestFlight Build**.
 
