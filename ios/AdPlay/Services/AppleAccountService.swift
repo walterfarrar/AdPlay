@@ -83,6 +83,9 @@ final class AppleAccountCoordinator: NSObject {
             }
         }
         if ns.domain == ASAuthorizationError.errorDomain {
+            if ns.code == ASAuthorizationError.unknown.rawValue {
+                return "Apple sign-in failed (code 1000). This TestFlight is not signed with the Sign in with Apple entitlement."
+            }
             return "Apple sign-in failed (code \(ns.code))."
         }
         return ns.localizedDescription
