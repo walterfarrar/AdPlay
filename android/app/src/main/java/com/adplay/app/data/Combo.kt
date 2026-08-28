@@ -3,6 +3,7 @@ package com.adplay.app.data
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.round
 
 /** Keep in lockstep with `functions/src/combo.ts`. One tap counter; rings are digits. */
@@ -54,6 +55,7 @@ data class ComboCaps(
     val c0: Int,
     val c1: Int,
     val c2: Int,
+    val ml2: Int,
     val maxTaps: Double,
     val ring1Enabled: Boolean,
     val ring2Enabled: Boolean,
@@ -68,10 +70,13 @@ data class ComboCaps(
             val ring2Enabled = clampInt(raw2, 0, 100) > 0 && t.ringMaxValue(2) > 0
             val c1 = if (ring1Enabled) clampInt(raw1, 1, 100) else 1
             val c2 = if (ring2Enabled) clampInt(raw2, 1, 100) else 1
+            val raw3 = ((t.ringMaxValue(2) / step) + 0.5).toInt()
+            val ml2 = if (ring2Enabled) clampInt(raw3, 1, 100) else 0
             return ComboCaps(
                 c0 = c0,
                 c1 = c1,
                 c2 = c2,
+                ml2 = ml2,
                 maxTaps = c0.toDouble() * c1.toDouble() * c2.toDouble(),
                 ring1Enabled = ring1Enabled,
                 ring2Enabled = ring2Enabled,
@@ -137,9 +142,77 @@ object ComboEngine {
         val taps = clampTaps(state.taps, t)
         val base = if (t.base > 0) t.base else 1.0
         val cap = if (t.absMax > 0) t.absMax else 3.0
-        val step = if (t.step > 0) t.step else 0.1
         val laps = floor(taps / caps.c0).toInt()
-        return nice(min(cap, base + laps * step))
+        val parts = ringContributions(laps, t)
+        return nice(min(cap, base + parts[0] + parts[1] + parts[2]))
+    }
+
+    fun ringContributions(laps: Int, t: ComboTunables): List<Double> {
+        val caps = t.caps
+        val step = if (t.step > 0) t.step else 0.1
+        val L = max(0, laps)
+        if (L <= 0) return listOf(0.0, 0.0, 0.0)
+        val ml0 = caps.c1
+        val ml1 = caps.c2
+        val ml2 = caps.ml2
+        val r1Levels = if (caps.ring1Enabled) L / caps.c1 else 0
+        val r2Levels = if (caps.ring2Enabled) L / (caps.c1 * caps.c2) else 0
+        val r0Max1 = if (caps.ring1Enabled) (caps.c1 * ml1).toDouble() else Double.POSITIVE_INFINITY
+        val r0Max2 = if (caps.ring2Enabled && ml2 > 0) {
+            (caps.c1 * caps.c2 * ml2).toDouble()
+        } else {
+            Double.POSITIVE_INFINITY
+        }
+        val c0 = ringBonus(L, ml0, step, listOf(r0Max1 to 0, r0Max2 to 1, Double.POSITIVE_INFINITY to 2))
+        val r1Max2 = if (caps.ring2Enabled && ml2 > 0) (ml1 * ml2).toDouble() else Double.POSITIVE_INFINITY
+        val c1 = if (caps.ring1Enabled) {
+            ringBonus(r1Levels, ml1, step, listOf(r1Max2 to 0, Double.POSITIVE_INFINITY to 1))
+        } else {
+            0.0
+        }
+        val c2 = if (caps.ring2Enabled) {
+            ringBonus(r2Levels, ml2, step, listOf(Double.POSITIVE_INFINITY to 0))
+        } else {
+            0.0
+        }
+        return applyBonusRoom(listOf(c0, c1, c2), t)
+    }
+
+    private fun overflowStep(innerMaxed: Int, step: Double): Double {
+        val exp = 1 + max(0, innerMaxed)
+        return nice(step / 10.0.pow(exp.toDouble()))
+    }
+
+    private fun ringBonus(
+        levels: Int,
+        ml: Int,
+        step: Double,
+        bands: List<Pair<Double, Int>>,
+    ): Double {
+        if (levels <= 0 || ml <= 0) return 0.0
+        val normalLv = min(levels, ml)
+        var sum = normalLv * step
+        if (levels <= ml) return nice(sum)
+        var from = ml.toDouble()
+        val lim = levels.toDouble()
+        for (band in bands) {
+            if (from >= lim) break
+            val to = min(lim, band.first)
+            if (to > from) sum += (to - from) * overflowStep(band.second, step)
+            if (band.first > from) from = band.first
+        }
+        return nice(sum)
+    }
+
+    private fun applyBonusRoom(parts: List<Double>, t: ComboTunables): List<Double> {
+        val base = if (t.base > 0) t.base else 1.0
+        val cap = if (t.absMax > 0) t.absMax else 3.0
+        var room = max(0.0, cap - base)
+        return parts.map { raw ->
+            val take = min(max(0.0, raw), room)
+            room = nice(room - take)
+            nice(take)
+        }
     }
 
     fun displayMeters(state: ComboState, t: ComboTunables): List<Double> {
@@ -201,21 +274,18 @@ object ComboEngine {
         val laps0 = floor(taps / caps.c0).toInt()
         val laps1 = floor(taps / (caps.c0 * caps.c1)).toInt()
         val laps2 = floor(taps / (caps.c0.toDouble() * caps.c1 * caps.c2)).toInt()
-        val base = if (t.base > 0) t.base else 1.0
-        val cap = if (t.absMax > 0) t.absMax else 3.0
-        val step = if (t.step > 0) t.step else 0.1
-        val bonus = min(max(0.0, cap - base), laps0 * step)
+        val parts = ringContributions(laps0, t)
         return ComboPersist(
             taps = nice(taps),
             meter0 = meters[0],
             level0 = laps0,
-            contrib0 = nice(bonus),
+            contrib0 = parts[0],
             meter1 = meters[1],
             level1 = laps1,
-            contrib1 = 0.0,
+            contrib1 = parts[1],
             meter2 = meters[2],
             level2 = laps2,
-            contrib2 = 0.0,
+            contrib2 = parts[2],
         )
     }
 

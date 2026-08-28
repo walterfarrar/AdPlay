@@ -59,6 +59,7 @@ struct ComboCaps: Equatable {
     var c0: Int
     var c1: Int
     var c2: Int
+    var ml2: Int
     var maxTaps: Double
     var ring1Enabled: Bool
     var ring2Enabled: Bool
@@ -74,10 +75,14 @@ struct ComboCaps: Equatable {
         let ring2Enabled = clampInt(raw2, lo: 0, hi: 100) > 0 && t.ringMaxValue(2) > 0
         let c1 = ring1Enabled ? clampInt(raw1, lo: 1, hi: 100) : 1
         let c2 = ring2Enabled ? clampInt(raw2, lo: 1, hi: 100) : 1
+        let r2 = t.ringMaxValue(2)
+        let raw3 = Int(((r2 < 0 ? 0 : r2) / step) + 0.5)
+        let ml2 = ring2Enabled ? clampInt(raw3, lo: 1, hi: 100) : 0
         return ComboCaps(
             c0: c0,
             c1: c1,
             c2: c2,
+            ml2: ml2,
             maxTaps: Double(c0) * Double(c1) * Double(c2),
             ring1Enabled: ring1Enabled,
             ring2Enabled: ring2Enabled
@@ -172,10 +177,87 @@ enum ComboEngine {
         let taps = clampTaps(state.taps, tunables: t)
         let base = t.base > 0 ? t.base : 1.0
         let cap = t.absMax > 0 ? t.absMax : 3.0
-        let step = t.step > 0 ? t.step : 0.1
         let laps = Int(taps / Double(caps.c0))
-        let sum = base + Double(laps) * step
+        let parts = ringContributions(laps: laps, tunables: t)
+        let bonus = parts.0 + parts.1 + parts.2
+        let sum = base + bonus
         return roundedMultiplier(cap < sum ? cap : sum)
+    }
+
+    static func ringContributions(laps: Int, tunables t: ComboTunables) -> (Double, Double, Double) {
+        let caps = t.caps
+        let step = t.step > 0 ? t.step : 0.1
+        let L = laps < 0 ? 0 : laps
+        if L <= 0 { return (0, 0, 0) }
+        let ml0 = caps.c1
+        let ml1 = caps.c2
+        let ml2 = caps.ml2
+        let r1Levels = caps.ring1Enabled ? L / caps.c1 : 0
+        let r2Levels = caps.ring2Enabled ? L / (caps.c1 * caps.c2) : 0
+        let r0Max1 = caps.ring1Enabled ? Double(caps.c1 * ml1) : Double.infinity
+        let r0Max2 = caps.ring2Enabled && ml2 > 0 ? Double(caps.c1 * caps.c2 * ml2) : Double.infinity
+        let c0 = ringBonus(
+            levels: L,
+            ml: ml0,
+            step: step,
+            bands: [(r0Max1, 0), (r0Max2, 1), (Double.infinity, 2)]
+        )
+        let r1Max2 = caps.ring2Enabled && ml2 > 0 ? Double(ml1 * ml2) : Double.infinity
+        let c1 = caps.ring1Enabled
+            ? ringBonus(levels: r1Levels, ml: ml1, step: step, bands: [(r1Max2, 0), (Double.infinity, 1)])
+            : 0
+        let c2 = caps.ring2Enabled
+            ? ringBonus(levels: r2Levels, ml: ml2, step: step, bands: [(Double.infinity, 0)])
+            : 0
+        return applyBonusRoom(c0, c1, c2, tunables: t)
+    }
+
+    private static func overflowStep(innerMaxed: Int, step: Double) -> Double {
+        let inner = innerMaxed < 0 ? 0 : innerMaxed
+        return roundedMultiplier(step / pow(10, Double(1 + inner)))
+    }
+
+    private static func ringBonus(
+        levels: Int,
+        ml: Int,
+        step: Double,
+        bands: [(Double, Int)]
+    ) -> Double {
+        if levels <= 0 || ml <= 0 { return 0 }
+        let normalLv = levels < ml ? levels : ml
+        var sum = Double(normalLv) * step
+        if levels <= ml { return roundedMultiplier(sum) }
+        var from = Double(ml)
+        let lim = Double(levels)
+        for band in bands {
+            if from >= lim { break }
+            let to = lim < band.0 ? lim : band.0
+            if to > from {
+                sum += (to - from) * overflowStep(innerMaxed: band.1, step: step)
+            }
+            if band.0 > from { from = band.0 }
+        }
+        return roundedMultiplier(sum)
+    }
+
+    private static func applyBonusRoom(
+        _ a: Double,
+        _ b: Double,
+        _ c: Double,
+        tunables t: ComboTunables
+    ) -> (Double, Double, Double) {
+        let base = t.base > 0 ? t.base : 1.0
+        let cap = t.absMax > 0 ? t.absMax : 3.0
+        var room = cap - base
+        if room < 0 { room = 0 }
+        var out = [a, b, c]
+        for i in 0..<3 {
+            let raw = out[i] < 0 ? 0 : out[i]
+            let take = raw < room ? raw : room
+            out[i] = roundedMultiplier(take)
+            room = roundedMultiplier(room - take)
+        }
+        return (out[0], out[1], out[2])
     }
 
     static func displayMeters(_ state: ComboState, tunables t: ComboTunables) -> [Double] {
@@ -241,23 +323,18 @@ enum ComboEngine {
         let laps0 = Int(taps / Double(caps.c0))
         let laps1 = Int(taps / Double(caps.c0 * caps.c1))
         let laps2 = Int(taps / Double(caps.c0 * caps.c1 * caps.c2))
-        let base = t.base > 0 ? t.base : 1.0
-        let cap = t.absMax > 0 ? t.absMax : 3.0
-        let step = t.step > 0 ? t.step : 0.1
-        let room = cap - base
-        let bonusRaw = Double(laps0) * step
-        let bonus = room < 0 ? 0 : (bonusRaw < room ? bonusRaw : room)
+        let parts = ringContributions(laps: laps0, tunables: t)
         return ComboPersist(
             taps: roundedMultiplier(taps),
             meter0: meters[0],
             level0: laps0,
-            contrib0: roundedMultiplier(bonus),
+            contrib0: parts.0,
             meter1: meters[1],
             level1: laps1,
-            contrib1: 0,
+            contrib1: parts.1,
             meter2: meters[2],
             level2: laps2,
-            contrib2: 0
+            contrib2: parts.2
         )
     }
 }

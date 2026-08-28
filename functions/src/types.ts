@@ -71,7 +71,7 @@ export type Tunables = {
   comboMax: number;
   /** Combo multiplier with empty rings. */
   comboBase: number;
-  /** Hard cap on comboMultiplier (base + outer completes × step). */
+  /** Hard cap on comboMultiplier (base + nested ring contributions). */
   comboAbsMax: number;
   /** Ring 1 capacity as contribution max (levels = max / step). */
   comboRing0Max: number;

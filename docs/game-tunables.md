@@ -32,7 +32,7 @@ Live values: Firestore `config/tunables`
 | `dailySatsEarnCap` | 0 | Max sats/day; **0 = unlimited** |
 | `minWithdrawSats` | 100 | Min redeem request |
 | `comboTapsPerLevel` | 100 | **int** — manual taps to fill one outermost (ring 0) cycle |
-| `comboStep` | 0.1 | **double** — added each outer-ring complete (1.0 → 1.1 → …) |
+| `comboStep` | 0.1 | **double** — added each non-overflow ring complete (1.0 → 1.1 → …) |
 | `comboMax` | 2.0 | **double** — legacy single-ring cap; odometer engine ignores this |
 | `comboBase` | 1.0 | **double** — multiplier with empty rings |
 | `comboAbsMax` | 3.0 | **double** — hard cap on `comboMultiplier` (add in console; code default 3.0) |
@@ -45,7 +45,7 @@ Live values: Firestore `config/tunables`
 
 Manual combo applies only to **live taps at the wheel**. It does **not** apply to Auto Tapper, Skip Time, or offline catch-up. Effective live tap units = `tapPower × comboMultiplier`. Auto fill rate stays `taps/s × tapPower` (Stronger only).
 
-One tap counter, shown as three odometer rings. Ring 0 fills every `comboTapsPerLevel` taps, then ticks ring 1; when ring 1 wraps it ticks ring 2. Multiplier is `min(absMax, base + floor(taps / C0) × step)` and caps at ×3 after 20 outer laps (2000 taps at defaults). Idle drain subtracts `C0 × comboDrainPerSecondIdle` taps/s after the grace window (O(1), no peel loops). New keys work via `getState` merge **before** you add them in the console (code defaults).
+One tap counter, shown as three odometer rings. Ring 0 fills every `comboTapsPerLevel` taps, then ticks ring 1; when ring 1 wraps it ticks ring 2. Multiplier is the nested contribution sum (closed-form, O(1)): each ring adds `comboStep` until its cap, then overflow (`step/10`, `/100`, `/1000` as inner rings max). Completing the outer ring also ticks the next ring, so the 10th outer complete is ×2.1 (ring 0 cap + ring 1’s first 0.1), not ×2.0. Hard cap remains `comboAbsMax` (×3). Idle drain subtracts `C0 × comboDrainPerSecondIdle` taps/s after the grace window. New keys work via `getState` merge **before** you add them in the console (code defaults).
 
 Player-doc combo fields (not tunables): `comboTaps` is the source of truth. `comboMeter` / `comboLevel` / `comboContrib` (ring 0) plus the `*1` / `*2` fields are derived for old readers. Docs without `comboTaps` reconstruct as `comboLevel × C0 + comboMeter × C0`.
 
