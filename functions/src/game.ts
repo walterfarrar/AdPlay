@@ -826,6 +826,11 @@ export async function resetEverything(uid: string): Promise<{
   return { state: toPublic(g, t, now), progress: playerProgress(g, t) };
 }
 
+/** Wipe every Firestore doc under `users/{uid}` (game, ledger, withdrawals, ads, IAP). */
+export async function deleteAccountData(uid: string): Promise<void> {
+  await db().recursiveDelete(db().doc(`users/${uid}`));
+}
+
 export async function purchaseAdSlot(
   uid: string,
   transactionId: string,

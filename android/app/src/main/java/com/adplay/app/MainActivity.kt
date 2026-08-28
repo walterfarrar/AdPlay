@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                             onReminders = { vm.setRemindersEnabled(it) },
                             onHaptics = { vm.setHapticsEnabled(it) },
                             onSound = { vm.setSoundEnabled(it) },
+                            onDeleteAccount = { done -> vm.deleteAccount(done) },
                             onLoadHistory = { vm.loadWithdrawals() },
                             onSubmit = { amount, bolt, done ->
                                 vm.withdraw(amount, bolt, done)

@@ -363,6 +363,39 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun deleteAccount(onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            _ui.update { it.copy(loading = true, error = null) }
+            tapFlushGeneration += 1
+            unackedTaps = 0
+            tapFlushJob?.cancel()
+            tapFlushJob = null
+            flushingTaps = false
+            try {
+                api.deleteAccount()
+                GameReminderScheduler.clearAll(appContext)
+                serverState = GameState()
+                confirmedState = GameState()
+                lastUpdatedAt = null
+                adsWatchedToday = 0
+                api.ensureSignedIn()
+                refresh(force = true)
+                _ui.update {
+                    it.copy(
+                        loading = false,
+                        playerId = api.playerId.orEmpty(),
+                        withdrawals = emptyList(),
+                        error = null,
+                    )
+                }
+                onDone(true)
+            } catch (e: Exception) {
+                _ui.update { it.copy(loading = false, error = e.message) }
+                onDone(false)
+            }
+        }
+    }
+
     fun withdraw(amountSats: Int, bolt11: String, onDone: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var settings: PlayerSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmDelete = false
 
     private let panelBg = Color(red: 0.090, green: 0.094, blue: 0.149)
     private let panelBorder = Color(red: 0.169, green: 0.176, blue: 0.239)
@@ -34,12 +35,18 @@ struct SettingsView: View {
                             .foregroundStyle(Color("BrandAccent"))
                     }
                     panel(title: "Delete account") {
-                        Text("Email support with your Player ID to request deletion of your anonymous session and game data.")
+                        Text("Permanently erase this anonymous session and all game data on the server. This cannot be undone.")
                             .font(.footnote)
                             .foregroundStyle(Color("BrandMuted"))
-                        if let mail = deleteMailURL {
-                            Link("Request deletion", destination: mail)
-                                .foregroundStyle(Color("BrandAccent"))
+                        Button("Delete my account") {
+                            confirmDelete = true
+                        }
+                        .foregroundStyle(Color(red: 1, green: 0.37, blue: 0.48))
+                        .disabled(session.isLoading)
+                        if let err = session.errorMessage, !err.isEmpty {
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(Color(red: 1, green: 0.37, blue: 0.48))
                         }
                     }
                 }
@@ -66,23 +73,24 @@ struct SettingsView: View {
                     GameReminderScheduler.clearAll()
                 }
             }
+            .alert("Delete account?", isPresented: $confirmDelete) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete account", role: .destructive) {
+                    Task {
+                        if await session.deleteAccount() {
+                            dismiss()
+                        }
+                    }
+                }
+            } message: {
+                Text("This is permanent and cannot be undone. Your sats, play progress, combo, and any pending withdrawals will be erased. A new empty session will start on this device.")
+            }
         }
         .preferredColorScheme(.dark)
     }
 
     private var playerId: String {
         Auth.auth().currentUser?.uid ?? "Not signed in"
-    }
-
-    private var deleteMailURL: URL? {
-        var c = URLComponents()
-        c.scheme = "mailto"
-        c.path = "support@fullyversed.com"
-        c.queryItems = [
-            URLQueryItem(name: "subject", value: "AdPlay account deletion"),
-            URLQueryItem(name: "body", value: "Please delete my AdPlay account.\n\nPlayer ID: \(playerId)\n"),
-        ]
-        return c.url
     }
 
     private func toggle(_ title: String, isOn: Binding<Bool>) -> some View {

@@ -9,11 +9,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -28,9 +33,11 @@ fun SettingsScreen(
     onReminders: (Boolean) -> Unit,
     onHaptics: (Boolean) -> Unit,
     onSound: (Boolean) -> Unit,
+    onDeleteAccount: ((done: (Boolean) -> Unit) -> Unit)? = null,
     onClose: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
+    var confirmDelete by remember { mutableStateOf(false) }
     CenteredFitPage(Modifier.statusBarsPadding().navigationBarsPadding()) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -70,21 +77,60 @@ fun SettingsScreen(
             Spacer(Modifier.height(16.dp))
             Panel("Delete account") {
                 Text(
-                    "Email support with your Player ID to request deletion of your anonymous session and game data.",
+                    "Permanently erase this anonymous session and all game data on the server. This cannot be undone.",
                     color = BrandMuted,
                     fontSize = 13.sp,
                 )
-                TextButton(onClick = {
-                    val mail = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:support@fullyversed.com")).apply {
-                        putExtra(Intent.EXTRA_SUBJECT, "AdPlay account deletion")
-                        putExtra(
-                            Intent.EXTRA_TEXT,
-                            "Please delete my AdPlay account.\n\nPlayer ID: ${ui.playerId}\n",
-                        )
-                    }
-                    ctx.startActivity(mail)
-                }) { Text("Request deletion", color = BrandAccent) }
+                TextButton(
+                    onClick = { confirmDelete = true },
+                    enabled = !ui.loading && onDeleteAccount != null,
+                ) { Text("Delete my account", color = BrandPower) }
+                if (!ui.error.isNullOrBlank()) {
+                    Text(ui.error, color = BrandPower, fontSize = 13.sp)
+                }
             }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { if (!ui.loading) confirmDelete = false },
+            containerColor = BrandCard,
+            titleContentColor = BrandInk,
+            textContentColor = BrandMuted,
+            title = {
+                Text("Delete account?", fontWeight = FontWeight.Bold, color = BrandInk)
+            },
+            text = {
+                Text(
+                    buildString {
+                        append("This is permanent and cannot be undone. Your sats, play progress, combo, and any pending withdrawals will be erased. A new empty session will start on this device.")
+                        if (!ui.error.isNullOrBlank()) {
+                            append("\n\n")
+                            append(ui.error)
+                        }
+                    },
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }, enabled = !ui.loading) {
+                    Text("Cancel", color = BrandMuted)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteAccount?.invoke { ok ->
+                            if (ok) {
+                                confirmDelete = false
+                                onClose?.invoke()
+                            }
+                        }
+                    },
+                    enabled = !ui.loading,
+                ) {
+                    Text("Delete account", color = BrandPower, fontWeight = FontWeight.SemiBold)
+                }
+            },
+        )
     }
 }
 

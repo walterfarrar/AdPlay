@@ -9,6 +9,7 @@ import {
   markPaidRedeem,
   purchaseAdSlot,
   resetEverything,
+  deleteAccountData,
   tap,
 } from "./game";
 import { validateBolt11, nowIso, debugResetAllowed } from "./util";
@@ -194,6 +195,25 @@ export const debugReset = onCall(async (request) => {
   } catch (e) {
     mapErr(e);
   }
+});
+
+/** Authenticated player deletes their own Auth user and all Firestore game data. */
+export const deleteAccount = onCall(async (request) => {
+  const uid = requireAuth(request.auth?.uid);
+  try {
+    await deleteAccountData(uid);
+  } catch (e) {
+    mapErr(e);
+  }
+  try {
+    await admin.auth().deleteUser(uid);
+  } catch (e) {
+    const err = e as { code?: string; message?: string };
+    if (err.code !== "auth/user-not-found") {
+      mapErr(e);
+    }
+  }
+  return { ok: true };
 });
 
 export const requestWithdrawal = onCall(

@@ -89,6 +89,12 @@ final class APIClient {
         return (envelope.state, envelope.progress)
     }
 
+    func deleteAccount() async throws {
+        try await ensureSignedIn()
+        _ = try await call("deleteAccount")
+        try Auth.auth().signOut()
+    }
+
     func myWithdrawals() async throws -> [Withdrawal] {
         try await ensureSignedIn()
         let data = try await call("myWithdrawals")
