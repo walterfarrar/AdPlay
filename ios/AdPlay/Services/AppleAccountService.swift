@@ -31,8 +31,9 @@ final class AppleAccountCoordinator: NSObject {
     func configure(_ request: ASAuthorizationAppleIDRequest) {
         let nonce = Self.randomNonce()
         rawNonce = nonce
-        // Don't ask for email — Hide My Email is what failed with "Sign Up Not Completed".
-        request.requestedScopes = []
+        // Name only. Email triggers Share / Hide My Email, which Apple aborted
+        // with "Sign Up Not Completed" before AdPlay is listed on the Apple ID.
+        request.requestedScopes = [.fullName]
         request.nonce = Self.sha256(nonce)
     }
 
@@ -85,7 +86,7 @@ final class AppleAccountCoordinator: NSObject {
         }
         if ns.domain == ASAuthorizationError.errorDomain {
             if ns.code == ASAuthorizationError.unknown.rawValue {
-                return "Apple could not finish Sign in. Try again and choose Share My Email."
+                return "Apple could not finish Sign in. AdPlay will not appear under Sign in with Apple until this succeeds."
             }
             return "Apple sign-in failed (code \(ns.code))."
         }
