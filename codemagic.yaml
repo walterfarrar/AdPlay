@@ -30,9 +30,6 @@ workflows:
         script: |
           cd "$CM_BUILD_DIR/ios"
           agvtool new-version -all "$PROJECT_BUILD_NUMBER"
-      - name: Enable Sign in with Apple and refresh profile
-        script: |
-          python3 "$CM_BUILD_DIR/ios/scripts/ensure_apple_signin_signing.py"
       - name: Set up code signing settings on Xcode project
         script: |
           xcode-project use-profiles --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT"
@@ -41,16 +38,6 @@ workflows:
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
-      - name: Verify Sign in with Apple entitlement
-        script: |
-          set -euo pipefail
-          IPA=$(ls "$CM_BUILD_DIR/build/ios/ipa"/*.ipa | head -1)
-          APPDIR=$(mktemp -d)
-          unzip -q "$IPA" -d "$APPDIR"
-          APP=$(find "$APPDIR" -name '*.app' | head -1)
-          codesign -d --entitlements /tmp/adplay.entitlements "$APP"
-          cat /tmp/adplay.entitlements
-          grep -q applesignin /tmp/adplay.entitlements
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
