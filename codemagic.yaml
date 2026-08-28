@@ -35,45 +35,22 @@ workflows:
           python3 "$CM_BUILD_DIR/ios/scripts/ensure_apple_signin_signing.py"
       - name: Set up code signing settings on Xcode project
         script: |
-          set -euo pipefail
-          ENTITLEMENTS="$CM_BUILD_DIR/ios/AdPlay/AdPlay.entitlements"
-          test -f "$ENTITLEMENTS"
-          xcode-project use-profiles \
-            --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
-            --archive-method app-store \
-            --code-signing-setup-verbose-logging
-          cd "$CM_BUILD_DIR/ios"
-          xcodebuild -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME" -showBuildSettings \
-            | grep -E 'CODE_SIGN_ENTITLEMENTS|PROVISIONING_PROFILE' || true
-          echo "Using entitlements file: $ENTITLEMENTS"
-          grep -q applesignin "$ENTITLEMENTS"
+          xcode-project use-profiles --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT"
       - name: Build ipa for distribution
         script: |
-          set -euo pipefail
-          ENTITLEMENTS="$CM_BUILD_DIR/ios/AdPlay/AdPlay.entitlements"
-          test -f "$ENTITLEMENTS"
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME" \
-            --ipa-directory "$CM_BUILD_DIR/build/ios/ipa" \
-            --archive-directory "$CM_BUILD_DIR/build/ios/xcarchive" \
-            --archive-xcargs "COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_ENTITLEMENTS=$ENTITLEMENTS"
+            --scheme "$XCODE_SCHEME"
       - name: Verify Sign in with Apple entitlement
         script: |
           set -euo pipefail
           IPA=$(ls "$CM_BUILD_DIR/build/ios/ipa"/*.ipa | head -1)
-          rm -rf /tmp/adplay-ipa
-          unzip -q "$IPA" -d /tmp/adplay-ipa
-          APP=$(find /tmp/adplay-ipa -name '*.app' | head -1)
-          echo "Signing entitlements:"
-          ENT=/tmp/adplay-signed.entitlements
-          codesign -d --entitlements "$ENT" "$APP" 2>/dev/null || true
-          cat "$ENT" 2>/dev/null || true
-          if ! grep -q applesignin "$ENT" 2>/dev/null; then
-            echo "IPA is missing com.apple.developer.applesignin." >&2
-            echo "Enable Sign in with Apple on App ID com.adplay.app, then refresh the Codemagic signing profile." >&2
-            exit 1
-          fi
+          APPDIR=$(mktemp -d)
+          unzip -q "$IPA" -d "$APPDIR"
+          APP=$(find "$APPDIR" -name '*.app' | head -1)
+          codesign -d --entitlements /tmp/adplay.entitlements "$APP"
+          cat /tmp/adplay.entitlements
+          grep -q applesignin /tmp/adplay.entitlements
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
