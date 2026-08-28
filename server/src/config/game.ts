@@ -13,7 +13,7 @@ export const gameConfig = {
   dailyTapCap: 500,
 
   /** UTC hour (0–23) when tap/ad/sats daily counters reset */
-  resetHourUtc: Number(process.env.RESET_HOUR_UTC ?? 0),
+  resetHourUtc: Number(process.env.RESET_HOUR_UTC ?? 8),
 
   /**
    * Base fill rate (taps/sec) while auto-fill is active with no Faster stacks.

@@ -46,6 +46,12 @@ export async function loadTunables(): Promise<Tunables> {
     DEFAULT_TUNABLES.achievementBonusAdsMax,
   );
   t.maxAdsPerCycle = Math.max(t.maxAdsPerCycle, DEFAULT_TUNABLES.maxAdsPerCycle);
+  // Legacy stored 0 was midnight UTC (evening in the US). Treat it as unset.
+  if (!Number.isFinite(t.resetHourUtc) || t.resetHourUtc === 0) {
+    t.resetHourUtc = DEFAULT_TUNABLES.resetHourUtc;
+  } else {
+    t.resetHourUtc = Math.max(1, Math.min(23, Math.trunc(t.resetHourUtc)));
+  }
   return t;
 }
 

@@ -46,7 +46,7 @@ data class GameState(
     val adCooldownSecondsLeft: Int = 0,
     val lastBoostType: String? = null,
     val minWithdrawSats: Int = 100,
-    val resetHourUtc: Int = 0,
+    val resetHourUtc: Int = 8,
     val updatedAt: String? = null,
 ) {
     val progressFraction: Float
@@ -148,7 +148,7 @@ data class Tunables(
     val skipAdsPerCycle: Int = 10,
     val dailySatsEarnCap: Int = 0,
     val minWithdrawSats: Int = 100,
-    val resetHourUtc: Int = 0,
+    val resetHourUtc: Int = 8,
     val adProvider: String = "waterfall",
     val debugReset: Boolean = false,
     val comboTapsPerLevel: Int = 100,

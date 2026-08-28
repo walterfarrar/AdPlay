@@ -181,7 +181,7 @@ struct GameState: Codable, Equatable {
         adCooldownSecondsLeft: 0,
         lastBoostType: nil,
         minWithdrawSats: 100,
-        resetHourUtc: 0,
+        resetHourUtc: 8,
         updatedAt: nil
     )
 }

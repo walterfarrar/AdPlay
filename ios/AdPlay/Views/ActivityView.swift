@@ -46,7 +46,7 @@ struct ActivityView: View {
                 .padding(.top, 4)
             HStack(alignment: .top, spacing: 8) {
                 AdSlotIcon(size: 18)
-                Text("Check in once each UTC day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +\(progress.adBank.streakBonus).")
+                Text("Check in once a day. Extra Ad Tokens unlock at days 1, 3, 5, 7, and 30. Miss a day and those tokens reset. Now +\(progress.adBank.streakBonus).")
                     .font(.footnote)
                     .foregroundStyle(Color("BrandMuted"))
             }
@@ -57,7 +57,7 @@ struct ActivityView: View {
         panel(title: "Daily goals") {
             HStack(alignment: .top, spacing: 8) {
                 AdSlotIcon(size: 18)
-                Text("Each completed goal adds +1 Ad Token today. Resets with the UTC day. Now +\(progress.adBank.dailyBonus).")
+                Text("Each completed goal adds +1 Ad Token today. Resets overnight. Now +\(progress.adBank.dailyBonus).")
                     .font(.footnote)
                     .foregroundStyle(Color("BrandMuted"))
             }
