@@ -532,7 +532,6 @@ struct SatEarnStage: View {
     @State private var knockerAnchorProgress: Double = 0
     @State private var knockerAnchorDate: Date = .now
     @State private var heldVisual: Double = 0
-    @State private var tapPulse = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -623,7 +622,13 @@ struct SatEarnStage: View {
         let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
         let fraction = total > 0 ? min(1.0, display / Double(total)) : 0.0
         let comboT = ComboTunables.from(session.tunables)
-        let comboLive = ComboEngine.at(session.state.combo, now: now, tunables: comboT)
+        let rawCombo = session.state.combo
+        let comboLive: ComboState
+        if let last = rawCombo.lastTapAt, now.timeIntervalSince(last) < 0.2 {
+            comboLive = rawCombo
+        } else {
+            comboLive = ComboEngine.at(rawCombo, now: now, tunables: comboT)
+        }
         let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT).map { ($0 * 200).rounded() / 200 }
         let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
         let comboMult = comboT.multiplier(of: comboLive)
@@ -641,6 +646,7 @@ struct SatEarnStage: View {
                 barProgress: display,
                 total: total
             )
+            .equatable()
 
             Spacer().frame(height: 20)
 
@@ -661,19 +667,13 @@ struct SatEarnStage: View {
                     )
                     .equatable()
                     .frame(width: wheelSize, height: wheelSize)
-                    .scaleEffect(tapPulse ? 0.96 : 1)
-                    .animation(.spring(response: 0.18, dampingFraction: 0.55), value: tapPulse)
                     .contentShape(Circle())
                     .onTapGesture {
-                        tapPulse = true
                         if settings.hapticsEnabled {
                             let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
                             WheelHaptics.impact(leveled: leveled)
                         }
                         Task { await session.tap() }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                            tapPulse = false
-                        }
                     }
                     .background(wheelTipReporter)
                     .overlay {
@@ -1214,10 +1214,17 @@ struct FlyingSatParticleView: View {
     }
 }
 
-struct BtcBalanceView: View {
+struct BtcBalanceView: View, Equatable {
     let satsBalance: Int
     let barProgress: Double
     let total: Int
+
+    static func == (lhs: BtcBalanceView, rhs: BtcBalanceView) -> Bool {
+        lhs.satsBalance == rhs.satsBalance
+            && lhs.total == rhs.total
+            && btcQuanta(satsBalance: lhs.satsBalance, barProgress: lhs.barProgress, unitsPerSat: lhs.total)
+            == btcQuanta(satsBalance: rhs.satsBalance, barProgress: rhs.barProgress, unitsPerSat: rhs.total)
+    }
 
     var body: some View {
         VStack(spacing: 8) {

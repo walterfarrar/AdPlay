@@ -1189,7 +1189,6 @@ private fun SatWheelView(
                 color: Color,
                 showTrack: Boolean,
                 trackAlpha: Float,
-                tickCount: Int,
             ) {
                 val drawArc = frac > 0.001f
                 if (showTrack || drawArc) {
@@ -1205,33 +1204,6 @@ private fun SatWheelView(
                         center = center,
                         style = Stroke(width = stroke),
                     )
-                    val majorEvery = (tickCount / 12).coerceAtLeast(1)
-                    for (i in 0 until tickCount) {
-                        val major = i % majorEvery == 0
-                        val angleRad = Math.toRadians(i * 360.0 / tickCount - 90.0)
-                        val half = if (major) stroke * 0.44f else stroke * 0.21f
-                        val cosA = cos(angleRad).toFloat()
-                        val sinA = sin(angleRad).toFloat()
-                        drawLine(
-                            color = BrandInk.copy(alpha = if (major) 0.32f else 0.11f),
-                            start = Offset(center.x + cosA * (ringRadius - half), center.y + sinA * (ringRadius - half)),
-                            end = Offset(center.x + cosA * (ringRadius + half), center.y + sinA * (ringRadius + half)),
-                            strokeWidth = if (major) 1.5f else 0.7f,
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                    for (i in 0 until 4) {
-                        val angleRad = Math.toRadians(i * 90.0 - 90.0)
-                        val rivetR = ringRadius - stroke * 0.12f
-                        drawCircle(
-                            color = BrandInk.copy(alpha = 0.42f),
-                            radius = 1.6f,
-                            center = Offset(
-                                center.x + cos(angleRad).toFloat() * rivetR,
-                                center.y + sin(angleRad).toFloat() * rivetR,
-                            ),
-                        )
-                    }
                 }
                 if (!drawArc) return
                 val sweep = 360f * frac.coerceIn(0f, 1f)
@@ -1355,26 +1327,9 @@ private fun SatWheelView(
                 }
             }
 
-            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f, tickCount = 36)
-            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, tickCount = 24)
-            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, tickCount = 18)
-
-            if (show0 || outerFrac > 0.001f || show1 || innerFrac > 0.001f || show2 || coreFrac > 0.001f) {
-                for (i in 0 until 18) {
-                    val angleRad = Math.toRadians(i * 20.0 - 90.0)
-                    val toothOuter = innerComboR - comboRim * 0.57f
-                    val toothInner = toothOuter - comboRim * 0.5f
-                    val cosA = cos(angleRad).toFloat()
-                    val sinA = sin(angleRad).toFloat()
-                    drawLine(
-                        color = BrandInk.copy(alpha = 0.30f),
-                        start = Offset(center.x + cosA * toothInner, center.y + sinA * toothInner),
-                        end = Offset(center.x + cosA * toothOuter, center.y + sinA * toothOuter),
-                        strokeWidth = 1.3f,
-                        cap = StrokeCap.Round,
-                    )
-                }
-            }
+            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f)
+            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f)
+            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f)
 
             // Peg just inside the innermost drawn combo stroke, on top of the rings.
             rotate(degrees = fraction * 360f, pivot = center) {

@@ -153,23 +153,8 @@ private func drawSatWheel(
             showTrack: shown[ring],
             fill: look.comboFill(ring),
             trackOpacity: 0.10 + Double(ring) * 0.04,
-            tickCount: ring == 0 ? 36 : (ring == 1 ? 24 : 18),
             ink: ink
         )
-    }
-
-    if shown[innerIdx] {
-        var teeth = Path()
-        appendTicks(
-            &teeth,
-            center: center,
-            count: 18,
-            startDeg: -90,
-            stepDeg: 20,
-            outer: innerRadius - comboRim * 0.32,
-            length: comboRim * 0.5
-        )
-        context.stroke(teeth, with: .color(ink.opacity(0.30)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
     }
 
     let pegAngle = (frac * 360 - 90) * .pi / 180
@@ -237,7 +222,6 @@ private func drawComboBand(
     showTrack: Bool,
     fill: Color,
     trackOpacity: Double,
-    tickCount: Int,
     ink: Color
 ) {
     let radius = size / 2 - pad
@@ -251,30 +235,6 @@ private func drawComboBand(
     ))
     context.stroke(ring, with: .color(ink.opacity(0.22)), lineWidth: rim * 1.22)
     context.stroke(ring, with: .color(ink.opacity(trackOpacity)), lineWidth: rim)
-
-    let majorEvery = max(1, tickCount / 12)
-    var minor = Path()
-    var major = Path()
-    let step = 360.0 / Double(tickCount)
-    for i in 0..<tickCount {
-        if i % majorEvery == 0 {
-            appendTicks(&major, center: center, count: 1, startDeg: Double(i) * step - 90, stepDeg: step, outer: radius + rim * 0.44, length: rim * 0.88)
-        } else {
-            appendTicks(&minor, center: center, count: 1, startDeg: Double(i) * step - 90, stepDeg: step, outer: radius + rim * 0.21, length: rim * 0.42)
-        }
-    }
-    context.stroke(minor, with: .color(ink.opacity(0.11)), style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
-    context.stroke(major, with: .color(ink.opacity(0.32)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-    for i in 0..<4 {
-        let a = (Double(i) * 90 - 90) * .pi / 180
-        let rivetR = radius - rim * 0.12
-        fillCircle(
-            &context,
-            center: CGPoint(x: center.x + cos(a) * rivetR, y: center.y + sin(a) * rivetR),
-            radius: 1.55,
-            color: ink.opacity(0.42)
-        )
-    }
     guard drawArc else { return }
     let sweep = min(1, max(0, frac))
     var arc = Path()

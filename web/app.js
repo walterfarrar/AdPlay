@@ -818,7 +818,6 @@ async function ensureTapFlush() {
         confirmedState = overlayLiveTapUnits(next, afterTap);
         unackedTaps = Math.max(0, unackedTaps - 1);
         windowEndHandled = false;
-        publishOptimisticTaps();
       } catch {
         if (generation !== tapFlushGeneration) return;
         unackedTaps = 0;
@@ -1255,12 +1254,17 @@ async function withBusy(fn) {
 }
 
 function doTap() {
-  if (!confirmedState) return;
-  let probe = confirmedState;
-  for (let i = 0; i < unackedTaps; i++) probe = applyingManualTap(probe);
-  if (probe.tapsRemaining <= 0) return;
+  if (!confirmedState || !serverState) return;
+  if (serverState.tapsRemaining <= 0) return;
   unackedTaps += 1;
-  publishOptimisticTaps();
+  const prevProgress = serverState.progress;
+  serverState = applyingManualTap(serverState);
+  const projected = project(serverState, Date.now());
+  if (projected.progress + 5 < prevProgress) {
+    syncDisplayAnchors(projected.progress, { wrap: true });
+  } else {
+    syncDisplayAnchors(projected.progress);
+  }
   void ensureTapFlush();
 }
 
