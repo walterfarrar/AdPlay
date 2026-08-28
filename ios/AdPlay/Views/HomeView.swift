@@ -536,7 +536,7 @@ struct SatEarnStage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { context in
+            TimelineView(.periodic(from: .now, by: autoActive && fillRate > 0 ? 1.0 / 60.0 : 1.0 / 12.0)) { context in
                 satEarnTimeline(at: context.date)
             }
             .onChange(of: progress) { oldValue, newValue in
@@ -624,7 +624,7 @@ struct SatEarnStage: View {
         let fraction = total > 0 ? min(1.0, display / Double(total)) : 0.0
         let comboT = ComboTunables.from(session.tunables)
         let comboLive = ComboEngine.at(session.state.combo, now: now, tunables: comboT)
-        let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT)
+        let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT).map { ($0 * 200).rounded() / 200 }
         let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
         let comboMult = comboT.multiplier(of: comboLive)
         let pose = knockerPose(
@@ -659,6 +659,7 @@ struct SatEarnStage: View {
                         comboMultiplier: comboMult,
                         look: look
                     )
+                    .equatable()
                     .frame(width: wheelSize, height: wheelSize)
                     .scaleEffect(tapPulse ? 0.96 : 1)
                     .animation(.spring(response: 0.18, dampingFraction: 0.55), value: tapPulse)
@@ -677,6 +678,7 @@ struct SatEarnStage: View {
                     .background(wheelTipReporter)
                     .overlay {
                         AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+                            .equatable()
                             .scaleEffect(wheelSize / 220)
                             .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
                             .allowsHitTesting(false)
@@ -720,7 +722,7 @@ struct SatEarnStage: View {
 }
 
 /// Where the auto tapper is within one strike cycle.
-struct KnockerPose {
+struct KnockerPose: Equatable {
     /// 0 = cocked on the stop, 1 = head against the rim. Dips negative while winding up.
     var arm: CGFloat = 0
     /// 1 at the moment of contact, fading to 0 shortly after.
@@ -834,7 +836,7 @@ private enum KnockerGeometry {
 
 /// Side-mounted auto tapper: a geared hammer that swings onto the wheel rim.
 /// Driven only by Auto fill progress — manual taps do not move it.
-struct AutoKnockerView: View {
+struct AutoKnockerView: View, Equatable {
     let pose: KnockerPose
     var tapPower: Double = 1
     var active: Bool = true

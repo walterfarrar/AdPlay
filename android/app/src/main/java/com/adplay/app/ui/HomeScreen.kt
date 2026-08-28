@@ -917,12 +917,12 @@ private fun SatEarnStage(
     LaunchedEffect(Unit) {
         while (true) {
             comboNow = System.currentTimeMillis()
-            delay(32)
+            delay(80)
         }
     }
     val comboLive = ComboEngine.at(combo, comboNow, comboT)
     val comboMult = comboT.multiplier(comboLive)
-    val comboMeters = ComboEngine.displayMeters(comboLive, comboT)
+    val comboMeters = ComboEngine.displayMeters(comboLive, comboT).map { kotlin.math.round(it * 200.0) / 200.0 }
     val comboTracks = ComboEngine.displayTracks(comboLive, comboT)
     val tapsPerSec = tapsPerSecond(fillRate, tapPower)
     // Auto-only knocker clock. Never follow displayProgress (that includes combo taps).
@@ -1355,9 +1355,9 @@ private fun SatWheelView(
                 }
             }
 
-            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f, tickCount = 60)
-            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, tickCount = 48)
-            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, tickCount = 36)
+            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f, tickCount = 36)
+            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, tickCount = 24)
+            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, tickCount = 18)
 
             if (show0 || outerFrac > 0.001f || show1 || innerFrac > 0.001f || show2 || coreFrac > 0.001f) {
                 for (i in 0 until 18) {
