@@ -667,8 +667,7 @@ struct SatEarnStage: View {
                         tapPulse = true
                         if settings.hapticsEnabled {
                             let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
-                            UIImpactFeedbackGenerator(style: leveled ? .medium : .light)
-                                .impactOccurred()
+                            WheelHaptics.impact(leveled: leveled)
                         }
                         Task { await session.tap() }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -712,9 +711,9 @@ struct SatEarnStage: View {
         GeometryReader { geo in
             let frame = geo.frame(in: .named("satEarn"))
             Color.clear
-                .onAppear { satEarn.wheelTip = CGPoint(x: frame.midX, y: frame.minY + 8) }
+                .onAppear { satEarn.setWheelTip(CGPoint(x: frame.midX, y: frame.minY + 8)) }
                 .onChange(of: frame) { _, newFrame in
-                    satEarn.wheelTip = CGPoint(x: newFrame.midX, y: newFrame.minY + 8)
+                    satEarn.setWheelTip(CGPoint(x: newFrame.midX, y: newFrame.minY + 8))
                 }
         }
     }
@@ -800,265 +799,6 @@ private func easeOutQuad(_ t: Double) -> Double {
 private func easeInOutCubic(_ t: Double) -> Double {
     let x = Swift.min(1.0, Swift.max(0.0, t))
     return x < 0.5 ? 4 * x * x * x : 1 - pow(-2 * x + 2, 3) / 2
-}
-
-struct SatWheelView: View {
-    let fraction: Double
-    var flash: Bool = false
-    var comboFractions: [Double] = [0, 0, 0]
-    var comboTracks: [Bool] = [true, false, false]
-    var comboMultiplier: Double = 1
-    var look: ThemeLook = .ember
-
-    var body: some View {
-        GeometryReader { geo in
-            let size = min(geo.size.width, geo.size.height)
-            let rim = size * 0.06
-            let comboRim = rim * 0.50
-            let comboPitch = comboRim * 1.35
-            let pad0 = rim * 1.15
-            let pad1 = pad0 + comboPitch
-            let pad2 = pad0 + comboPitch * 2
-            let pads = [pad0, pad1, pad2]
-            let fracs = [
-                comboFractions.count > 0 ? comboFractions[0] : 0,
-                comboFractions.count > 1 ? comboFractions[1] : 0,
-                comboFractions.count > 2 ? comboFractions[2] : 0,
-            ]
-            let shown = [
-                (comboTracks.count > 0 ? comboTracks[0] : true) || fracs[0] > 0.001,
-                (comboTracks.count > 1 ? comboTracks[1] : false) || fracs[1] > 0.001,
-                (comboTracks.count > 2 ? comboTracks[2] : false) || fracs[2] > 0.001,
-            ]
-            let innerIdx = shown[2] ? 2 : (shown[1] ? 1 : 0)
-            let innerRadius = size / 2 - pads[innerIdx]
-            let pegOrbit = max(size * 0.16, innerRadius - comboRim * 0.55 - 5)
-            let comboLabel = ComboEngine.formatMultiplier(comboMultiplier)
-            ZStack {
-                Circle()
-                    .stroke(Color("BrandInk").opacity(0.08), lineWidth: rim)
-
-                Circle()
-                    .trim(from: 0, to: CGFloat(fraction))
-                    .stroke(
-                        AngularGradient(
-                            colors: flash
-                                ? [look.accent, Color.white, look.accent]
-                                : [look.fill, look.fillHot, look.fill],
-                            center: .center
-                        ),
-                        style: StrokeStyle(lineWidth: rim, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .shadow(
-                        color: (flash ? look.accent : look.fill).opacity(flash ? 0.9 : 0.45),
-                        radius: flash ? 16 : 8
-                    )
-
-                ZStack {
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color("BrandInk").opacity(0.04),
-                                    Color("BrandInk").opacity(0.10),
-                                ],
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: size * 0.48
-                            )
-                        )
-                        .padding(rim * 0.85)
-
-                    ForEach(0..<60, id: \.self) { i in
-                        Capsule()
-                            .fill(Color("BrandInk").opacity(0.10))
-                            .frame(width: 0.8, height: 5)
-                            .offset(y: -(size * 0.365))
-                            .rotationEffect(.degrees(Double(i) * 6))
-                    }
-                    ForEach(0..<12, id: \.self) { i in
-                        Capsule()
-                            .fill(Color("BrandInk").opacity(i % 3 == 0 ? 0.35 : 0.16))
-                            .frame(width: i % 3 == 0 ? 3 : 2, height: i % 3 == 0 ? 14 : 9)
-                            .offset(y: -(size * 0.38))
-                            .rotationEffect(.degrees(Double(i) * 30))
-                    }
-                }
-                .rotationEffect(.degrees(fraction * 360))
-                .animation(nil, value: fraction)
-
-                ForEach(0..<3, id: \.self) { ring in
-                    ComboBandView(
-                        pad: pads[ring],
-                        rim: comboRim,
-                        size: size,
-                        frac: fracs[ring],
-                        showTrack: shown[ring],
-                        fill: look.comboFill(ring),
-                        trackOpacity: 0.10 + Double(ring) * 0.04,
-                        tickCount: ring == 0 ? 60 : (ring == 1 ? 48 : 36)
-                    )
-                }
-
-                if shown[innerIdx] {
-                    ForEach(0..<18, id: \.self) { i in
-                        Capsule()
-                            .fill(Color("BrandInk").opacity(0.30))
-                            .frame(width: 1.3, height: comboRim * 0.5)
-                            .offset(y: -(innerRadius - comboRim * 0.82))
-                            .rotationEffect(.degrees(Double(i) * 20))
-                    }
-                }
-
-                // Peg rides just inside the innermost drawn combo stroke, on top.
-                ZStack {
-                    Circle()
-                        .fill(Color("BrandInk").opacity(0.55))
-                        .frame(width: 10, height: 10)
-                    Circle()
-                        .fill(look.accent.opacity(0.95))
-                        .frame(width: 7, height: 7)
-                    Circle()
-                        .fill(Color.white.opacity(0.35))
-                        .frame(width: 2.4, height: 2.4)
-                        .offset(x: -1.1, y: -1.1)
-                }
-                .offset(y: -pegOrbit)
-                .rotationEffect(.degrees(fraction * 360))
-                .animation(nil, value: fraction)
-
-                // Fixed 12 o'clock pointer
-                Triangle()
-                    .fill(flash ? look.accent : Color("BrandInk").opacity(0.75))
-                    .frame(width: 14, height: 12)
-                    .offset(y: -(size * 0.5) + 4)
-
-                // Strike plate at 3 o'clock — where the auto tapper lands.
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(Color("BrandInk").opacity(0.30))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .stroke(Color("BrandInk").opacity(0.35), lineWidth: 1)
-                    )
-                    .frame(width: 9, height: 26)
-                    .offset(x: size * 0.5)
-
-                // Center hub — combo multiplier when stacked
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color("BrandInk").opacity(0.12), Color("BrandInk").opacity(0.06)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: size * 0.28, height: size * 0.28)
-                    .overlay(
-                        Circle().stroke(Color("BrandInk").opacity(0.12), lineWidth: 1)
-                    )
-                    .overlay {
-                        if !comboLabel.isEmpty {
-                            Text(comboLabel)
-                                .font(.system(size: size * 0.07, weight: .bold, design: .rounded))
-                                .foregroundStyle(look.combo)
-                                .monospacedDigit()
-                                .minimumScaleFactor(0.7)
-                                .lineLimit(1)
-                        } else {
-                            Circle()
-                                .fill(look.accent.opacity(flash ? 0.55 : 0.2))
-                                .frame(width: size * 0.08, height: size * 0.08)
-                        }
-                    }
-
-                if flash {
-                    Circle()
-                        .stroke(look.accent.opacity(0.85), lineWidth: 2)
-                }
-            }
-            .frame(width: size, height: size)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-}
-
-private struct ComboBandView: View {
-    let pad: CGFloat
-    let rim: CGFloat
-    let size: CGFloat
-    let frac: Double
-    let showTrack: Bool
-    let fill: Color
-    let trackOpacity: Double
-    let tickCount: Int
-
-    var body: some View {
-        let radius = size / 2 - pad
-        let drawArc = frac > 0.001
-        let fresh = drawArc && frac < 0.18
-        ZStack {
-            if showTrack || drawArc {
-                Circle()
-                    .stroke(Color("BrandInk").opacity(0.22), lineWidth: rim * 1.22)
-                    .padding(pad)
-                Circle()
-                    .stroke(Color("BrandInk").opacity(trackOpacity), lineWidth: rim)
-                    .padding(pad)
-                ForEach(0..<tickCount, id: \.self) { i in
-                    let major = tickCount >= 12 && i % max(1, tickCount / 12) == 0
-                    Capsule()
-                        .fill(Color("BrandInk").opacity(major ? 0.32 : 0.11))
-                        .frame(width: major ? 1.5 : 0.7, height: major ? rim * 0.88 : rim * 0.42)
-                        .offset(y: -radius)
-                        .rotationEffect(.degrees(Double(i) * 360 / Double(tickCount)))
-                }
-                ForEach(0..<4, id: \.self) { i in
-                    Circle()
-                        .fill(Color("BrandInk").opacity(0.42))
-                        .frame(width: 3.1, height: 3.1)
-                        .overlay(Circle().stroke(Color("BrandInk").opacity(0.2), lineWidth: 0.5))
-                        .offset(y: -(radius - rim * 0.12))
-                        .rotationEffect(.degrees(Double(i) * 90))
-                }
-            }
-            if drawArc {
-                Circle()
-                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
-                    .stroke(
-                        fill.opacity(fresh ? 0.55 : 0.28),
-                        style: StrokeStyle(lineWidth: rim * (fresh ? 1.85 : 1.55), lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .padding(pad)
-                    .blur(radius: fresh ? 3.5 : 1.8)
-                Circle()
-                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
-                    .stroke(
-                        Color("BrandInk").opacity(0.38),
-                        style: StrokeStyle(lineWidth: rim, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .padding(pad)
-                Circle()
-                    .trim(from: 0, to: CGFloat(min(1, max(0, frac))))
-                    .stroke(fill, style: StrokeStyle(lineWidth: rim * 0.70, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .padding(pad)
-            }
-        }
-    }
-}
-
-private struct Triangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
 }
 
 /// Fixed tapper geometry, in points relative to the wheel centre.
@@ -1500,6 +1240,7 @@ struct RollingDigitsLabel: View {
     var fontSize: CGFloat = 42
 
     @State private var fromQuanta: Int64?
+    @State private var lastChange: Date = .distantPast
 
     private var digitFont: Font {
         .system(size: fontSize, weight: .heavy, design: .rounded)
@@ -1537,6 +1278,16 @@ struct RollingDigitsLabel: View {
         .onChange(of: quanta) { _, newValue in
             if (fromQuanta ?? 0) <= 0 && newValue >= 100_000 {
                 fromQuanta = newValue
+                lastChange = Date()
+                return
+            }
+            let now = Date()
+            let rapid = now.timeIntervalSince(lastChange) < 0.12
+            lastChange = now
+            // 60 fps auto-fill and stacked Stronger taps jump too many
+            // intermediate glyphs to tick on the main actor.
+            if rapid || abs(newValue - (fromQuanta ?? newValue)) > 400 {
+                fromQuanta = newValue
                 return
             }
             Task { @MainActor in
@@ -1552,7 +1303,7 @@ private struct RollingDigitSlot: View {
     let rollId: Int64
     let font: Font
 
-    /// No slide — just tick the glyph through intermediates (incl. full-turn carries).
+    /// Short upward ticks only. Large Stronger jumps snap so the wheel stays live.
     @State private var displayed: Int = 0
     @State private var primed = false
     @State private var rollTask: Task<Void, Never>?
@@ -1571,19 +1322,18 @@ private struct RollingDigitSlot: View {
                 let target = max(0, min(9, digit))
                 let n = max(0, steps)
                 rollTask?.cancel()
+                if n == 0 || n > 6 {
+                    displayed = target
+                    return
+                }
                 rollTask = Task { @MainActor in
                     defer {
                         if Task.isCancelled { displayed = target }
                     }
-                    if n == 0 {
-                        displayed = target
-                        return
-                    }
-                    let tickNs: UInt64 = n >= 20 ? 20_000_000 : n >= 10 ? 30_000_000 : 45_000_000
                     for _ in 0..<n {
                         if Task.isCancelled { return }
                         displayed = (displayed + 1) % 10
-                        try? await Task.sleep(nanoseconds: tickNs)
+                        try? await Task.sleep(nanoseconds: 35_000_000)
                     }
                     if !Task.isCancelled {
                         displayed = target
@@ -1593,6 +1343,16 @@ private struct RollingDigitSlot: View {
             .onDisappear {
                 rollTask?.cancel()
             }
+    }
+}
+
+private enum WheelHaptics {
+    static let light = UIImpactFeedbackGenerator(style: .light)
+    static let medium = UIImpactFeedbackGenerator(style: .medium)
+
+    static func impact(leveled: Bool) {
+        let gen = leveled ? medium : light
+        gen.impactOccurred()
     }
 }
 

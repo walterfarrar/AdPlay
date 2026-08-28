@@ -2,11 +2,19 @@ import AudioToolbox
 import SwiftUI
 import UIKit
 
+private let satEarnHaptic = UIImpactFeedbackGenerator(style: .medium)
+
 /// Shared sat-earn flight targets in the `satEarn` coordinate space.
 final class SatEarnFlight: ObservableObject {
     @Published var wheelTip: CGPoint = .zero
     @Published var redeem: CGPoint = .zero
     @Published var canvasSize: CGSize = .zero
+
+    /// Ignore sub-point jitter so 60 fps layout does not republish the whole Play shell.
+    func setWheelTip(_ next: CGPoint) {
+        if hypot(wheelTip.x - next.x, wheelTip.y - next.y) < 1.5 { return }
+        wheelTip = next
+    }
 }
 
 /// Hosts the sat orb overlay above the tab bar so a earned sat can land on Redeem.
@@ -138,7 +146,7 @@ struct SatEarnFlightHost<Content: View>: View {
         }
 
         if settings.hapticsEnabled {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            satEarnHaptic.impactOccurred()
         }
         if settings.soundEnabled {
             AudioServicesPlaySystemSound(1057)
