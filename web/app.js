@@ -47,6 +47,7 @@ let rafId = 0;
 let refreshTimerId = null;
 let loading = false;
 let lastRenderedSats = null;
+let lastComboTickDeg = [null, null, null];
 let wheelFlashUntil = 0;
 let lastCelebrateAt = 0;
 
@@ -249,6 +250,20 @@ function displayTracks(state, t) {
     taps > 1e-9,
     caps.ring1Enabled && taps >= caps.c0 - 1e-12,
     caps.ring2Enabled && taps >= caps.c0 * caps.c1 - 1e-12,
+  ];
+}
+
+/** Tick-bezel turns from the live tap counter (not the stepped fill). */
+function displaySpins(state, t) {
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  const c0 = caps.c0;
+  const c1 = Math.max(1, caps.c1);
+  const c2 = Math.max(1, caps.c2);
+  return [
+    taps / c0,
+    caps.ring1Enabled ? taps / (c0 * c1) : 0,
+    caps.ring2Enabled ? taps / (c0 * c1 * c2) : 0,
   ];
 }
 
@@ -1069,7 +1084,11 @@ function renderFrame(state, _rafNow) {
   const comboLive = comboAt(persistedCombo(state), nowMs, comboT);
   const meters = displayMeters(comboLive, comboT);
   const tracks = displayTracks(comboLive, comboT);
-  function paintComboArc(id, glowId, frac, showTrack, bandId) {
+  const spins = displaySpins(
+    { taps: Math.round(comboLive.taps * 2) / 2, lastTapAtMs: comboLive.lastTapAtMs },
+    comboT
+  );
+  function paintComboArc(id, glowId, frac, showTrack, bandId, spinTurns, spinIdx) {
     const el = $(id);
     if (!el) return;
     const drawArc = frac > 0.001;
@@ -1083,11 +1102,21 @@ function renderFrame(state, _rafNow) {
       glow.style.opacity = drawArc && frac < 0.18 ? "0.5" : "";
     }
     const band = bandId ? $(bandId) : null;
-    if (band) band.classList.toggle("hidden", !showTrack && !drawArc);
+    if (band) {
+      band.classList.toggle("hidden", !showTrack && !drawArc);
+      const ticks = band.querySelector(".combo-ticks");
+      if (ticks) {
+        const deg = Math.round((((spinTurns || 0) % 1) * 360 - 90) * 100) / 100;
+        if (lastComboTickDeg[spinIdx] !== deg) {
+          lastComboTickDeg[spinIdx] = deg;
+          ticks.setAttribute("transform", `rotate(${deg} 110 110)`);
+        }
+      }
+    }
   }
-  paintComboArc("combo-arc", "combo-glow-0", meters[0] || 0, true, "combo-band-0");
-  paintComboArc("combo-arc-1", "combo-glow-1", meters[1] || 0, !!tracks[1], "combo-band-1");
-  paintComboArc("combo-arc-2", "combo-glow-2", meters[2] || 0, !!tracks[2], "combo-band-2");
+  paintComboArc("combo-arc", "combo-glow-0", meters[0] || 0, !!tracks[0], "combo-band-0", spins[0], 0);
+  paintComboArc("combo-arc-1", "combo-glow-1", meters[1] || 0, !!tracks[1], "combo-band-1", spins[1], 1);
+  paintComboArc("combo-arc-2", "combo-glow-2", meters[2] || 0, !!tracks[2], "combo-band-2", spins[2], 2);
   const innerR = (tracks[2] || (meters[2] || 0) > 0.001)
     ? 66
     : (tracks[1] || (meters[1] || 0) > 0.001) ? 76 : 86;

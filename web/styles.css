@@ -180,24 +180,28 @@ body {
 
 .combo-hash {
   fill: none;
-  stroke: rgba(244, 245, 250, 0.12);
+  stroke: var(--combo-0);
   stroke-width: 7;
   stroke-dasharray: 1.2 4.8;
-  transform: rotate(-90deg);
-  transform-origin: 110px 110px;
+  opacity: 0.38;
 }
 
 .combo-hash-major {
   fill: none;
-  stroke: rgba(244, 245, 250, 0.3);
+  stroke: var(--combo-0);
   stroke-width: 8;
   stroke-dasharray: 2 28;
-  transform: rotate(-90deg);
-  transform-origin: 110px 110px;
+  opacity: 0.70;
 }
 
-.combo-rivet {
-  fill: rgba(244, 245, 250, 0.42);
+#combo-band-1 .combo-hash,
+#combo-band-1 .combo-hash-major {
+  stroke: var(--combo-1);
+}
+
+#combo-band-2 .combo-hash,
+#combo-band-2 .combo-hash-major {
+  stroke: var(--combo-2);
 }
 
 .combo-arc,

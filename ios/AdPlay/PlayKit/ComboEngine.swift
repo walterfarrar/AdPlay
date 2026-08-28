@@ -287,6 +287,20 @@ enum ComboEngine {
         ]
     }
 
+    /// Tick-bezel turns from the live tap counter (not the stepped fill).
+    static func displaySpins(_ state: ComboState, tunables t: ComboTunables) -> [Double] {
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        let c0 = Double(caps.c0)
+        let c1 = Double(max(1, caps.c1))
+        let c2 = Double(max(1, caps.c2))
+        return [
+            taps / c0,
+            caps.ring1Enabled ? taps / (c0 * c1) : 0,
+            caps.ring2Enabled ? taps / (c0 * c1 * c2) : 0,
+        ]
+    }
+
     static func wouldCompleteOuter(_ state: ComboState, tunables t: ComboTunables) -> Bool {
         let caps = t.caps
         let taps = clampTaps(state.taps, tunables: t)

@@ -924,6 +924,10 @@ private fun SatEarnStage(
     val comboMult = comboT.multiplier(comboLive)
     val comboMeters = ComboEngine.displayMeters(comboLive, comboT).map { kotlin.math.round(it * 200.0) / 200.0 }
     val comboTracks = ComboEngine.displayTracks(comboLive, comboT)
+    val comboSpins = ComboEngine.displaySpins(
+        ComboState(taps = kotlin.math.round(comboLive.taps * 2.0) / 2.0, lastTapAtMs = comboLive.lastTapAtMs),
+        comboT,
+    )
     val tapsPerSec = tapsPerSecond(fillRate, tapPower)
     // Auto-only knocker clock. Never follow displayProgress (that includes combo taps).
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -1055,6 +1059,7 @@ private fun SatEarnStage(
                     flash = wheelFlash,
                     comboFractions = comboMeters,
                     comboTracks = comboTracks,
+                    comboSpins = comboSpins,
                     comboMultiplier = comboMult,
                     onTap = onTap,
                     modifier = Modifier
@@ -1159,6 +1164,7 @@ private fun SatWheelView(
     flash: Float,
     comboFractions: List<Double> = listOf(0.0, 0.0, 0.0),
     comboTracks: List<Boolean> = listOf(true, false, false),
+    comboSpins: List<Double> = listOf(0.0, 0.0, 0.0),
     comboMultiplier: Double = 1.0,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1182,6 +1188,26 @@ private fun SatWheelView(
             val show1 = comboTracks.getOrNull(1) == true
             val show2 = comboTracks.getOrNull(2) == true
 
+            fun appendComboTicks(
+                path: Path,
+                ringRadius: Float,
+                stroke: Float,
+                length: Float,
+                count: Int,
+            ) {
+                val outer = ringRadius + stroke * 0.36f
+                val inner = outer - length
+                var angle = -PI / 2.0
+                val step = 2.0 * PI / count
+                repeat(count) {
+                    val cosA = cos(angle).toFloat()
+                    val sinA = sin(angle).toFloat()
+                    path.moveTo(center.x + cosA * inner, center.y + sinA * inner)
+                    path.lineTo(center.x + cosA * outer, center.y + sinA * outer)
+                    angle += step
+                }
+            }
+
             fun drawComboRing(
                 ringRadius: Float,
                 stroke: Float,
@@ -1189,54 +1215,63 @@ private fun SatWheelView(
                 color: Color,
                 showTrack: Boolean,
                 trackAlpha: Float,
+                spinTurns: Float,
             ) {
                 val drawArc = frac > 0.001f
-                if (showTrack || drawArc) {
-                    drawCircle(
-                        color = BrandInk.copy(alpha = 0.22f),
-                        radius = ringRadius,
-                        center = center,
-                        style = Stroke(width = stroke * 1.22f),
+                if (!showTrack && !drawArc) return
+                drawCircle(
+                    color = BrandInk.copy(alpha = 0.22f),
+                    radius = ringRadius,
+                    center = center,
+                    style = Stroke(width = stroke * 1.22f),
+                )
+                drawCircle(
+                    color = BrandInk.copy(alpha = trackAlpha),
+                    radius = ringRadius,
+                    center = center,
+                    style = Stroke(width = stroke),
+                )
+                if (drawArc) {
+                    val sweep = 360f * frac.coerceIn(0f, 1f)
+                    val fresh = frac < 0.18f
+                    val box = Offset(center.x - ringRadius, center.y - ringRadius)
+                    val boxSize = Size(ringRadius * 2f, ringRadius * 2f)
+                    drawArc(
+                        color = color.copy(alpha = if (fresh) 0.42f else 0.22f),
+                        startAngle = -90f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        topLeft = box,
+                        size = boxSize,
+                        style = Stroke(width = stroke * if (fresh) 1.85f else 1.55f, cap = StrokeCap.Round),
                     )
-                    drawCircle(
-                        color = BrandInk.copy(alpha = trackAlpha),
-                        radius = ringRadius,
-                        center = center,
-                        style = Stroke(width = stroke),
+                    drawArc(
+                        color = BrandInk.copy(alpha = 0.38f),
+                        startAngle = -90f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        topLeft = box,
+                        size = boxSize,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    )
+                    drawArc(
+                        color = color,
+                        startAngle = -90f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        topLeft = box,
+                        size = boxSize,
+                        style = Stroke(width = stroke * 0.70f, cap = StrokeCap.Round),
                     )
                 }
-                if (!drawArc) return
-                val sweep = 360f * frac.coerceIn(0f, 1f)
-                val fresh = frac < 0.18f
-                val box = Offset(center.x - ringRadius, center.y - ringRadius)
-                val boxSize = Size(ringRadius * 2f, ringRadius * 2f)
-                drawArc(
-                    color = color.copy(alpha = if (fresh) 0.42f else 0.22f),
-                    startAngle = -90f,
-                    sweepAngle = sweep,
-                    useCenter = false,
-                    topLeft = box,
-                    size = boxSize,
-                    style = Stroke(width = stroke * if (fresh) 1.85f else 1.55f, cap = StrokeCap.Round),
-                )
-                drawArc(
-                    color = BrandInk.copy(alpha = 0.38f),
-                    startAngle = -90f,
-                    sweepAngle = sweep,
-                    useCenter = false,
-                    topLeft = box,
-                    size = boxSize,
-                    style = Stroke(width = stroke, cap = StrokeCap.Round),
-                )
-                drawArc(
-                    color = color,
-                    startAngle = -90f,
-                    sweepAngle = sweep,
-                    useCenter = false,
-                    topLeft = box,
-                    size = boxSize,
-                    style = Stroke(width = stroke * 0.70f, cap = StrokeCap.Round),
-                )
+                val minor = Path()
+                val major = Path()
+                appendComboTicks(minor, ringRadius, stroke, stroke * 0.40f, 24)
+                appendComboTicks(major, ringRadius, stroke, stroke * 0.78f, 8)
+                rotate(degrees = spinTurns * 360f, pivot = center) {
+                    drawPath(minor, color.copy(alpha = 0.38f), style = Stroke(width = 1.05f, cap = StrokeCap.Round))
+                    drawPath(major, color.copy(alpha = 0.70f), style = Stroke(width = 1.65f, cap = StrokeCap.Round))
+                }
             }
 
             drawCircle(
@@ -1327,9 +1362,12 @@ private fun SatWheelView(
                 }
             }
 
-            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = true, trackAlpha = 0.10f)
-            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f)
-            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f)
+            val spin0 = comboSpins.getOrNull(0)?.toFloat() ?: 0f
+            val spin1 = comboSpins.getOrNull(1)?.toFloat() ?: 0f
+            val spin2 = comboSpins.getOrNull(2)?.toFloat() ?: 0f
+            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = show0, trackAlpha = 0.10f, spinTurns = spin0)
+            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, spinTurns = spin1)
+            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, spinTurns = spin2)
 
             // Peg just inside the innermost drawn combo stroke, on top of the rings.
             rotate(degrees = fraction * 360f, pivot = center) {
