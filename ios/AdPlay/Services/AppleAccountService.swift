@@ -1,7 +1,6 @@
 import AuthenticationServices
 import CryptoKit
 import FirebaseAuth
-import UIKit
 
 enum AppleAccountError: LocalizedError {
     case canceled
@@ -74,7 +73,7 @@ final class AppleAccountCoordinator: NSObject {
             case .operationNotAllowed:
                 return "Apple sign-in is not enabled on the Firebase project."
             case .invalidCredential:
-                return "Apple’s token was rejected (code \(ns.code)). Confirm Sign in with Apple on App ID com.adplay.app and that this TestFlight includes the Apple entitlement."
+                return "Apple’s token was rejected (Firebase \(ns.code))."
             case .networkError:
                 return "Network error while saving progress with Apple."
             case .userDisabled:
@@ -84,7 +83,10 @@ final class AppleAccountCoordinator: NSObject {
             }
         }
         if ns.domain == ASAuthorizationError.errorDomain {
-            return "Apple sign-in failed (code \(ns.code)). Install a new TestFlight if this build predates the Apple capability."
+            if ns.code == ASAuthorizationError.unknown.rawValue {
+                return "Apple rejected sign-in (code 1000). Enable Sign in with Apple on App ID com.adplay.app (Identifiers, not only App Store Connect), refresh the Codemagic profile, and install that new TestFlight."
+            }
+            return "Apple sign-in failed (code \(ns.code))."
         }
         return ns.localizedDescription
     }

@@ -88,7 +88,9 @@ struct HomeView: View {
             AchievementsView()
                 .environmentObject(session)
         }
-        .sheet(isPresented: $showSettings) {
+        // Full screen, not a card sheet — Sign in with Apple returns
+        // ASAuthorizationError.unknown (1000) when started from a .sheet.
+        .fullScreenCover(isPresented: $showSettings) {
             SettingsView(showsClose: true)
                 .environmentObject(session)
                 .environmentObject(settings)
