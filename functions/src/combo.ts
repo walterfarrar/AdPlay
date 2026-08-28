@@ -164,11 +164,10 @@ export function formatComboMultiplier(m: number): string {
   return `×${(Math.round(m * 10000) / 10000).toFixed(4)}`;
 }
 
-/** Visible fill: at contribution max stay full; otherwise the current meter. */
+/** Visible fill is the current meter. Contribution max does not freeze the arc. */
 export function displayMeters(state: ComboState, t: ComboParams): number[] {
   return state.rings.map((r, i) => {
     if (!ringEnabled(i, t)) return 0;
-    if (isAtMax(state, i, t)) return 1;
     return clamp01(r.meter);
   });
 }
