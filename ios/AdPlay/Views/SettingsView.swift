@@ -39,15 +39,10 @@ struct SettingsView: View {
                             Text("Keep sats and progress when you get a new phone. Play still starts without signing in.")
                                 .font(.footnote)
                                 .foregroundStyle(Color("BrandMuted"))
-                            SignInWithAppleButton(.signIn) { request in
-                                AppleAccountCoordinator.shared.configure(request)
-                            } onCompletion: { result in
+                            AppleSignInButton(isEnabled: !session.isLoading) { result in
                                 Task { await saveProgressWithApple(result) }
                             }
-                            .signInWithAppleButtonStyle(.white)
                             .frame(height: 44)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .disabled(session.isLoading)
                             .accessibilityLabel("Save progress with Apple")
                         }
                         Link("Privacy policy", destination: privacyURL)
