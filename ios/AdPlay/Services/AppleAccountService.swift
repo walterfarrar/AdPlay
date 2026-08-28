@@ -83,9 +83,6 @@ final class AppleAccountCoordinator: NSObject {
             }
         }
         if ns.domain == ASAuthorizationError.errorDomain {
-            if ns.code == ASAuthorizationError.unknown.rawValue {
-                return "Apple rejected sign-in (code 1000). Enable Sign in with Apple on App ID com.adplay.app (Identifiers, not only App Store Connect), refresh the Codemagic profile, and install that new TestFlight."
-            }
             return "Apple sign-in failed (code \(ns.code))."
         }
         return ns.localizedDescription

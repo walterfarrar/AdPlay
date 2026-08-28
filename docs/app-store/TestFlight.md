@@ -6,7 +6,7 @@
 2. Confirm AdPlay store pages are deployed on FullyVersedWebsite (`/adplay`, `/adplay/privacy`, `/adplay/support`) — unlinked from main site nav/footer.
 3. Set production API URL in the iOS build (`ADPLAY_API_URL`).
 4. Generate Xcode project: `cd ios && xcodegen generate` (requires [XcodeGen](https://github.com/yonaskolb/XcodeGen)).
-5. Enable Sign in with Apple on the App ID (`com.adplay.app`) under Certificates, Identifiers & Profiles, then refresh the Codemagic signing profile. Also enable Apple in Firebase Authentication → Sign-in method (native iOS uses the ID token; Services ID / Team ID / Key are for web revoke later). Settings → Sign in with Apple links the anonymous session.
+5. Enable Sign in with Apple on App ID `com.adplay.app`, regenerate the AdPlay provisioning profile, and enable Apple in Firebase Authentication. Settings → Sign in with Apple links the anonymous session.
 6. Paste [ReviewNotes.md](./ReviewNotes.md) into App Review Notes; use the Privacy / Support / Marketing URLs listed there in App Store Connect.
 7. Archive → Upload → TestFlight internal → external → App Review.
 
