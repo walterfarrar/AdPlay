@@ -330,7 +330,7 @@ fun HomeScreen(
                         autoFillUntil = state.autoFillUntil,
                         fillRate = state.fillRate,
                         tapPower = state.tapPower,
-                        combo = state.combo,
+                        combo = state.combo(ComboTunables.from(ui.tunables)),
                         tunables = ui.tunables,
                         onTap = onTap,
                         wheelFlash = barFlashAnimated,
