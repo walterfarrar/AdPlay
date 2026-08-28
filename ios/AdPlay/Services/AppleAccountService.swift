@@ -41,7 +41,9 @@ final class AppleAccountCoordinator: NSObject, ASAuthorizationControllerDelegate
     func configure(_ request: ASAuthorizationAppleIDRequest) {
         let nonce = Self.randomNonce()
         rawNonce = nonce
-        request.requestedScopes = [.fullName, .email]
+        // Name only. Email triggers Share / Hide My Email, which Apple aborted
+        // with "Sign Up Not Completed" before AdPlay is listed on the Apple ID.
+        request.requestedScopes = [.fullName]
         request.nonce = Self.sha256(nonce)
     }
 
@@ -189,12 +191,15 @@ struct AppleSignInButton: UIViewRepresentable {
         Coordinator(onCompletion: onCompletion)
     }
 
+    // NSObject is required: UIKit target-action dispatches through the
+    // Objective-C runtime, and @objc members need an NSObject subclass.
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject {
         var onCompletion: (Result<ASAuthorization, Error>) -> Void
 
         init(onCompletion: @escaping (Result<ASAuthorization, Error>) -> Void) {
             self.onCompletion = onCompletion
+            super.init()
         }
 
         @objc func tapped(_ sender: UIView) {
