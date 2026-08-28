@@ -21,9 +21,9 @@ PROFILE_DIRS = [
 ]
 
 
-def run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(args: list[str]) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(args), flush=True)
-    return subprocess.run(args, check=check, text=True, capture_output=True)
+    return subprocess.run(args, check=False, text=True, capture_output=True)
 
 
 def echo_proc(proc: subprocess.CompletedProcess[str]) -> None:
@@ -33,15 +33,39 @@ def echo_proc(proc: subprocess.CompletedProcess[str]) -> None:
         print(proc.stderr, end="" if proc.stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
 
 
+def extract_json(text: str) -> object:
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    for start, end in (("[", "]"), ("{", "}")):
+        i = text.find(start)
+        j = text.rfind(end)
+        if i != -1 and j > i:
+            try:
+                return json.loads(text[i : j + 1])
+            except json.JSONDecodeError:
+                continue
+    raise ValueError(f"No JSON in App Store Connect output:\n{text[:800]}")
+
+
 def asc_json(args: list[str]) -> object:
-    proc = run(["app-store-connect", *args, "--json"], check=False)
+    proc = run(["app-store-connect", *args, "--json", "--silent"])
     echo_proc(proc)
     if proc.returncode != 0:
         raise SystemExit(proc.returncode or 1)
-    text = (proc.stdout or "").strip()
-    if not text:
-        return []
-    return json.loads(text)
+    try:
+        return extract_json(proc.stdout or "")
+    except ValueError:
+        # --silent can swallow JSON on older CLI builds; retry with logs on stderr.
+        proc = run(["app-store-connect", *args, "--json"])
+        echo_proc(proc)
+        if proc.returncode != 0:
+            raise SystemExit(proc.returncode or 1)
+        return extract_json(proc.stdout or "")
 
 
 def resources(payload: object) -> list[dict]:
@@ -93,15 +117,16 @@ def local_bundle_profiles() -> list[tuple[Path, str]]:
     return found
 
 
-def local_has_applesignin() -> bool:
-    ok = False
+def remove_local_profiles_without_applesignin() -> list[Path]:
+    kept: list[Path] = []
     for path, decoded in local_bundle_profiles():
         if "applesignin" in decoded:
             print(f"OK: {path.name} includes applesignin", flush=True)
-            ok = True
+            kept.append(path)
         else:
-            print(f"MISSING applesignin: {path.name}", flush=True)
-    return ok
+            print(f"Removing stale local profile {path.name} (no applesignin)", flush=True)
+            path.unlink(missing_ok=True)
+    return kept
 
 
 def find_bundle_resource_id() -> str:
@@ -124,14 +149,8 @@ def find_bundle_resource_id() -> str:
 def capability_enabled(bundle_resource_id: str) -> bool:
     payload = asc_json(["bundle-ids", "capabilities", bundle_resource_id])
     for item in resources(payload):
-        cap = str(
-            nested(item, "attributes", "capabilityType")
-            or item.get("capabilityType")
-            or item.get("capability_type")
-            or ""
-        ).upper()
         blob = json.dumps(item).upper()
-        if cap in {"APPLE_ID_AUTH", "SIGN_IN_WITH_APPLE"} or "APPLE_ID_AUTH" in blob or "SIGN IN WITH APPLE" in blob:
+        if "APPLE_ID_AUTH" in blob or "SIGN IN WITH APPLE" in blob or "SIGN_IN_WITH_APPLE" in blob:
             return True
     return False
 
@@ -149,10 +168,11 @@ def enable_apple_signin(bundle_resource_id: str) -> None:
             bundle_resource_id,
             "--capability",
             "Sign In with Apple",
-        ],
-        check=False,
+        ]
     )
     echo_proc(proc)
+    if capability_enabled(bundle_resource_id):
+        return
     if proc.returncode != 0:
         print(
             "Could not enable Sign in with Apple via the App Store Connect API. "
@@ -163,11 +183,10 @@ def enable_apple_signin(bundle_resource_id: str) -> None:
             flush=True,
         )
         raise SystemExit(proc.returncode or 1)
-    if not capability_enabled(bundle_resource_id):
-        raise SystemExit(f"Sign in with Apple is still missing on App ID {BUNDLE_ID}.")
+    raise SystemExit(f"Sign in with Apple is still missing on App ID {BUNDLE_ID}.")
 
 
-def delete_stale_app_store_profiles(bundle_resource_id: str) -> None:
+def delete_remote_app_store_profiles(bundle_resource_id: str) -> None:
     payload = asc_json(
         [
             "bundle-ids",
@@ -184,34 +203,35 @@ def delete_stale_app_store_profiles(bundle_resource_id: str) -> None:
         return
     for profile_id in ids:
         print(f"Deleting stale App Store profile {profile_id}.", flush=True)
-        proc = run(
-            ["app-store-connect", "profiles", "delete", profile_id, "--ignore-not-found"],
-            check=False,
-        )
+        proc = run(["app-store-connect", "profiles", "delete", profile_id, "--ignore-not-found"])
         echo_proc(proc)
         if proc.returncode != 0:
             raise SystemExit(proc.returncode or 1)
-    for path, decoded in local_bundle_profiles():
-        if "applesignin" not in decoded:
-            print(f"Removing local stale profile {path}.", flush=True)
-            path.unlink(missing_ok=True)
 
 
 def fetch_app_store_profile() -> None:
-    proc = run(
-        [
-            "app-store-connect",
-            "fetch-signing-files",
-            BUNDLE_ID,
-            "--type",
-            "IOS_APP_STORE",
-            "--platform",
-            "IOS",
-            "--create",
-            "--strict-match-identifier",
-        ],
-        check=False,
-    )
+    args = [
+        "app-store-connect",
+        "fetch-signing-files",
+        BUNDLE_ID,
+        "--type",
+        "IOS_APP_STORE",
+        "--platform",
+        "IOS",
+        "--create",
+        "--delete-stale-profiles",
+        "--strict-match-identifier",
+    ]
+    # Present when Codemagic ios_signing already fetched a distribution cert.
+    for key in (
+        "CERTIFICATE_PRIVATE_KEY",
+        "CM_CERTIFICATE_PRIVATE_KEY",
+        "APP_STORE_CONNECT_CERTIFICATE_PRIVATE_KEY",
+    ):
+        if os.environ.get(key):
+            args.extend(["--certificate-key", f"@env:{key}"])
+            break
+    proc = run(args)
     echo_proc(proc)
     if proc.returncode != 0:
         raise SystemExit(proc.returncode or 1)
@@ -221,12 +241,13 @@ def main() -> int:
     bundle_resource_id = find_bundle_resource_id()
     print(f"Bundle ID resource {bundle_resource_id} for {BUNDLE_ID}.", flush=True)
     enable_apple_signin(bundle_resource_id)
-    if local_has_applesignin():
+    kept = remove_local_profiles_without_applesignin()
+    if kept:
         return 0
     print("Refreshing the App Store profile so it picks up Sign in with Apple.", flush=True)
-    delete_stale_app_store_profiles(bundle_resource_id)
+    delete_remote_app_store_profiles(bundle_resource_id)
     fetch_app_store_profile()
-    if local_has_applesignin():
+    if remove_local_profiles_without_applesignin():
         return 0
     print(
         f"The App Store profile for {BUNDLE_ID} still lacks com.apple.developer.applesignin "
