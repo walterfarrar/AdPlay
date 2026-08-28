@@ -1,14 +1,23 @@
 import SwiftUI
 
-/// Sat wheel chrome. Drawn in one Canvas so 60 fps combo / Stronger taps
-/// do not rebuild hundreds of Capsule views.
-struct SatWheelView: View {
+/// Sat wheel chrome. One Canvas, batched ticks, Equatable so 60 fps
+/// combo drain does not redraw when the rings have not moved.
+struct SatWheelView: View, Equatable {
     let fraction: Double
     var flash: Bool = false
     var comboFractions: [Double] = [0, 0, 0]
     var comboTracks: [Bool] = [true, false, false]
     var comboMultiplier: Double = 1
     var look: ThemeLook = .ember
+
+    static func == (lhs: SatWheelView, rhs: SatWheelView) -> Bool {
+        lhs.fraction == rhs.fraction
+            && lhs.flash == rhs.flash
+            && lhs.comboFractions == rhs.comboFractions
+            && lhs.comboTracks == rhs.comboTracks
+            && lhs.comboMultiplier == rhs.comboMultiplier
+            && lhs.look.id == rhs.look.id
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -59,10 +68,7 @@ private func drawSatWheel(
     let radius = size / 2 - rim / 2
     let comboRim = rim * 0.50
     let comboPitch = comboRim * 1.35
-    let pad0 = rim * 1.15
-    let pad1 = pad0 + comboPitch
-    let pad2 = pad0 + comboPitch * 2
-    let pads = [pad0, pad1, pad2]
+    let pads = [rim * 1.15, rim * 1.15 + comboPitch, rim * 1.15 + comboPitch * 2]
     let fracs = [
         comboFractions.count > 0 ? comboFractions[0] : 0,
         comboFractions.count > 1 ? comboFractions[1] : 0,
@@ -79,13 +85,11 @@ private func drawSatWheel(
     let ink = Color("BrandInk")
     let frac = min(1, max(0, fraction))
 
-    let track = Path(ellipseIn: CGRect(
-        x: center.x - radius,
-        y: center.y - radius,
-        width: radius * 2,
-        height: radius * 2
-    ))
-    context.stroke(track, with: .color(ink.opacity(0.08)), lineWidth: rim)
+    context.stroke(
+        Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+        with: .color(ink.opacity(0.08)),
+        lineWidth: rim
+    )
 
     if frac > 0.0005 {
         var arc = Path()
@@ -96,67 +100,47 @@ private func drawSatWheel(
             endAngle: .degrees(-90 + frac * 360),
             clockwise: false
         )
-        var glow = context
-        glow.addFilter(.shadow(
-            color: (flash ? look.accent : look.fill).opacity(flash ? 0.9 : 0.45),
-            radius: flash ? 16 : 8
-        ))
-        glow.stroke(
-            arc,
-            with: .linearGradient(
-                Gradient(colors: flash
-                    ? [look.accent, Color.white, look.accent]
-                    : [look.fill, look.fillHot, look.fill]),
-                startPoint: CGPoint(x: center.x, y: center.y - radius),
-                endPoint: CGPoint(x: center.x, y: center.y + radius)
-            ),
-            style: StrokeStyle(lineWidth: rim, lineCap: .round)
-        )
+        if flash {
+            var glow = context
+            glow.addFilter(.shadow(color: look.accent.opacity(0.9), radius: 16))
+            glow.stroke(
+                arc,
+                with: .color(look.accent),
+                style: StrokeStyle(lineWidth: rim, lineCap: .round)
+            )
+        } else {
+            context.stroke(
+                arc,
+                with: .linearGradient(
+                    Gradient(colors: [look.fill, look.fillHot, look.fill]),
+                    startPoint: CGPoint(x: center.x, y: center.y - radius),
+                    endPoint: CGPoint(x: center.x, y: center.y + radius)
+                ),
+                style: StrokeStyle(lineWidth: rim, lineCap: .round)
+            )
+        }
     }
 
-    context.drawLayer { face in
-        face.translateBy(x: center.x, y: center.y)
-        face.rotate(by: .degrees(frac * 360))
-        face.translateBy(x: -center.x, y: -center.y)
-        let faceR = size * 0.48 - rim * 0.85
-        face.fill(
-            Path(ellipseIn: CGRect(
-                x: center.x - faceR,
-                y: center.y - faceR,
-                width: faceR * 2,
-                height: faceR * 2
-            )),
-            with: .radialGradient(
-                Gradient(colors: [ink.opacity(0.04), ink.opacity(0.10)]),
-                center: center,
-                startRadius: 0,
-                endRadius: size * 0.48
-            )
+    let spin = frac * 360
+    let faceR = size * 0.48 - rim * 0.85
+    context.fill(
+        Path(ellipseIn: CGRect(x: center.x - faceR, y: center.y - faceR, width: faceR * 2, height: faceR * 2)),
+        with: .radialGradient(
+            Gradient(colors: [ink.opacity(0.04), ink.opacity(0.10)]),
+            center: center,
+            startRadius: 0,
+            endRadius: size * 0.48
         )
-        for i in 0..<60 {
-            strokeTick(
-                into: &face,
-                center: center,
-                angleDeg: Double(i) * 6 - 90,
-                outer: size * 0.365,
-                length: 5,
-                width: 0.8,
-                color: ink.opacity(0.10)
-            )
-        }
-        for i in 0..<12 {
-            let major = i % 3 == 0
-            strokeTick(
-                into: &face,
-                center: center,
-                angleDeg: Double(i) * 30 - 90,
-                outer: size * 0.38,
-                length: major ? 14 : 9,
-                width: major ? 3 : 2,
-                color: ink.opacity(major ? 0.35 : 0.16)
-            )
-        }
-    }
+    )
+    var faceMinor = Path()
+    appendTicks(&faceMinor, center: center, count: 60, startDeg: spin - 90, stepDeg: 6, outer: size * 0.365, length: 5)
+    context.stroke(faceMinor, with: .color(ink.opacity(0.10)), style: StrokeStyle(lineWidth: 0.8, lineCap: .round))
+    var faceMajor = Path()
+    appendTicks(&faceMajor, center: center, count: 12, startDeg: spin - 90, stepDeg: 30, outer: size * 0.38, length: 9)
+    context.stroke(faceMajor, with: .color(ink.opacity(0.16)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+    var faceCardinal = Path()
+    appendTicks(&faceCardinal, center: center, count: 4, startDeg: spin - 90, stepDeg: 90, outer: size * 0.38, length: 14)
+    context.stroke(faceCardinal, with: .color(ink.opacity(0.35)), style: StrokeStyle(lineWidth: 3, lineCap: .round))
 
     for ring in 0..<3 {
         drawComboBand(
@@ -169,23 +153,23 @@ private func drawSatWheel(
             showTrack: shown[ring],
             fill: look.comboFill(ring),
             trackOpacity: 0.10 + Double(ring) * 0.04,
-            tickCount: ring == 0 ? 60 : (ring == 1 ? 48 : 36),
+            tickCount: ring == 0 ? 36 : (ring == 1 ? 24 : 18),
             ink: ink
         )
     }
 
     if shown[innerIdx] {
-        for i in 0..<18 {
-            strokeTick(
-                into: &context,
-                center: center,
-                angleDeg: Double(i) * 20 - 90,
-                outer: innerRadius - comboRim * 0.32,
-                length: comboRim * 0.5,
-                width: 1.3,
-                color: ink.opacity(0.30)
-            )
-        }
+        var teeth = Path()
+        appendTicks(
+            &teeth,
+            center: center,
+            count: 18,
+            startDeg: -90,
+            stepDeg: 20,
+            outer: innerRadius - comboRim * 0.32,
+            length: comboRim * 0.5
+        )
+        context.stroke(teeth, with: .color(ink.opacity(0.30)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
     }
 
     let pegAngle = (frac * 360 - 90) * .pi / 180
@@ -195,12 +179,6 @@ private func drawSatWheel(
     )
     fillCircle(&context, center: peg, radius: 5, color: ink.opacity(0.55))
     fillCircle(&context, center: peg, radius: 3.5, color: look.accent.opacity(0.95))
-    fillCircle(
-        &context,
-        center: CGPoint(x: peg.x - 1.1, y: peg.y - 1.1),
-        radius: 1.2,
-        color: Color.white.opacity(0.35)
-    )
 
     var pointer = Path()
     let tipY = center.y - size * 0.5 + 4
@@ -216,19 +194,16 @@ private func drawSatWheel(
     context.stroke(platePath, with: .color(ink.opacity(0.35)), lineWidth: 1)
 
     let hubR = size * 0.14
+    let hub = Path(ellipseIn: CGRect(x: center.x - hubR, y: center.y - hubR, width: hubR * 2, height: hubR * 2))
     context.fill(
-        Path(ellipseIn: CGRect(x: center.x - hubR, y: center.y - hubR, width: hubR * 2, height: hubR * 2)),
+        hub,
         with: .linearGradient(
             Gradient(colors: [ink.opacity(0.12), ink.opacity(0.06)]),
             startPoint: CGPoint(x: center.x, y: center.y - hubR),
             endPoint: CGPoint(x: center.x, y: center.y + hubR)
         )
     )
-    context.stroke(
-        Path(ellipseIn: CGRect(x: center.x - hubR, y: center.y - hubR, width: hubR * 2, height: hubR * 2)),
-        with: .color(ink.opacity(0.12)),
-        lineWidth: 1
-    )
+    context.stroke(hub, with: .color(ink.opacity(0.12)), lineWidth: 1)
     if ComboEngine.formatMultiplier(comboMultiplier).isEmpty {
         fillCircle(
             &context,
@@ -276,19 +251,20 @@ private func drawComboBand(
     ))
     context.stroke(ring, with: .color(ink.opacity(0.22)), lineWidth: rim * 1.22)
     context.stroke(ring, with: .color(ink.opacity(trackOpacity)), lineWidth: rim)
+
     let majorEvery = max(1, tickCount / 12)
+    var minor = Path()
+    var major = Path()
+    let step = 360.0 / Double(tickCount)
     for i in 0..<tickCount {
-        let major = i % majorEvery == 0
-        strokeTick(
-            into: &context,
-            center: center,
-            angleDeg: Double(i) * 360 / Double(tickCount) - 90,
-            outer: radius + (major ? rim * 0.44 : rim * 0.21),
-            length: major ? rim * 0.88 : rim * 0.42,
-            width: major ? 1.5 : 0.7,
-            color: ink.opacity(major ? 0.32 : 0.11)
-        )
+        if i % majorEvery == 0 {
+            appendTicks(&major, center: center, count: 1, startDeg: Double(i) * step - 90, stepDeg: step, outer: radius + rim * 0.44, length: rim * 0.88)
+        } else {
+            appendTicks(&minor, center: center, count: 1, startDeg: Double(i) * step - 90, stepDeg: step, outer: radius + rim * 0.21, length: rim * 0.42)
+        }
     }
+    context.stroke(minor, with: .color(ink.opacity(0.11)), style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
+    context.stroke(major, with: .color(ink.opacity(0.32)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
     for i in 0..<4 {
         let a = (Double(i) * 90 - 90) * .pi / 180
         let rivetR = radius - rim * 0.12
@@ -301,7 +277,6 @@ private func drawComboBand(
     }
     guard drawArc else { return }
     let sweep = min(1, max(0, frac))
-    let fresh = sweep < 0.18
     var arc = Path()
     arc.addArc(
         center: center,
@@ -312,13 +287,8 @@ private func drawComboBand(
     )
     context.stroke(
         arc,
-        with: .color(fill.opacity(fresh ? 0.42 : 0.22)),
-        style: StrokeStyle(lineWidth: rim * (fresh ? 1.85 : 1.55), lineCap: .round)
-    )
-    context.stroke(
-        arc,
-        with: .color(ink.opacity(0.38)),
-        style: StrokeStyle(lineWidth: rim, lineCap: .round)
+        with: .color(fill.opacity(sweep < 0.18 ? 0.42 : 0.22)),
+        style: StrokeStyle(lineWidth: rim * (sweep < 0.18 ? 1.55 : 1.25), lineCap: .round)
     )
     context.stroke(
         arc,
@@ -327,22 +297,24 @@ private func drawComboBand(
     )
 }
 
-private func strokeTick(
-    into context: inout GraphicsContext,
+private func appendTicks(
+    _ path: inout Path,
     center: CGPoint,
-    angleDeg: Double,
+    count: Int,
+    startDeg: Double,
+    stepDeg: Double,
     outer: CGFloat,
-    length: CGFloat,
-    width: CGFloat,
-    color: Color
+    length: CGFloat
 ) {
-    let a = angleDeg * .pi / 180
-    let cosA = CGFloat(cos(a))
-    let sinA = CGFloat(sin(a))
-    var path = Path()
-    path.move(to: CGPoint(x: center.x + cosA * (outer - length), y: center.y + sinA * (outer - length)))
-    path.addLine(to: CGPoint(x: center.x + cosA * outer, y: center.y + sinA * outer))
-    context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
+    var a = startDeg * .pi / 180
+    let step = stepDeg * .pi / 180
+    for _ in 0..<count {
+        let cosA = CGFloat(cos(a))
+        let sinA = CGFloat(sin(a))
+        path.move(to: CGPoint(x: center.x + cosA * (outer - length), y: center.y + sinA * (outer - length)))
+        path.addLine(to: CGPoint(x: center.x + cosA * outer, y: center.y + sinA * outer))
+        a += step
+    }
 }
 
 private func fillCircle(
