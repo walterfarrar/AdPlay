@@ -24,85 +24,91 @@ enum AppleLinkOutcome: Equatable {
 
 /// Sign in with Apple → Firebase credential. First launch stays anonymous.
 @MainActor
-final class AppleAccountCoordinator: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+final class AppleAccountCoordinator: NSObject {
     static let shared = AppleAccountCoordinator()
 
-    private var rawNonce: String?
-    private var continuation: CheckedContinuation<ASAuthorizationAppleIDCredential, Error>?
+    private var rawNonce = ""
 
-    func requestFirebaseCredential() async throws -> AuthCredential {
+    func configure(_ request: ASAuthorizationAppleIDRequest) {
         let nonce = Self.randomNonce()
         rawNonce = nonce
-        let request = ASAuthorizationAppleIDProvider().createRequest()
         request.requestedScopes = [.email]
         request.nonce = Self.sha256(nonce)
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = self
-        controller.presentationContextProvider = self
-        let apple = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ASAuthorizationAppleIDCredential, Error>) in
-            self.continuation = cont
-            controller.performRequests()
+    }
+
+    func firebaseCredential(from result: Result<ASAuthorization, Error>) throws -> AuthCredential {
+        switch result {
+        case .failure(let error):
+            throw Self.mapAppleError(error)
+        case .success(let authorization):
+            return try firebaseCredential(from: authorization)
         }
+    }
+
+    func firebaseCredential(from authorization: ASAuthorization) throws -> AuthCredential {
+        guard let apple = authorization.credential as? ASAuthorizationAppleIDCredential else {
+            throw AppleAccountError.noIdentityToken
+        }
+        return try firebaseCredential(from: apple)
+    }
+
+    func firebaseCredential(from apple: ASAuthorizationAppleIDCredential) throws -> AuthCredential {
         guard let tokenData = apple.identityToken,
               let idToken = String(data: tokenData, encoding: .utf8) else {
             throw AppleAccountError.noIdentityToken
         }
-        return OAuthProvider.appleCredential(withIDToken: idToken, rawNonce: nonce, fullName: apple.fullName)
+        return OAuthProvider.appleCredential(
+            withIDToken: idToken,
+            rawNonce: rawNonce,
+            fullName: apple.fullName
+        )
     }
 
-    func authorizationController(
-        controller: ASAuthorizationController,
-        didCompleteWithAuthorization authorization: ASAuthorization
-    ) {
-        guard let cred = authorization.credential as? ASAuthorizationAppleIDCredential else {
-            continuation?.resume(throwing: AppleAccountError.noIdentityToken)
-            continuation = nil
-            return
+    static func authErrorMessage(_ error: Error) -> String {
+        if let apple = error as? AppleAccountError {
+            return apple.errorDescription ?? "Apple sign-in was canceled."
         }
-        continuation?.resume(returning: cred)
-        continuation = nil
+        let ns = error as NSError
+        if ns.domain == AuthErrorDomain, let code = AuthErrorCode(rawValue: ns.code) {
+            switch code {
+            case .operationNotAllowed:
+                return "Apple sign-in is not enabled on the Firebase project."
+            case .invalidCredential:
+                return "Apple’s token was rejected (code \(ns.code)). Confirm Sign in with Apple on App ID com.adplay.app and that this TestFlight includes the Apple entitlement."
+            case .networkError:
+                return "Network error while saving progress with Apple."
+            case .userDisabled:
+                return "That Apple-linked account is disabled."
+            default:
+                return "\(ns.localizedDescription) (Firebase \(ns.code))"
+            }
+        }
+        if ns.domain == ASAuthorizationError.errorDomain {
+            return "Apple sign-in failed (code \(ns.code)). Install a new TestFlight if this build predates the Apple capability."
+        }
+        return ns.localizedDescription
     }
 
-    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+    static func mapAppleError(_ error: Error) -> Error {
         let ns = error as NSError
         if ns.domain == ASAuthorizationError.errorDomain, ns.code == ASAuthorizationError.canceled.rawValue {
-            continuation?.resume(throwing: AppleAccountError.canceled)
-        } else {
-            continuation?.resume(throwing: error)
+            return AppleAccountError.canceled
         }
-        continuation = nil
-    }
-
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-        return windows.first(where: \.isKeyWindow) ?? windows.first ?? UIWindow()
+        return error
     }
 
     private static func randomNonce(length: Int = 32) -> String {
-        let chars = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
-        var out = ""
-        out.reserveCapacity(length)
-        var remaining = length
-        while remaining > 0 {
-            var bytes = [UInt8](repeating: 0, count: 16)
-            let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-            if status != errSecSuccess {
-                bytes = (0..<16).map { _ in UInt8.random(in: 0...255) }
-            }
-            for b in bytes where remaining > 0 {
-                if b < chars.count {
-                    out.append(chars[Int(b)])
-                    remaining -= 1
-                }
-            }
+        precondition(length > 0)
+        var randomBytes = [UInt8](repeating: 0, count: length)
+        let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
+        if status != errSecSuccess {
+            randomBytes = (0..<length).map { _ in UInt8.random(in: 0...255) }
         }
-        return out
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        return String(randomBytes.map { charset[Int($0) % charset.count] })
     }
 
     private static func sha256(_ input: String) -> String {
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

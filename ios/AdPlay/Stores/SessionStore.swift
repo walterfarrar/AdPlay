@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AuthenticationServices
 import FirebaseAuth
 import os
 
@@ -424,8 +425,8 @@ final class SessionStore: ObservableObject {
         appleLinked = Auth.auth().currentUser?.providerData.contains { $0.providerID == "apple.com" } == true
     }
 
-    /// Link the current anonymous session to Apple, or restore an existing Apple account.
-    func saveProgressWithApple() async -> AppleLinkOutcome {
+    /// Finish Sign in with Apple from the system button (presented on the tap, not a later Task).
+    func saveProgressWithApple(result: Result<ASAuthorization, Error>) async -> AppleLinkOutcome {
         errorMessage = nil
         refreshAppleLink()
         if appleLinked { return .linked }
@@ -433,27 +434,34 @@ final class SessionStore: ObservableObject {
         defer { isLoading = false }
         do {
             try await api.ensureSignedIn()
-            let credential = try await AppleAccountCoordinator.shared.requestFirebaseCredential()
-            guard let user = Auth.auth().currentUser else {
-                return await signInWithApple(credential)
-            }
-            do {
-                _ = try await user.link(with: credential)
-                refreshAppleLink()
-                return .linked
-            } catch {
-                guard isAppleAlreadyInUse(error) else { throw error }
-                pendingAppleCredential = updatedAppleCredential(from: error) ?? credential
-                if !hasUnsavedLocalProgress {
-                    return await finishRestoreWithPendingApple()
-                }
-                return .needsChoice
-            }
+            let credential = try AppleAccountCoordinator.shared.firebaseCredential(from: result)
+            return await linkOrRestore(credential)
         } catch AppleAccountError.canceled {
             return .canceled
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AppleAccountCoordinator.authErrorMessage(error)
             return .canceled
+        }
+    }
+
+    private func linkOrRestore(_ credential: AuthCredential) async -> AppleLinkOutcome {
+        guard let user = Auth.auth().currentUser else {
+            return await signInWithApple(credential)
+        }
+        do {
+            _ = try await user.link(with: credential)
+            refreshAppleLink()
+            return .linked
+        } catch {
+            guard isAppleAlreadyInUse(error) else {
+                errorMessage = AppleAccountCoordinator.authErrorMessage(error)
+                return .canceled
+            }
+            pendingAppleCredential = updatedAppleCredential(from: error) ?? credential
+            if !hasUnsavedLocalProgress {
+                return await finishRestoreWithPendingApple()
+            }
+            return .needsChoice
         }
     }
 
@@ -480,7 +488,7 @@ final class SessionStore: ObservableObject {
             try await adoptSwitchedUser()
             return .restored
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AppleAccountCoordinator.authErrorMessage(error)
             return .canceled
         }
     }
@@ -497,7 +505,7 @@ final class SessionStore: ObservableObject {
             try Auth.auth().signOut()
             return await signInWithApple(credential)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AppleAccountCoordinator.authErrorMessage(error)
             return .canceled
         }
     }
