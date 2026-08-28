@@ -19,6 +19,13 @@ PROFILE_DIRS = [
     Path.home() / "Library/MobileDevice/Provisioning Profiles",
     Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles",
 ]
+for extra in (
+    os.environ.get("CM_PROVISIONING_PROFILES"),
+    os.environ.get("PROFILES_HOME"),
+):
+    if extra:
+        PROFILE_DIRS.append(Path(extra))
+PROFILE_DIRS = list(dict.fromkeys(PROFILE_DIRS))
 
 
 def run(args: list[str]) -> subprocess.CompletedProcess[str]:
