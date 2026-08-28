@@ -32,28 +32,7 @@ workflows:
           agvtool new-version -all "$PROJECT_BUILD_NUMBER"
       - name: Set up code signing settings on Xcode project
         script: |
-          # ios_signing fetches every App Store profile for this bundle, including
-          # the old "AdPlay" one. Sign with AdPlay_New only (has Sign in with Apple).
-          PROFILE=""
-          for dir in \
-            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
-            "$HOME/Library/MobileDevice/Provisioning Profiles"
-          do
-            [ -d "$dir" ] || continue
-            for p in "$dir"/*.mobileprovision "$dir"/*.provisionprofile; do
-              [ -f "$p" ] || continue
-              security cms -D -i "$p" 2>/dev/null | grep -q "AdPlay_New" || continue
-              PROFILE="$p"
-            done
-          done
-          if [ -z "$PROFILE" ]; then
-            echo "AdPlay_New was not among the fetched profiles." >&2
-            exit 1
-          fi
-          echo "Using $PROFILE"
-          xcode-project use-profiles \
-            --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
-            --profile "$PROFILE"
+          xcode-project use-profiles --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT"
       - name: Build ipa for distribution
         script: |
           xcode-project build-ipa \
