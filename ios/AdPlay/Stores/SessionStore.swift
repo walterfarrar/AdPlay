@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import FirebaseAuth
 import os
 
 @MainActor
@@ -14,6 +15,8 @@ final class SessionStore: ObservableObject {
     private var adsWatchedToday = 0
     /// True while a rewarded ad is on screen — skip lifecycle refresh so the watch is not dropped.
     @Published private(set) var watchingAd = false
+    /// True when this Firebase user is linked to Sign in with Apple.
+    @Published private(set) var appleLinked = false
 
     let api = APIClient()
     private var adService: AdServing?
@@ -59,6 +62,7 @@ final class SessionStore: ObservableObject {
         defer { isLoading = false }
         do {
             try await refresh(force: true)
+            refreshAppleLink()
             adService = AdServiceFactory.make(api: api, provider: tunables?.adProvider ?? "waterfall")
             isReady = true
             foreground = true
@@ -408,11 +412,117 @@ final class SessionStore: ObservableObject {
             lastUpdatedAt = nil
             try await api.ensureSignedIn()
             try await refresh(force: true)
+            refreshAppleLink()
             return true
         } catch {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func refreshAppleLink() {
+        appleLinked = Auth.auth().currentUser?.providerData.contains { $0.providerID == "apple.com" } == true
+    }
+
+    /// Link the current anonymous session to Apple, or restore an existing Apple account.
+    func saveProgressWithApple() async -> AppleLinkOutcome {
+        errorMessage = nil
+        refreshAppleLink()
+        if appleLinked { return .linked }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            try await api.ensureSignedIn()
+            let credential = try await AppleAccountCoordinator.shared.requestFirebaseCredential()
+            guard let user = Auth.auth().currentUser else {
+                return await signInWithApple(credential)
+            }
+            do {
+                _ = try await user.link(with: credential)
+                refreshAppleLink()
+                return .linked
+            } catch {
+                guard isAppleAlreadyInUse(error) else { throw error }
+                pendingAppleCredential = updatedAppleCredential(from: error) ?? credential
+                if !hasUnsavedLocalProgress {
+                    return await finishRestoreWithPendingApple()
+                }
+                return .needsChoice
+            }
+        } catch AppleAccountError.canceled {
+            return .canceled
+        } catch {
+            errorMessage = error.localizedDescription
+            return .canceled
+        }
+    }
+
+    func discardPendingApple() {
+        pendingAppleCredential = nil
+    }
+
+    /// Switch this device to the Apple-linked account, leaving local unsaved progress behind.
+    func useSavedAppleAccount() async -> Bool {
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        return await finishRestoreWithPendingApple() == .restored
+    }
+
+    private var pendingAppleCredential: AuthCredential?
+    private var hasUnsavedLocalProgress: Bool {
+        state.satsBalance > 0 || (state.comboTaps ?? 0) > 0.5
+    }
+
+    private func signInWithApple(_ credential: AuthCredential) async -> AppleLinkOutcome {
+        do {
+            _ = try await Auth.auth().signIn(with: credential)
+            try await adoptSwitchedUser()
+            return .restored
+        } catch {
+            errorMessage = error.localizedDescription
+            return .canceled
+        }
+    }
+
+    private func finishRestoreWithPendingApple() async -> AppleLinkOutcome {
+        guard let credential = pendingAppleCredential else { return .canceled }
+        pendingAppleCredential = nil
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        tapFlushTask?.cancel()
+        tapFlushTask = nil
+        flushingTaps = false
+        do {
+            try Auth.auth().signOut()
+            return await signInWithApple(credential)
+        } catch {
+            errorMessage = error.localizedDescription
+            return .canceled
+        }
+    }
+
+    private func adoptSwitchedUser() async throws {
+        GameReminderScheduler.clearAll()
+        state = .empty
+        serverState = .empty
+        confirmedState = .empty
+        progress = .empty
+        adsWatchedToday = 0
+        lastUpdatedAt = nil
+        try await refresh(force: true)
+        refreshAppleLink()
+    }
+
+    private func isAppleAlreadyInUse(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == AuthErrorDomain else { return false }
+        return ns.code == AuthErrorCode.credentialAlreadyInUse.rawValue
+            || ns.code == AuthErrorCode.accountExistsWithDifferentCredential.rawValue
+    }
+
+    private func updatedAppleCredential(from error: Error) -> AuthCredential? {
+        (error as NSError).userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential
     }
 
     private func apply(_ next: GameState, force: Bool, keepCombo: Bool = true) {
