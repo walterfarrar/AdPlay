@@ -58,8 +58,10 @@ workflows:
           unzip -q "$IPA" -d /tmp/adplay-ipa
           APP=$(find /tmp/adplay-ipa -name '*.app' | head -1)
           echo "Signing entitlements:"
-          codesign -d --entitlements :- "$APP" || true
-          if ! codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q applesignin; then
+          ENT=/tmp/adplay-signed.entitlements
+          codesign -d --entitlements "$ENT" "$APP" 2>/dev/null || true
+          cat "$ENT" 2>/dev/null || true
+          if ! grep -q applesignin "$ENT" 2>/dev/null; then
             echo "IPA is missing com.apple.developer.applesignin." >&2
             echo "Enable Sign in with Apple on App ID com.adplay.app, then refresh the Codemagic signing profile." >&2
             exit 1
