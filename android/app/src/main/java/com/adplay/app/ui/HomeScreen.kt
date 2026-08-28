@@ -4,6 +4,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -623,9 +624,19 @@ private fun RollingDigitsLabel(
 ) {
     var fromQuanta by remember { mutableLongStateOf(quanta) }
     var primed by remember { mutableStateOf(false) }
-    val rollFrom = if (!primed || (fromQuanta <= 0L && quanta >= 100_000L)) quanta else fromQuanta
+    var lastChangeMs by remember { mutableLongStateOf(0L) }
+    val nowMs = SystemClock.uptimeMillis()
+    val rapid = lastChangeMs > 0L && nowMs - lastChangeMs < 120L
+    val jump = kotlin.math.abs(quanta - fromQuanta) > 400L
+    val rollFrom = if (
+        !primed ||
+        (fromQuanta <= 0L && quanta >= 100_000L) ||
+        rapid ||
+        jump
+    ) quanta else fromQuanta
     val glyphs = remember(quanta, rollFrom) { btcGlyphs(rollFrom, quanta) }
     LaunchedEffect(quanta) {
+        lastChangeMs = SystemClock.uptimeMillis()
         if (!primed || (fromQuanta <= 0L && quanta >= 100_000L)) {
             fromQuanta = quanta
             primed = true
@@ -696,19 +707,14 @@ private fun RollingDigitSlot(
             return@LaunchedEffect
         }
         val n = steps.coerceAtLeast(0)
-        if (n == 0) {
+        if (n == 0 || n > 6) {
             displayed = target
             return@LaunchedEffect
-        }
-        val tickMs = when {
-            n >= 20 -> 20L
-            n >= 10 -> 30L
-            else -> 45L
         }
         try {
             repeat(n) {
                 displayed = (displayed + 1) % 10
-                delay(tickMs)
+                delay(35L)
             }
             displayed = target
         } finally {

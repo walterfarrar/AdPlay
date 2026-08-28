@@ -39,6 +39,9 @@ final class SessionStore: ObservableObject {
     private var skipAnimating = false
     private var skipLerpTask: Task<Void, Never>?
     private static let skipLerpSeconds: TimeInterval = 3
+    private var lastPresenceAt: Date = .distantPast
+    private var presenceFlushTask: Task<Void, Never>?
+    private static let presenceMinInterval: TimeInterval = 1.0
 
     private static let log = Logger(subsystem: "com.adplay.app", category: "session")
 
@@ -61,7 +64,7 @@ final class SessionStore: ObservableObject {
             foreground = true
             ensureTicker()
             GameCenterService.start()
-            publishPlayPresence()
+            publishPlayPresence(immediate: true)
             Self.log.notice("AdPlay session ready")
             GameReminderScheduler.requestPermissionIfNeeded()
             // Warm AdMob after home is up so the ATT prompt is not under the splash.
@@ -105,7 +108,7 @@ final class SessionStore: ObservableObject {
         }
         // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
         GameReminderScheduler.sync(project(serverState, now: Date()))
-        publishPlayPresence()
+        publishPlayPresence(immediate: true)
     }
 
     func refresh(force: Bool = false) async throws {
@@ -679,7 +682,33 @@ final class SessionStore: ObservableObject {
         return (charges, regenLeft)
     }
 
-    private func publishPlayPresence() {
+    /// Widgets + Live Activities are expensive. Taps only schedule a coalesced write.
+    private func publishPlayPresence(immediate: Bool = false) {
+        if immediate {
+            presenceFlushTask?.cancel()
+            presenceFlushTask = nil
+            lastPresenceAt = Date()
+            writePlayPresence()
+            return
+        }
+        let elapsed = Date().timeIntervalSince(lastPresenceAt)
+        if elapsed >= Self.presenceMinInterval {
+            lastPresenceAt = Date()
+            writePlayPresence()
+            return
+        }
+        guard presenceFlushTask == nil else { return }
+        let wait = Self.presenceMinInterval - elapsed
+        presenceFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.presenceFlushTask = nil
+            self.lastPresenceAt = Date()
+            self.writePlayPresence()
+        }
+    }
+
+    private func writePlayPresence() {
         let comboT = ComboTunables.from(tunables)
         let live = ComboEngine.at(state.combo, now: Date(), tunables: comboT)
         let mult = comboT.multiplier(of: live)

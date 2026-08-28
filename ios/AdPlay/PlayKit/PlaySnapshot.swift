@@ -15,11 +15,23 @@ enum PlaySnapshot {
         var updatedAt: Date
     }
 
+    private static var lastReloadKey: String?
+
     static func write(_ payload: Payload) {
+        let reloadKey = [
+            "\(payload.satsBalance)",
+            String(format: "%.1f", payload.progress),
+            "\(payload.unitsPerSat)",
+            String(format: "%.3f", payload.comboMultiplier),
+            payload.stageTitle,
+            payload.autoFillUntil.map { String(Int($0.timeIntervalSince1970)) } ?? "",
+        ].joined(separator: "|")
         guard let defaults = UserDefaults(suiteName: suiteName) else { return }
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: key)
         }
+        guard lastReloadKey != reloadKey else { return }
+        lastReloadKey = reloadKey
         WidgetCenter.shared.reloadAllTimelines()
     }
 
