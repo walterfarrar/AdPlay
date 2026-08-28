@@ -32,22 +32,22 @@ Live values: Firestore `config/tunables`
 | `dailySatsEarnCap` | 0 | Max sats/day; **0 = unlimited** |
 | `minWithdrawSats` | 100 | Min redeem request |
 | `comboTapsPerLevel` | 100 | **int** — manual taps to fill one outermost (ring 0) cycle |
-| `comboStep` | 0.1 | **double** — added each non-overflow completion (1.0 → 1.1 → …) |
-| `comboMax` | 2.0 | **double** — legacy single-ring cap; nested engine ignores this |
+| `comboStep` | 0.1 | **double** — added each outer-ring complete (1.0 → 1.1 → …) |
+| `comboMax` | 2.0 | **double** — legacy single-ring cap; odometer engine ignores this |
 | `comboBase` | 1.0 | **double** — multiplier with empty rings |
 | `comboAbsMax` | 3.0 | **double** — hard cap on `comboMultiplier` (add in console; code default 3.0) |
-| `comboRing0Max` | 1.0 | **double** — max contribution from outermost ring before overflow |
-| `comboRing1Max` | 1.0 | **double** — max contribution from inner ring before overflow |
-| `comboRing2Max` | 1.0 | **double** — max contribution from innermost ring before overflow |
+| `comboRing0Max` | 1.0 | **double** — ring 1 capacity as contribution max (levels = max / step) |
+| `comboRing1Max` | 1.0 | **double** — ring 2 capacity as contribution max (levels = max / step) |
+| `comboRing2Max` | 1.0 | **double** — 0 hides ring 2 |
 | `comboIdleGraceSeconds` | 1.5 | **double** — after this with no tap, idle drain starts |
-| `comboDrainPerSecondActive` | 0.002 | **double** — slow drain of the current meter while still tapping |
-| `comboDrainPerSecondIdle` | 0.5 | **double** — faster LIFO drain after the grace window |
+| `comboDrainPerSecondActive` | 0.002 | **double** — unused (kept so existing docs merge) |
+| `comboDrainPerSecondIdle` | 0.5 | **double** — outer-ring units drained per second after the grace window |
 
 Manual combo applies only to **live taps at the wheel**. It does **not** apply to Auto Tapper, Skip Time, or offline catch-up. Effective live tap units = `tapPower × comboMultiplier`. Auto fill rate stays `taps/s × tapPower` (Stronger only).
 
-Three concentric rings (outer → inner → core). Each time a ring completes a loop it adds `comboStep` (then overflow) **and** fills the next inner ring by `1 / (ringMax / step)` (10% if max 1.0 and step 0.1). After the first outer complete, ring 1 is visible at ~10%; after ~10 outer completes, ring 1 is full. Overflow steps are derived (`comboStep / 10 / 100 / 1000`). New keys work via `getState` merge **before** you add them in the console (code defaults).
+One tap counter, shown as three odometer rings. Ring 0 fills every `comboTapsPerLevel` taps, then ticks ring 1; when ring 1 wraps it ticks ring 2. Multiplier is `min(absMax, base + floor(taps / C0) × step)` and caps at ×3 after 20 outer laps (2000 taps at defaults). Idle drain subtracts `C0 × comboDrainPerSecondIdle` taps/s after the grace window (O(1), no peel loops). New keys work via `getState` merge **before** you add them in the console (code defaults).
 
-Player-doc combo fields (not tunables): `comboMeter` / `comboLevel` / `comboContrib` (ring 0, backward compatible), plus `comboMeter1` / `comboLevel1` / `comboContrib1` and `comboMeter2` / `comboLevel2` / `comboContrib2`. Old docs with only ring 0 are treated as ring 0 only.
+Player-doc combo fields (not tunables): `comboTaps` is the source of truth. `comboMeter` / `comboLevel` / `comboContrib` (ring 0) plus the `*1` / `*2` fields are derived for old readers. Docs without `comboTaps` reconstruct as `comboLevel × C0 + comboMeter × C0`.
 
 ## Ad currency (hold bank)
 

@@ -486,6 +486,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun GameState.keepingComboFrom(from: GameState): GameState = copy(
+        comboTaps = from.comboTaps,
         comboMeter = from.comboMeter,
         comboLevel = from.comboLevel,
         comboContrib = from.comboContrib,

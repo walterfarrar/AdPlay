@@ -622,7 +622,7 @@ struct SatEarnStage: View {
         let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
         let fraction = total > 0 ? min(1.0, display / Double(total)) : 0.0
         let comboT = ComboTunables.from(session.tunables)
-        let rawCombo = session.state.combo
+        let rawCombo = session.state.combo(tunables: comboT)
         let comboLive: ComboState
         if let last = rawCombo.lastTapAt, now.timeIntervalSince(last) < 0.2 {
             comboLive = rawCombo
@@ -670,7 +670,7 @@ struct SatEarnStage: View {
                     .contentShape(Circle())
                     .onTapGesture {
                         if settings.hapticsEnabled {
-                            let leveled = comboLive.meter + 1 / Double(max(1, comboT.tapsPerLevel)) >= 1
+                            let leveled = ComboEngine.wouldCompleteOuter(comboLive, tunables: comboT)
                             WheelHaptics.impact(leveled: leveled)
                         }
                         Task { await session.tap() }

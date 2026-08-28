@@ -450,6 +450,7 @@ final class SessionStore: ObservableObject {
         let preserveLiveTaps = keepCombo && comboRecentlyTapped(state)
             if preserveLiveTaps {
                 if discardOptimisticTaps {
+                    adopted.comboTaps = state.comboTaps
                     adopted.comboMeter = state.comboMeter
                     adopted.comboLevel = state.comboLevel
                     adopted.comboContrib = state.comboContrib

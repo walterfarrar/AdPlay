@@ -1,7 +1,7 @@
 import Foundation
 
-/// Manual-tap nested combo. Keep in lockstep with `functions/src/combo.ts`.
-/// Auto Tapper / offline catch-up never use this.
+/// Manual-tap odometer combo. Keep in lockstep with `functions/src/combo.ts`.
+/// One tap counter; rings are place-value digits. Auto / offline never use this.
 struct ComboTunables: Equatable {
     var tapsPerLevel: Int
     var step: Double
@@ -44,27 +44,10 @@ struct ComboTunables: Equatable {
         )
     }
 
-    func maxLevels(ring: Int) -> Int {
-        let mx = ringMaxValue(ring)
-        if mx <= 0 { return 0 }
-        let s = step > 0 ? step : 0.1
-        let levels = Int((mx / s) + 0.5)
-        return levels < 0 ? 0 : levels
-    }
-
-    func ringMaxValue(_ ring: Int) -> Double {
-        guard ring >= 0, ring < ringMax.count else { return 0 }
-        let v = ringMax[ring]
-        return v < 0.0 ? 0.0 : v
-    }
+    var caps: ComboCaps { ComboCaps.from(self) }
 
     func multiplier(of state: ComboState) -> Double {
-        let b = base > 0 ? base : 1.0
-        let cap = absMax > 0 ? absMax : 3.0
-        var bonus = 0.0
-        for r in state.rings { bonus += r.contribution }
-        let sum = b + bonus
-        return roundedMultiplier(cap < sum ? cap : sum)
+        ComboEngine.multiplier(state, tunables: self)
     }
 
     func formatMultiplier(_ m: Double) -> String {
@@ -72,25 +55,62 @@ struct ComboTunables: Equatable {
     }
 }
 
-struct ComboRingState: Equatable {
-    var meter: Double
-    var level: Int
-    var contribution: Double
+struct ComboCaps: Equatable {
+    var c0: Int
+    var c1: Int
+    var c2: Int
+    var maxTaps: Double
+    var ring1Enabled: Bool
+    var ring2Enabled: Bool
 
-    static let empty = ComboRingState(meter: 0, level: 0, contribution: 0)
+    static func from(_ t: ComboTunables) -> ComboCaps {
+        let step = t.step > 0 ? t.step : 0.1
+        let c0 = clampInt(t.tapsPerLevel, lo: 1, hi: 10000)
+        let r0 = t.ringMaxValue(0)
+        let r1 = t.ringMaxValue(1)
+        let raw1 = Int(((r0 < 0 ? 0 : r0) / step) + 0.5)
+        let raw2 = Int(((r1 < 0 ? 0 : r1) / step) + 0.5)
+        let ring1Enabled = clampInt(raw1, lo: 0, hi: 100) > 0
+        let ring2Enabled = clampInt(raw2, lo: 0, hi: 100) > 0 && t.ringMaxValue(2) > 0
+        let c1 = ring1Enabled ? clampInt(raw1, lo: 1, hi: 100) : 1
+        let c2 = ring2Enabled ? clampInt(raw2, lo: 1, hi: 100) : 1
+        return ComboCaps(
+            c0: c0,
+            c1: c1,
+            c2: c2,
+            maxTaps: Double(c0) * Double(c1) * Double(c2),
+            ring1Enabled: ring1Enabled,
+            ring2Enabled: ring2Enabled
+        )
+    }
+}
+
+extension ComboTunables {
+    func ringMaxValue(_ ring: Int) -> Double {
+        guard ring >= 0, ring < ringMax.count else { return 0 }
+        let v = ringMax[ring]
+        return v < 0.0 ? 0.0 : v
+    }
+}
+
+struct ComboPersist {
+    var taps: Double
+    var meter0: Double
+    var level0: Int
+    var contrib0: Double
+    var meter1: Double
+    var level1: Int
+    var contrib1: Double
+    var meter2: Double
+    var level2: Int
+    var contrib2: Double
 }
 
 struct ComboState: Equatable {
-    var rings: [ComboRingState]
+    var taps: Double
     var lastTapAt: Date?
 
-    static let empty = ComboState(
-        rings: Array(repeating: .empty, count: ComboTunables.ringCount),
-        lastTapAt: nil
-    )
-
-    var meter: Double { rings.first?.meter ?? 0 }
-    var level: Int { rings.first?.level ?? 0 }
+    static let empty = ComboState(taps: 0, lastTapAt: nil)
 }
 
 /// Snap floating combo math. Named to avoid Darwin `nice()` (process priority).
@@ -98,10 +118,21 @@ private func roundedMultiplier(_ n: Double) -> Double {
     (n * 1e8).rounded() / 1e8
 }
 
-/// Clamp to [0, 1] with Double comparisons only — never Darwin min/max.
-private func clampMultiplier(_ n: Double) -> Double {
-    let lo = n < 0.0 ? 0.0 : n
-    return lo > 1.0 ? 1.0 : lo
+private func clamp01(_ n: Double) -> Double {
+    if n.isNaN || n <= 0 { return 0 }
+    return n >= 1 ? 1 : n
+}
+
+private func clampInt(_ n: Int, lo: Int, hi: Int) -> Int {
+    if n < lo { return lo }
+    if n > hi { return hi }
+    return n
+}
+
+private func posMod(_ a: Double, _ b: Double) -> Double {
+    if !(b > 0) || !a.isFinite { return 0 }
+    let r = a.truncatingRemainder(dividingBy: b)
+    return r < 0 ? r + b : r
 }
 
 enum ComboEngine {
@@ -116,206 +147,117 @@ enum ComboEngine {
         return String(format: "×%.4f", (m * 10000).rounded() / 10000)
     }
 
-    static func displayMeters(_ state: ComboState, tunables t: ComboTunables) -> [Double] {
-        let cur = normalize(state, t: t)
-        return (0..<ComboTunables.ringCount).map { i in
-            if t.maxLevels(ring: i) <= 0 { return 0 }
-            return clampMultiplier(cur.rings[i].meter)
+    static func clampTaps(_ taps: Double, tunables t: ComboTunables) -> Double {
+        let maxTaps = t.caps.maxTaps
+        if !taps.isFinite || taps <= 0 { return 0 }
+        return taps >= maxTaps ? maxTaps : taps
+    }
+
+    static func tapsFromPersisted(
+        comboTaps: Double?,
+        comboLevel: Int,
+        comboMeter: Double,
+        tunables t: ComboTunables
+    ) -> Double {
+        if let raw = comboTaps, raw.isFinite {
+            return clampTaps(raw, tunables: t)
         }
+        let c0 = Double(t.caps.c0)
+        let level = comboLevel < 0 ? 0 : comboLevel
+        return clampTaps(Double(level) * c0 + clamp01(comboMeter) * c0, tunables: t)
+    }
+
+    static func multiplier(_ state: ComboState, tunables t: ComboTunables) -> Double {
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        let base = t.base > 0 ? t.base : 1.0
+        let cap = t.absMax > 0 ? t.absMax : 3.0
+        let step = t.step > 0 ? t.step : 0.1
+        let laps = Int(taps / Double(caps.c0))
+        let sum = base + Double(laps) * step
+        return roundedMultiplier(cap < sum ? cap : sum)
+    }
+
+    static func displayMeters(_ state: ComboState, tunables t: ComboTunables) -> [Double] {
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        if taps >= caps.maxTaps - 1e-12 {
+            return [1, caps.ring1Enabled ? 1 : 0, caps.ring2Enabled ? 1 : 0]
+        }
+        let c0 = Double(caps.c0)
+        let c1 = Double(caps.c1)
+        let c2 = Double(caps.c2)
+        let m0 = posMod(taps, c0) / c0
+        let laps = floor(taps / c0)
+        let m1 = caps.ring1Enabled ? posMod(laps, c1) / c1 : 0
+        let inner = floor(taps / (c0 * c1))
+        let m2 = caps.ring2Enabled ? posMod(inner, c2) / c2 : 0
+        return [clamp01(m0), clamp01(m1), clamp01(m2)]
     }
 
     static func displayTracks(_ state: ComboState, tunables t: ComboTunables) -> [Bool] {
-        let cur = normalize(state, t: t)
-        let meters = displayMeters(cur, tunables: t)
-        return (0..<ComboTunables.ringCount).map { i in
-            if t.maxLevels(ring: i) <= 0 { return false }
-            if meters[i] > 0.001 { return true }
-            if isAtMax(cur, ring: i, t: t) { return true }
-            return cur.rings[i].level > 0 || cur.rings[i].contribution > 1e-12
-        }
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        return [
+            taps > 1e-9,
+            caps.ring1Enabled && taps >= Double(caps.c0) - 1e-12,
+            caps.ring2Enabled && taps >= Double(caps.c0 * caps.c1) - 1e-12,
+        ]
+    }
+
+    static func wouldCompleteOuter(_ state: ComboState, tunables t: ComboTunables) -> Bool {
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        if taps >= caps.maxTaps - 1e-12 { return false }
+        return posMod(taps, Double(caps.c0)) + 1 >= Double(caps.c0) - 1e-12
     }
 
     static func at(_ state: ComboState, now: Date, tunables t: ComboTunables) -> ComboState {
-        let cur = normalize(state, t: t)
-        guard let last = cur.lastTapAt else { return cur }
-        if now <= last { return cur }
-        let grace = t.idleGraceSeconds < 0.0 ? 0.0 : t.idleGraceSeconds
-        let dt = now.timeIntervalSince(last)
-        if dt <= grace {
-            return applyDrain(cur, amount: drainAmount(dt, idle: false, t: t), t: t)
+        let taps = clampTaps(state.taps, tunables: t)
+        guard let last = state.lastTapAt else {
+            return ComboState(taps: taps, lastTapAt: nil)
         }
-        let afterGrace = applyDrain(cur, amount: drainAmount(grace, idle: false, t: t), t: t)
-        return applyDrain(afterGrace, amount: drainAmount(dt - grace, idle: true, t: t), t: t)
+        if now <= last { return ComboState(taps: taps, lastTapAt: last) }
+        let grace = t.idleGraceSeconds < 0 ? 0 : t.idleGraceSeconds
+        let dt = now.timeIntervalSince(last)
+        if dt <= grace { return ComboState(taps: taps, lastTapAt: last) }
+        let rate = (t.drainPerSecondIdle < 0 ? 0 : t.drainPerSecondIdle) * Double(t.caps.c0)
+        let drain = (dt - grace) * rate
+        if !drain.isFinite || drain >= taps {
+            return ComboState(taps: 0, lastTapAt: last)
+        }
+        return ComboState(taps: clampTaps(taps - drain, tunables: t), lastTapAt: last)
     }
 
     static func applyTap(_ state: ComboState, now: Date, tunables t: ComboTunables) -> ComboState {
-        var cur = at(state, now: now, tunables: t)
-        let per = t.tapsPerLevel < 1 ? 1 : t.tapsPerLevel
-        addFill(&cur, ring: 0, amount: 1 / Double(per), t: t)
-        cur.lastTapAt = now
-        return cur
+        let cur = at(state, now: now, tunables: t)
+        return ComboState(taps: clampTaps(cur.taps + 1, tunables: t), lastTapAt: now)
     }
 
-    private static func normalize(_ state: ComboState, t: ComboTunables) -> ComboState {
-        var rings: [ComboRingState] = []
-        for i in 0..<ComboTunables.ringCount {
-            let src = i < state.rings.count ? state.rings[i] : .empty
-            let level = src.level < 0 ? 0 : src.level
-            var contrib = src.contribution < 0.0 ? 0.0 : src.contribution
-            if contrib <= 0 && level > 0 {
-                contrib = derivedContribution(level: level, ring: i, t: t)
-            }
-            rings.append(ComboRingState(meter: clampMultiplier(src.meter), level: level, contribution: roundedMultiplier(contrib)))
-        }
-        return ComboState(rings: rings, lastTapAt: state.lastTapAt)
-    }
-
-    private static func derivedContribution(level: Int, ring: Int, t: ComboTunables) -> Double {
-        let step = t.step > 0 ? t.step : 0.1
-        let ml = t.maxLevels(ring: ring)
-        let stepLv = level < ml ? level : ml
-        let overflowLv = level - ml < 0 ? 0 : level - ml
-        return roundedMultiplier(Double(stepLv) * step + Double(overflowLv) * overflowStep(innerMaxed: 0, t: t))
-    }
-
-    private static func isAtMax(_ state: ComboState, ring: Int, t: ComboTunables) -> Bool {
-        let ml = t.maxLevels(ring: ring)
-        if ml <= 0 { return false }
-        return state.rings[ring].level >= ml
-    }
-
-    private static func innerMaxedCount(_ state: ComboState, ring: Int, t: ComboTunables) -> Int {
-        var n = 0
-        var j = ring + 1
-        while j < ComboTunables.ringCount {
-            if isAtMax(state, ring: j, t: t) { n += 1 }
-            j += 1
-        }
-        return n
-    }
-
-    private static func overflowStep(innerMaxed: Int, t: ComboTunables) -> Double {
-        let step = t.step > 0 ? t.step : 0.1
-        let inner = innerMaxed < 0 ? 0 : innerMaxed
-        let exp = 1 + inner
-        return roundedMultiplier(step / pow(10, Double(exp)))
-    }
-
-    private static func completionIncrement(_ state: ComboState, ring: Int, t: ComboTunables) -> Double {
-        let ml = t.maxLevels(ring: ring)
-        if state.rings[ring].level < ml { return t.step > 0 ? t.step : 0.1 }
-        return overflowStep(innerMaxed: innerMaxedCount(state, ring: ring, t: t), t: t)
-    }
-
-    private static func totalBonus(_ state: ComboState) -> Double {
-        state.rings.reduce(0) { $0 + $1.contribution }
-    }
-
-    private static func applyCompletion(_ state: inout ComboState, ring: Int, t: ComboTunables) {
-        let inc = completionIncrement(state, ring: ring, t: t)
-        let cap = t.absMax > 0 ? t.absMax : 3.0
+    static func persist(_ state: ComboState, tunables t: ComboTunables) -> ComboPersist {
+        let caps = t.caps
+        let taps = clampTaps(state.taps, tunables: t)
+        let meters = displayMeters(ComboState(taps: taps, lastTapAt: state.lastTapAt), tunables: t)
+        let laps0 = Int(taps / Double(caps.c0))
+        let laps1 = Int(taps / Double(caps.c0 * caps.c1))
+        let laps2 = Int(taps / Double(caps.c0 * caps.c1 * caps.c2))
         let base = t.base > 0 ? t.base : 1.0
-        let roomRaw = cap - base - totalBonus(state)
-        let room = roomRaw < 0.0 ? 0.0 : roomRaw
-        let applied = inc < room ? inc : room
-        state.rings[ring].level += 1
-        state.rings[ring].contribution = roundedMultiplier(state.rings[ring].contribution + applied)
-        if ring + 1 < ComboTunables.ringCount {
-            let perRaw = t.maxLevels(ring: ring)
-            let per = perRaw < 1 ? 1 : perRaw
-            addFill(&state, ring: ring + 1, amount: 1 / Double(per), t: t)
-        }
-    }
-
-    private static func addFill(_ state: inout ComboState, ring: Int, amount: Double, t: ComboTunables) {
-        if t.maxLevels(ring: ring) <= 0 || amount <= 0 { return }
-        state.rings[ring].meter = roundedMultiplier(state.rings[ring].meter + amount)
-        while state.rings[ring].meter >= 1 - 1e-12 {
-            state.rings[ring].meter = roundedMultiplier(state.rings[ring].meter - 1)
-            applyCompletion(&state, ring: ring, t: t)
-        }
-    }
-
-    private static func reverseCompletion(_ state: inout ComboState, ring: Int, t: ComboTunables) {
-        if state.rings[ring].level <= 0 { return }
-        let ml = t.maxLevels(ring: ring)
+        let cap = t.absMax > 0 ? t.absMax : 3.0
         let step = t.step > 0 ? t.step : 0.1
-        let inc = state.rings[ring].level > ml
-            ? overflowStep(innerMaxed: innerMaxedCount(state, ring: ring, t: t), t: t)
-            : step
-        state.rings[ring].level -= 1
-        let after = state.rings[ring].contribution - inc
-        state.rings[ring].contribution = roundedMultiplier(after < 0.0 ? 0.0 : after)
-        if state.rings[ring].level < ml {
-            let levelCap = Double(state.rings[ring].level) * step
-            let c = state.rings[ring].contribution
-            state.rings[ring].contribution = roundedMultiplier(c < levelCap ? c : levelCap)
-        } else if state.rings[ring].level == ml {
-            let ringCap = t.ringMaxValue(ring)
-            let c = state.rings[ring].contribution
-            state.rings[ring].contribution = roundedMultiplier(c < ringCap ? c : ringCap)
-        }
-        if state.rings[ring].level <= 0 {
-            state.rings[ring].level = 0
-            state.rings[ring].contribution = 0
-        }
-        if ring + 1 < ComboTunables.ringCount {
-            let perRaw = t.maxLevels(ring: ring)
-            let per = perRaw < 1 ? 1 : perRaw
-            unwindFill(&state, ring: ring + 1, amount: 1 / Double(per), t: t)
-        }
-    }
-
-    private static func unwindFill(_ state: inout ComboState, ring: Int, amount: Double, t: ComboTunables) {
-        if t.maxLevels(ring: ring) <= 0 || amount <= 0 { return }
-        state.rings[ring].meter = roundedMultiplier(state.rings[ring].meter - amount)
-        while state.rings[ring].meter < -1e-12 {
-            if state.rings[ring].level <= 0 {
-                state.rings[ring].meter = 0
-                break
-            }
-            reverseCompletion(&state, ring: ring, t: t)
-            state.rings[ring].meter = roundedMultiplier(state.rings[ring].meter + 1)
-        }
-    }
-
-    private static func peelRing(_ state: inout ComboState, ring: Int, t: ComboTunables) {
-        reverseCompletion(&state, ring: ring, t: t)
-        state.rings[ring].meter = 1
-    }
-
-    private static func drainAmount(_ dt: TimeInterval, idle: Bool, t: ComboTunables) -> Double {
-        let rate = idle ? t.drainPerSecondIdle : t.drainPerSecondActive
-        let dtClamped = dt < 0.0 ? 0.0 : dt
-        let rateClamped = rate < 0.0 ? 0.0 : rate
-        return dtClamped * rateClamped
-    }
-
-    private static func applyDrain(_ state: ComboState, amount: Double, t: ComboTunables) -> ComboState {
-        var next = normalize(state, t: t)
-        var remain = amount < 0.0 ? 0.0 : amount
-        while remain > 1e-12 {
-            var i = -1
-            var r = 0
-            while r < ComboTunables.ringCount {
-                if next.rings[r].meter > 1e-12 || next.rings[r].level > 0 {
-                    i = r
-                    break
-                }
-                r += 1
-            }
-            if i < 0 { break }
-            if next.rings[i].meter > 1e-12 {
-                let meter = next.rings[i].meter
-                let take = meter < remain ? meter : remain
-                next.rings[i].meter = roundedMultiplier(next.rings[i].meter - take)
-                remain = roundedMultiplier(remain - take)
-            } else if next.rings[i].level > 0 {
-                peelRing(&next, ring: i, t: t)
-            } else {
-                break
-            }
-        }
-        return next
+        let room = cap - base
+        let bonusRaw = Double(laps0) * step
+        let bonus = room < 0 ? 0 : (bonusRaw < room ? bonusRaw : room)
+        return ComboPersist(
+            taps: roundedMultiplier(taps),
+            meter0: meters[0],
+            level0: laps0,
+            contrib0: roundedMultiplier(bonus),
+            meter1: meters[1],
+            level1: laps1,
+            contrib1: 0,
+            meter2: meters[2],
+            level2: laps2,
+            contrib2: 0
+        )
     }
 }

@@ -38,7 +38,7 @@ fun OnboardingScreen(onFinished: () -> Unit) {
         ),
         OnboardPage(
             "Keep a combo",
-            "Combo rings fill as you tap. Each outer complete raises a live-tap multiplier (up to ×3) that stacks with Stronger. Stop tapping and it drains.",
+            "Combo rings fill like an odometer as you tap. Each time the outer ring completes, the next ring ticks up and your live-tap multiplier rises (up to ×3). Stop tapping and it drains.",
         ),
         OnboardPage(
             "Ad Tokens",
