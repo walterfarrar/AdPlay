@@ -242,6 +242,20 @@ object ComboEngine {
         )
     }
 
+    /** Tick-bezel turns from the live tap counter (not the stepped fill). */
+    fun displaySpins(state: ComboState, t: ComboTunables): List<Double> {
+        val caps = t.caps
+        val taps = clampTaps(state.taps, t)
+        val c0 = caps.c0.toDouble()
+        val c1 = max(1, caps.c1).toDouble()
+        val c2 = max(1, caps.c2).toDouble()
+        return listOf(
+            taps / c0,
+            if (caps.ring1Enabled) taps / (c0 * c1) else 0.0,
+            if (caps.ring2Enabled) taps / (c0 * c1 * c2) else 0.0,
+        )
+    }
+
     fun wouldCompleteOuter(state: ComboState, t: ComboTunables): Boolean {
         val caps = t.caps
         val taps = clampTaps(state.taps, t)

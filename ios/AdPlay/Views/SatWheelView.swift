@@ -7,6 +7,7 @@ struct SatWheelView: View, Equatable {
     var flash: Bool = false
     var comboFractions: [Double] = [0, 0, 0]
     var comboTracks: [Bool] = [true, false, false]
+    var comboSpins: [Double] = [0, 0, 0]
     var comboMultiplier: Double = 1
     var look: ThemeLook = .ember
 
@@ -15,6 +16,7 @@ struct SatWheelView: View, Equatable {
             && lhs.flash == rhs.flash
             && lhs.comboFractions == rhs.comboFractions
             && lhs.comboTracks == rhs.comboTracks
+            && lhs.comboSpins == rhs.comboSpins
             && lhs.comboMultiplier == rhs.comboMultiplier
             && lhs.look.id == rhs.look.id
     }
@@ -33,6 +35,7 @@ struct SatWheelView: View, Equatable {
                         flash: flash,
                         comboFractions: comboFractions,
                         comboTracks: comboTracks,
+                        comboSpins: comboSpins,
                         comboMultiplier: comboMultiplier,
                         look: look
                     )
@@ -60,6 +63,7 @@ private func drawSatWheel(
     flash: Bool,
     comboFractions: [Double],
     comboTracks: [Bool],
+    comboSpins: [Double],
     comboMultiplier: Double,
     look: ThemeLook
 ) {
@@ -73,6 +77,11 @@ private func drawSatWheel(
         comboFractions.count > 0 ? comboFractions[0] : 0,
         comboFractions.count > 1 ? comboFractions[1] : 0,
         comboFractions.count > 2 ? comboFractions[2] : 0,
+    ]
+    let spins = [
+        comboSpins.count > 0 ? comboSpins[0] : 0,
+        comboSpins.count > 1 ? comboSpins[1] : 0,
+        comboSpins.count > 2 ? comboSpins[2] : 0,
     ]
     let shown = [
         (comboTracks.count > 0 ? comboTracks[0] : true) || fracs[0] > 0.001,
@@ -151,6 +160,7 @@ private func drawSatWheel(
             size: size,
             frac: fracs[ring],
             showTrack: shown[ring],
+            spinTurns: spins[ring],
             fill: look.comboFill(ring),
             trackOpacity: 0.10 + Double(ring) * 0.04,
             ink: ink
@@ -220,6 +230,7 @@ private func drawComboBand(
     size: CGFloat,
     frac: Double,
     showTrack: Bool,
+    spinTurns: Double,
     fill: Color,
     trackOpacity: Double,
     ink: Color
@@ -235,26 +246,36 @@ private func drawComboBand(
     ))
     context.stroke(ring, with: .color(ink.opacity(0.22)), lineWidth: rim * 1.22)
     context.stroke(ring, with: .color(ink.opacity(trackOpacity)), lineWidth: rim)
-    guard drawArc else { return }
-    let sweep = min(1, max(0, frac))
-    var arc = Path()
-    arc.addArc(
-        center: center,
-        radius: radius,
-        startAngle: .degrees(-90),
-        endAngle: .degrees(-90 + sweep * 360),
-        clockwise: false
-    )
-    context.stroke(
-        arc,
-        with: .color(fill.opacity(sweep < 0.18 ? 0.42 : 0.22)),
-        style: StrokeStyle(lineWidth: rim * (sweep < 0.18 ? 1.55 : 1.25), lineCap: .round)
-    )
-    context.stroke(
-        arc,
-        with: .color(fill),
-        style: StrokeStyle(lineWidth: rim * 0.70, lineCap: .round)
-    )
+    if drawArc {
+        let sweep = min(1, max(0, frac))
+        var arc = Path()
+        arc.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-90 + sweep * 360),
+            clockwise: false
+        )
+        context.stroke(
+            arc,
+            with: .color(fill.opacity(sweep < 0.18 ? 0.42 : 0.22)),
+            style: StrokeStyle(lineWidth: rim * (sweep < 0.18 ? 1.55 : 1.25), lineCap: .round)
+        )
+        context.stroke(
+            arc,
+            with: .color(fill),
+            style: StrokeStyle(lineWidth: rim * 0.70, lineCap: .round)
+        )
+    }
+    // Two batched strokes. Spin follows live taps so inner bezels crawl every tap.
+    let spinDeg = spinTurns * 360
+    let tickOuter = radius + rim * 0.36
+    var minor = Path()
+    appendTicks(&minor, center: center, count: 24, startDeg: spinDeg - 90, stepDeg: 15, outer: tickOuter, length: rim * 0.40)
+    context.stroke(minor, with: .color(fill.opacity(0.38)), style: StrokeStyle(lineWidth: 1.05, lineCap: .round))
+    var major = Path()
+    appendTicks(&major, center: center, count: 8, startDeg: spinDeg - 90, stepDeg: 45, outer: tickOuter, length: rim * 0.78)
+    context.stroke(major, with: .color(fill.opacity(0.70)), style: StrokeStyle(lineWidth: 1.65, lineCap: .round))
 }
 
 private func appendTicks(

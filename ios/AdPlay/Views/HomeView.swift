@@ -631,6 +631,11 @@ struct SatEarnStage: View {
         }
         let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT).map { ($0 * 200).rounded() / 200 }
         let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
+        // Half-tap bins: every live tap moves ticks; drain does not outrun the existing meter skip.
+        let comboSpins = ComboEngine.displaySpins(
+            ComboState(taps: (comboLive.taps * 2).rounded() / 2, lastTapAt: comboLive.lastTapAt),
+            tunables: comboT
+        )
         let comboMult = comboT.multiplier(of: comboLive)
         let pose = knockerPose(
             elapsedSec: knockerElapsed,
@@ -662,6 +667,7 @@ struct SatEarnStage: View {
                         flash: wheelFlash,
                         comboFractions: comboMeters,
                         comboTracks: comboTracks,
+                        comboSpins: comboSpins,
                         comboMultiplier: comboMult,
                         look: look
                     )

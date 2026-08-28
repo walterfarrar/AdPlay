@@ -282,6 +282,23 @@ export function displayTracks(state: ComboState, t: ComboParams): boolean[] {
   ];
 }
 
+/**
+ * Tick-bezel turns from the live tap counter (not the stepped fill).
+ * Ring 0: one turn per C0 taps. Inner rings move every tap, C1/C2 times slower.
+ */
+export function displaySpins(state: ComboState, t: ComboParams): number[] {
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  const c0 = caps.c0;
+  const c1 = Math.max(1, caps.c1);
+  const c2 = Math.max(1, caps.c2);
+  return [
+    taps / c0,
+    caps.ring1Enabled ? taps / (c0 * c1) : 0,
+    caps.ring2Enabled ? taps / (c0 * c1 * c2) : 0,
+  ];
+}
+
 export function wouldCompleteOuter(state: ComboState, t: ComboParams): boolean {
   const caps = comboCaps(t);
   const taps = clampTaps(state.taps, t);
