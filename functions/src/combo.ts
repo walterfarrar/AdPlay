@@ -11,7 +11,7 @@ export const RING_COUNT = 3;
 export type ComboParams = {
   /** Taps to fill one outermost (ring 0) cycle. */
   comboTapsPerLevel: number;
-  /** Multiplier added each outer-ring complete (1.0 → 1.1 → 1.2 …). */
+  /** Multiplier added each non-overflow ring complete (1.0 → 1.1 → 1.2 …). */
   comboStep: number;
   /** Starting multiplier with no rings completed. */
   comboBase: number;
@@ -46,6 +46,8 @@ export type ComboCaps = {
   c0: number;
   c1: number;
   c2: number;
+  /** maxLevels(ring 2); 0 if ring 2 is off. */
+  ml2: number;
   maxTaps: number;
   ring1Enabled: boolean;
   ring2Enabled: boolean;
@@ -111,10 +113,13 @@ export function comboCaps(t: ComboParams): ComboCaps {
     clampInt(raw2, 0, 100) > 0 && (Number(t.comboRing2Max) || 0) > 0;
   const c1 = ring1Enabled ? clampInt(raw1, 1, 100) : 1;
   const c2 = ring2Enabled ? clampInt(raw2, 1, 100) : 1;
+  const raw3 = Math.round(Math.max(0, Number(t.comboRing2Max) || 0) / step);
+  const ml2 = ring2Enabled ? clampInt(raw3, 1, 100) : 0;
   return {
     c0,
     c1,
     c2,
+    ml2,
     maxTaps: c0 * c1 * c2,
     ring1Enabled,
     ring2Enabled,
@@ -150,13 +155,93 @@ export function tapsFromPersisted(
   return clampTaps(level * c0 + clamp01(comboMeter) * c0, t);
 }
 
+/**
+ * Nested contribution + overflow, closed-form from outer completes.
+ * Ring 0: +step until its cap, then overflow 0.01 / 0.001 / 0.0001 as
+ * inner rings max. Each outer complete also ticks ring 1; ring 1 ticks ring 2.
+ * Same sum as the old cascade engine, without peel loops.
+ */
+export function ringContributions(laps: number, t: ComboParams): [number, number, number] {
+  const caps = comboCaps(t);
+  const step = stepOf(t);
+  const L = Number.isFinite(laps) && laps > 0 ? Math.floor(laps) : 0;
+  if (L <= 0) return [0, 0, 0];
+
+  const ml0 = caps.c1;
+  const ml1 = caps.c2;
+  const ml2 = caps.ml2;
+  const ov = (innerMaxed: number) => nice(step / Math.pow(10, 1 + Math.max(0, innerMaxed)));
+
+  const r1Levels = caps.ring1Enabled ? Math.floor(L / caps.c1) : 0;
+  const r2Levels = caps.ring2Enabled ? Math.floor(L / (caps.c1 * caps.c2)) : 0;
+
+  const r0Max1 = caps.ring1Enabled ? caps.c1 * ml1 : Number.POSITIVE_INFINITY;
+  const r0Max2 =
+    caps.ring2Enabled && ml2 > 0 ? caps.c1 * caps.c2 * ml2 : Number.POSITIVE_INFINITY;
+  const c0 = ringBonus(L, ml0, step, [
+    { until: r0Max1, innerMaxed: 0 },
+    { until: r0Max2, innerMaxed: 1 },
+    { until: Number.POSITIVE_INFINITY, innerMaxed: 2 },
+  ], ov);
+
+  const r1Max2 =
+    caps.ring2Enabled && ml2 > 0 ? ml1 * ml2 : Number.POSITIVE_INFINITY;
+  const c1 = caps.ring1Enabled
+    ? ringBonus(r1Levels, ml1, step, [
+        { until: r1Max2, innerMaxed: 0 },
+        { until: Number.POSITIVE_INFINITY, innerMaxed: 1 },
+      ], ov)
+    : 0;
+
+  const c2 = caps.ring2Enabled
+    ? ringBonus(r2Levels, ml2, step, [{ until: Number.POSITIVE_INFINITY, innerMaxed: 0 }], ov)
+    : 0;
+
+  return applyBonusRoom([c0, c1, c2], t);
+}
+
+function ringBonus(
+  levels: number,
+  ml: number,
+  step: number,
+  bands: { until: number; innerMaxed: number }[],
+  ov: (innerMaxed: number) => number,
+): number {
+  if (!(levels > 0) || !(ml > 0)) return 0;
+  const normalLv = Math.min(levels, ml);
+  let sum = normalLv * step;
+  if (levels <= ml) return nice(sum);
+  let from = ml;
+  for (const band of bands) {
+    if (from >= levels) break;
+    const to = Math.min(levels, band.until);
+    if (to > from) sum += (to - from) * ov(band.innerMaxed);
+    from = Math.max(from, band.until);
+  }
+  return nice(sum);
+}
+
+function applyBonusRoom(parts: [number, number, number], t: ComboParams): [number, number, number] {
+  const base = t.comboBase > 0 && Number.isFinite(t.comboBase) ? t.comboBase : 1;
+  const abs = t.comboAbsMax > 0 && Number.isFinite(t.comboAbsMax) ? t.comboAbsMax : 3;
+  let room = Math.max(0, abs - base);
+  const out: [number, number, number] = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    const take = Math.min(Math.max(0, parts[i]), room);
+    out[i] = nice(take);
+    room = nice(room - take);
+  }
+  return out;
+}
+
 export function comboMultiplier(state: ComboState, t: ComboParams): number {
   const caps = comboCaps(t);
   const taps = clampTaps(state.taps, t);
   const base = t.comboBase > 0 && Number.isFinite(t.comboBase) ? t.comboBase : 1;
   const abs = t.comboAbsMax > 0 && Number.isFinite(t.comboAbsMax) ? t.comboAbsMax : 3;
   const laps = Math.floor(taps / caps.c0);
-  return nice(Math.min(abs, base + laps * stepOf(t)));
+  const bonus = ringContributions(laps, t).reduce((n, x) => n + x, 0);
+  return nice(Math.min(abs, base + bonus));
 }
 
 /** Hub label: one decimal on tenths, extra digits only if needed. */
@@ -235,19 +320,17 @@ export function persistCombo(state: ComboState, t: ComboParams): ComboPersist {
   const laps0 = Math.floor(taps / caps.c0);
   const laps1 = Math.floor(taps / (caps.c0 * caps.c1));
   const laps2 = Math.floor(taps / (caps.c0 * caps.c1 * caps.c2));
-  const base = t.comboBase > 0 && Number.isFinite(t.comboBase) ? t.comboBase : 1;
-  const abs = t.comboAbsMax > 0 && Number.isFinite(t.comboAbsMax) ? t.comboAbsMax : 3;
-  const bonus = Math.min(Math.max(0, abs - base), laps0 * stepOf(t));
+  const [c0, c1, c2] = ringContributions(laps0, t);
   return {
     comboTaps: nice(taps),
     comboMeter: meters[0],
     comboLevel: laps0,
-    comboContrib: nice(bonus),
+    comboContrib: c0,
     comboMeter1: meters[1],
     comboLevel1: laps1,
-    comboContrib1: 0,
+    comboContrib1: c1,
     comboMeter2: meters[2],
     comboLevel2: laps2,
-    comboContrib2: 0,
+    comboContrib2: c2,
   };
 }
