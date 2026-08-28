@@ -16,4 +16,4 @@ Use [LDPLAYER.md](../LDPLAYER.md). Store listing submission is out of scope unti
 
 ## Account deletion
 
-`DELETE /account` (authenticated) removes the user, game state, and related rows. Expose in Settings before public launch.
+Settings → Delete account (with a confirmation) calls the `deleteAccount` Cloud Function: recursive Firestore wipe under `users/{uid}` plus `auth.deleteUser`. The client then signs in anonymously again.

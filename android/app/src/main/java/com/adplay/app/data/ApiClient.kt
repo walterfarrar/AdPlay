@@ -56,6 +56,12 @@ class ApiClient {
         return parseCredit(data)
     }
 
+    suspend fun deleteAccount() {
+        ensureSignedIn()
+        functions.getHttpsCallable("deleteAccount").call().await()
+        auth.signOut()
+    }
+
     suspend fun requestWithdrawal(amountSats: Int, bolt11: String): GameState {
         ensureSignedIn()
         val result = functions

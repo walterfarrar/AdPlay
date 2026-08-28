@@ -58,6 +58,7 @@ fun MainShell(
     onReminders: (Boolean) -> Unit,
     onHaptics: (Boolean) -> Unit,
     onSound: (Boolean) -> Unit,
+    onDeleteAccount: (done: (Boolean) -> Unit) -> Unit,
     onLoadHistory: () -> Unit,
     onSubmit: (amount: Int, bolt11: String, done: (Boolean) -> Unit) -> Unit,
     onAcknowledgeDailyGoals: () -> Unit,
@@ -281,6 +282,7 @@ fun MainShell(
                     onReminders = onReminders,
                     onHaptics = onHaptics,
                     onSound = onSound,
+                    onDeleteAccount = onDeleteAccount,
                     onClose = { showSettings = false },
                 )
             }

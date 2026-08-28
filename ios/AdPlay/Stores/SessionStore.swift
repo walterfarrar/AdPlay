@@ -386,6 +386,35 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Wipe this anonymous session on the server, then start a new empty one.
+    @discardableResult
+    func deleteAccount() async -> Bool {
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        tapFlushGeneration += 1
+        unackedTaps = 0
+        tapFlushTask?.cancel()
+        tapFlushTask = nil
+        flushingTaps = false
+        do {
+            try await api.deleteAccount()
+            GameReminderScheduler.clearAll()
+            state = .empty
+            serverState = .empty
+            confirmedState = .empty
+            progress = .empty
+            adsWatchedToday = 0
+            lastUpdatedAt = nil
+            try await api.ensureSignedIn()
+            try await refresh(force: true)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     private func apply(_ next: GameState, force: Bool, keepCombo: Bool = true) {
         setServerState(next, force: force, keepCombo: keepCombo)
     }

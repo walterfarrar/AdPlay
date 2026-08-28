@@ -45,4 +45,4 @@ Admin payout tooling is **not** exposed in the iOS binary.
 - Privacy: https://fullyversed.com/adplay/privacy  
 - Support: https://fullyversed.com/adplay/support  
 - Marketing: https://fullyversed.com/adplay  
-Account deletion: Settings → Delete account (mailto with Player ID) or the Support page.
+Account deletion: Settings → Delete account → confirm. Wipes the anonymous Firebase session and game data; a new empty session starts on-device.
