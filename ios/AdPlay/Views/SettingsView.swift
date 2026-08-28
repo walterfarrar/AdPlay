@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 import FirebaseAuth
 
 struct SettingsView: View {
@@ -38,11 +39,16 @@ struct SettingsView: View {
                             Text("Keep sats and progress when you get a new phone. Play still starts without signing in.")
                                 .font(.footnote)
                                 .foregroundStyle(Color("BrandMuted"))
-                            Button("Save progress with Apple") {
-                                Task { await saveProgressWithApple() }
+                            SignInWithAppleButton(.signIn) { request in
+                                AppleAccountCoordinator.shared.configure(request)
+                            } onCompletion: { result in
+                                Task { await saveProgressWithApple(result) }
                             }
-                            .foregroundStyle(Color("BrandAccent"))
+                            .signInWithAppleButtonStyle(.white)
+                            .frame(height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .disabled(session.isLoading)
+                            .accessibilityLabel("Save progress with Apple")
                         }
                         Link("Privacy policy", destination: privacyURL)
                             .foregroundStyle(Color("BrandAccent"))
@@ -115,8 +121,8 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
     }
 
-    private func saveProgressWithApple() async {
-        switch await session.saveProgressWithApple() {
+    private func saveProgressWithApple(_ result: Result<ASAuthorization, Error>) async {
+        switch await session.saveProgressWithApple(result: result) {
         case .needsChoice:
             appleCollision = true
         case .linked, .restored, .canceled:
