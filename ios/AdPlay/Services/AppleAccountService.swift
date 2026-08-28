@@ -31,7 +31,8 @@ final class AppleAccountCoordinator: NSObject {
     func configure(_ request: ASAuthorizationAppleIDRequest) {
         let nonce = Self.randomNonce()
         rawNonce = nonce
-        request.requestedScopes = [.email]
+        // Don't ask for email — Hide My Email is what failed with "Sign Up Not Completed".
+        request.requestedScopes = []
         request.nonce = Self.sha256(nonce)
     }
 
@@ -84,7 +85,7 @@ final class AppleAccountCoordinator: NSObject {
         }
         if ns.domain == ASAuthorizationError.errorDomain {
             if ns.code == ASAuthorizationError.unknown.rawValue {
-                return "Apple sign-in failed (code 1000). This TestFlight is not signed with the Sign in with Apple entitlement."
+                return "Apple could not finish Sign in. Try again and choose Share My Email."
             }
             return "Apple sign-in failed (code \(ns.code))."
         }
