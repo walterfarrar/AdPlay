@@ -32,38 +32,15 @@ workflows:
           agvtool new-version -all "$PROJECT_BUILD_NUMBER"
       - name: Set up code signing settings on Xcode project
         script: |
-          set -euo pipefail
-          PROFILE=""
-          for dir in \
-            "$HOME/Library/MobileDevice/Provisioning Profiles" \
-            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
-          do
-            [ -d "$dir" ] || continue
-            for p in "$dir"/*.mobileprovision; do
-              [ -f "$p" ] || continue
-              decoded=$(security cms -D -i "$p" 2>/dev/null || true)
-              echo "$decoded" | grep -q "com.adplay.app" || continue
-              echo "$decoded" | grep -A1 "<key>Name</key>" || true
-              if echo "$decoded" | grep -q applesignin; then
-                PROFILE="$p"
-              fi
-            done
-          done
-          if [ -z "$PROFILE" ]; then
-            echo "No fetched profile includes Sign in with Apple. In Codemagic code signing identities, delete the old AdPlay profile and leave AdPlay_New." >&2
-            exit 1
-          fi
-          xcode-project use-profiles \
-            --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
-            --profile "$PROFILE"
+          xcode-project use-profiles --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT"
       - name: Build ipa for distribution
         script: |
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/ios/$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
-      - name: Confirm IPA includes Sign in with Apple
+      - name: Apply Sign in with Apple from the embedded profile
         script: |
-          set -euo pipefail
+          python3 "$CM_BUILD_DIR/ios/scripts/apply_embedded_entitlements.py"
           IPA=$(ls "$CM_BUILD_DIR/build/ios/ipa"/*.ipa | head -1)
           unzip -qo "$IPA" -d /tmp/adplay-ipa
           APP=$(find /tmp/adplay-ipa -name '*.app' | head -1)
