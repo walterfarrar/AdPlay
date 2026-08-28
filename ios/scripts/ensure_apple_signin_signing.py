@@ -25,6 +25,7 @@ for extra in (
 ):
     if extra:
         PROFILE_DIRS.append(Path(extra))
+PROFILE_DIRS = list(dict.fromkeys(PROFILE_DIRS))
 
 
 def run(args: list[str]) -> subprocess.CompletedProcess[str]:
