@@ -88,8 +88,7 @@ struct HomeView: View {
             AchievementsView()
                 .environmentObject(session)
         }
-        // Full screen, not a card sheet — Sign in with Apple returns
-        // ASAuthorizationError.unknown (1000) when started from a .sheet.
+        // Settings is full screen so Sign in with Apple is not presented from a card sheet.
         .fullScreenCover(isPresented: $showSettings) {
             SettingsView(showsClose: true)
                 .environmentObject(session)
