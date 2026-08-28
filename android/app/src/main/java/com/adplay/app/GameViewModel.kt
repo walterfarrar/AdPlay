@@ -521,7 +521,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             )
             // Server remaining already includes tokens for this hold. Only grant slots
             // that local goal completion added on top (optimistic taps / this session).
-            val grantAbove = if (server != null) incoming.adBank.max else ui.progress.adBank.max
+            // Resume getState with no in-flight taps must not grant.
+            val grantAbove = when {
+                server != null && unackedTaps == 0 -> next.adBank.max
+                server != null -> incoming.adBank.max
+                else -> ui.progress.adBank.max
+            }
             val oldRemaining = ui.state.adsRemainingToday
             val gained = (next.adBank.max - grantAbove).coerceAtLeast(0)
             val state = if (gained > 0 && ui.state.adsRemainingToday <= oldRemaining) {
