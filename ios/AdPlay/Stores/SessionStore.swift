@@ -173,7 +173,9 @@ final class SessionStore: ObservableObject {
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
         state = project(s, now: Date())
-        replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
+        // Do not grant tokens here. getState / applyProgress already sent the
+        // remaining bank; treating a stale local max as the floor was adding
+        // those slots again (full bar after coming back).
         publishPlayPresence()
     }
 
@@ -393,13 +395,20 @@ final class SessionStore: ObservableObject {
             adsWatchedToday = ads.current
         }
         let incoming = progress.takingServer(server)
+        let next = incoming.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday)
         // Server remaining already includes tokens for this hold. Only grant slots
         // that local goal completion added on top (optimistic taps / this session).
-        let grantAbove = server != nil ? incoming.adBank.max : progress.adBank.max
-        replaceProgress(
-            incoming.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday),
-            grantAbove: grantAbove
-        )
+        // A resume getState with no in-flight taps must not grant — syncedWith can
+        // raise max above the snapshot (stale lastBoostType / empty local bank).
+        let grantAbove: Int
+        if server != nil, unackedTaps == 0 {
+            grantAbove = next.adBank.max
+        } else if server != nil {
+            grantAbove = incoming.adBank.max
+        } else {
+            grantAbove = progress.adBank.max
+        }
+        replaceProgress(next, grantAbove: grantAbove)
         GameCenterService.report(progress: progress)
         publishPlayPresence()
     }
