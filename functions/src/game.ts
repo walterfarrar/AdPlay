@@ -26,6 +26,8 @@ import {
   applyComboTap,
   comboAt,
   comboMultiplier,
+  persistCombo,
+  tapsFromPersisted,
   type ComboParams,
   type ComboState,
 } from "./combo";
@@ -104,6 +106,7 @@ function migrateGame(raw: admin.firestore.DocumentData | undefined, t: Tunables)
   if (typeof g.comboMeter2 !== "number" || Number.isNaN(g.comboMeter2)) g.comboMeter2 = 0;
   if (typeof g.comboLevel2 !== "number" || Number.isNaN(g.comboLevel2)) g.comboLevel2 = 0;
   if (typeof g.comboContrib2 !== "number" || Number.isNaN(g.comboContrib2)) g.comboContrib2 = 0;
+  if (typeof g.comboTaps === "number" && !Number.isFinite(g.comboTaps)) g.comboTaps = 0;
   if (g.lastManualTapAt === undefined) g.lastManualTapAt = null;
   return g;
 }
@@ -123,42 +126,25 @@ function comboParams(t: Tunables): ComboParams {
   };
 }
 
-function persistedCombo(g: GameStateDoc): ComboState {
+function persistedCombo(g: GameStateDoc, t: ComboParams): ComboState {
   return {
-    rings: [
-      {
-        meter: g.comboMeter || 0,
-        level: g.comboLevel || 0,
-        contribution: g.comboContrib || 0,
-      },
-      {
-        meter: g.comboMeter1 || 0,
-        level: g.comboLevel1 || 0,
-        contribution: g.comboContrib1 || 0,
-      },
-      {
-        meter: g.comboMeter2 || 0,
-        level: g.comboLevel2 || 0,
-        contribution: g.comboContrib2 || 0,
-      },
-    ],
+    taps: tapsFromPersisted(g.comboTaps, g.comboLevel || 0, g.comboMeter || 0, t),
     lastTapAtMs: parseIso(g.lastManualTapAt)?.getTime() ?? null,
   };
 }
 
-function writeCombo(g: GameStateDoc, next: ComboState): void {
-  const r0 = next.rings[0] || { meter: 0, level: 0, contribution: 0 };
-  const r1 = next.rings[1] || { meter: 0, level: 0, contribution: 0 };
-  const r2 = next.rings[2] || { meter: 0, level: 0, contribution: 0 };
-  g.comboMeter = r0.meter;
-  g.comboLevel = r0.level;
-  g.comboContrib = r0.contribution;
-  g.comboMeter1 = r1.meter;
-  g.comboLevel1 = r1.level;
-  g.comboContrib1 = r1.contribution;
-  g.comboMeter2 = r2.meter;
-  g.comboLevel2 = r2.level;
-  g.comboContrib2 = r2.contribution;
+function writeCombo(g: GameStateDoc, next: ComboState, t: ComboParams): void {
+  const p = persistCombo(next, t);
+  g.comboTaps = p.comboTaps;
+  g.comboMeter = p.comboMeter;
+  g.comboLevel = p.comboLevel;
+  g.comboContrib = p.comboContrib;
+  g.comboMeter1 = p.comboMeter1;
+  g.comboLevel1 = p.comboLevel1;
+  g.comboContrib1 = p.comboContrib1;
+  g.comboMeter2 = p.comboMeter2;
+  g.comboLevel2 = p.comboLevel2;
+  g.comboContrib2 = p.comboContrib2;
   g.lastManualTapAt =
     next.lastTapAtMs == null ? null : new Date(next.lastTapAtMs).toISOString();
 }
@@ -378,7 +364,8 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
   const durationActive = autoActive && durationCount > 0;
   const regen = regenPublic(g, t, now);
   const comboT = comboParams(t);
-  const liveCombo = comboAt(persistedCombo(g), now.getTime(), comboT);
+  const persisted = persistedCombo(g, comboT);
+  const liveCombo = comboAt(persisted, now.getTime(), comboT);
   return {
     progress: Math.min(g.progress, t.unitsPerSat),
     unitsPerSat: t.unitsPerSat,
@@ -405,6 +392,7 @@ function toPublic(g: GameStateDoc, t: Tunables, now: Date): PublicGameState {
     tapStrengthActive: tapActive,
     tapStrengthUntil: tapActive ? g.autoFillUntil : null,
     tapPower: effectiveTapPower(g, t, now),
+    comboTaps: persisted.taps,
     comboMeter: g.comboMeter || 0,
     comboLevel: g.comboLevel || 0,
     comboContrib: g.comboContrib || 0,
@@ -526,8 +514,8 @@ function applyManualTapInMemory(
 
   g.tapsRemaining -= 1;
   const comboT = comboParams(t);
-  const nextCombo = applyComboTap(persistedCombo(g), at.getTime(), comboT);
-  writeCombo(g, nextCombo);
+  const nextCombo = applyComboTap(persistedCombo(g, comboT), at.getTime(), comboT);
+  writeCombo(g, nextCombo, comboT);
   // Combo stacks with Stronger for this live tap only. Auto catch-up already
   // ran in runGameTx via advanceInMemory (no combo).
   const units = autoTapPower(g, t, at) * comboMultiplier(nextCombo, comboT);

@@ -31,6 +31,7 @@ data class GameState(
     val tapStrengthActive: Boolean = false,
     val tapStrengthUntil: String? = null,
     val tapPower: Double = 1.0,
+    val comboTaps: Double? = null,
     val comboMeter: Double = 0.0,
     val comboLevel: Int = 0,
     val comboContrib: Double = 0.0,
@@ -51,30 +52,32 @@ data class GameState(
     val progressFraction: Float
         get() = if (unitsPerSat <= 0) 0f else (progress / unitsPerSat).toFloat().coerceIn(0f, 1f)
 
-    val combo: ComboState
-        get() = ComboState(
-            rings = listOf(
-                ComboRingState(comboMeter, comboLevel, comboContrib),
-                ComboRingState(comboMeter1, comboLevel1, comboContrib1),
-                ComboRingState(comboMeter2, comboLevel2, comboContrib2),
-            ),
+    fun combo(tunables: ComboTunables = ComboTunables.defaults): ComboState =
+        ComboState(
+            taps = ComboEngine.tapsFromPersisted(comboTaps, comboLevel, comboMeter, tunables),
             lastTapAtMs = lastManualTapAt?.let { parseIso8601Millis(it) },
         )
 
-    fun writingCombo(next: ComboState, nowMs: Long? = null): GameState {
-        val r0 = next.rings.getOrNull(0) ?: ComboRingState()
-        val r1 = next.rings.getOrNull(1) ?: ComboRingState()
-        val r2 = next.rings.getOrNull(2) ?: ComboRingState()
+    val combo: ComboState
+        get() = combo()
+
+    fun writingCombo(
+        next: ComboState,
+        nowMs: Long? = null,
+        tunables: ComboTunables = ComboTunables.defaults,
+    ): GameState {
+        val p = ComboEngine.persist(next, tunables)
         return copy(
-            comboMeter = r0.meter,
-            comboLevel = r0.level,
-            comboContrib = r0.contribution,
-            comboMeter1 = r1.meter,
-            comboLevel1 = r1.level,
-            comboContrib1 = r1.contribution,
-            comboMeter2 = r2.meter,
-            comboLevel2 = r2.level,
-            comboContrib2 = r2.contribution,
+            comboTaps = p.taps,
+            comboMeter = p.meter0,
+            comboLevel = p.level0,
+            comboContrib = p.contrib0,
+            comboMeter1 = p.meter1,
+            comboLevel1 = p.level1,
+            comboContrib1 = p.contrib1,
+            comboMeter2 = p.meter2,
+            comboLevel2 = p.level2,
+            comboContrib2 = p.contrib2,
             lastManualTapAt = (nowMs ?: next.lastTapAtMs)?.let { iso8601String(it) } ?: lastManualTapAt,
         )
     }
@@ -83,7 +86,7 @@ data class GameState(
     fun applyingManualTap(tunables: Tunables? = null, nowMs: Long = System.currentTimeMillis()): GameState {
         if (tapsRemaining <= 0) return this
         val comboT = ComboTunables.from(tunables)
-        val nextCombo = ComboEngine.applyTap(combo, nowMs, comboT)
+        val nextCombo = ComboEngine.applyTap(combo(comboT), nowMs, comboT)
         val units = unitsPerSat.coerceAtLeast(1)
         var nextProgress = progress + tapPower.coerceAtLeast(0.0) * comboT.multiplier(nextCombo)
         var earned = 0
@@ -95,7 +98,7 @@ data class GameState(
             nextProgress -= units
             earned += 1
         }
-        return writingCombo(nextCombo, nowMs).copy(
+        return writingCombo(nextCombo, nowMs, comboT).copy(
             tapsRemaining = tapsRemaining - 1,
             progress = nextProgress,
             satsBalance = satsBalance + earned,
@@ -112,6 +115,7 @@ data class GameState(
         progress = from.progress,
         satsBalance = from.satsBalance,
         satsEarnedToday = from.satsEarnedToday,
+        comboTaps = from.comboTaps,
         comboMeter = from.comboMeter,
         comboLevel = from.comboLevel,
         comboContrib = from.comboContrib,

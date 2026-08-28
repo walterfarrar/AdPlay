@@ -62,26 +62,26 @@ export type Tunables = {
   minWithdrawSats: number;
   /** Taps to fill one outermost combo cycle. */
   comboTapsPerLevel: number;
-  /** Multiplier added each non-overflow ring completion. */
+  /** Multiplier added each outer-ring complete. */
   comboStep: number;
   /**
-   * Legacy single-ring cap. Ignored by the nested engine (uses comboAbsMax).
+   * Legacy single-ring cap. Ignored by the odometer engine (uses comboAbsMax).
    * Kept so existing Firestore docs still merge cleanly.
    */
   comboMax: number;
   /** Combo multiplier with empty rings. */
   comboBase: number;
-  /** Hard cap on comboMultiplier (base + all rings). */
+  /** Hard cap on comboMultiplier (base + outer completes × step). */
   comboAbsMax: number;
-  /** Max contribution from the outermost ring before overflow. */
+  /** Ring 1 capacity as contribution max (levels = max / step). */
   comboRing0Max: number;
   comboRing1Max: number;
   comboRing2Max: number;
   /** Seconds after the last tap before idle drain. */
   comboIdleGraceSeconds: number;
-  /** Combo ring drain per second while tapping. */
+  /** Unused. Kept so existing Firestore docs still merge. */
   comboDrainPerSecondActive: number;
-  /** Combo ring drain per second after the grace window. */
+  /** Outer-ring units drained per second after the grace window. */
   comboDrainPerSecondIdle: number;
 };
 /** Defaults — also seeded to Firestore config/tunables (server-only writes). */
@@ -176,11 +176,13 @@ export type GameStateDoc = {
   hasPaidRedeem: boolean;
   /** Last applied hold max; used to grant charges when the max grows. */
   adsHoldMax?: number;
+  /** Source of truth: live-tap combo counter (fractional while draining). */
+  comboTaps?: number;
   /** Ring 0 fill 0–1, captured at last manual tap. */
   comboMeter: number;
-  /** Ring 0 completed cycles (including overflow cycles). */
+  /** Completed outer (ring 0) cycles. */
   comboLevel: number;
-  /** Ring 0 contribution to the multiplier. */
+  /** Derived bonus written for old readers (ring 0 only). */
   comboContrib: number;
   /** Ring 1 fill 0–1. */
   comboMeter1: number;
@@ -233,6 +235,8 @@ export type PublicGameState = {
   tapStrengthUntil: string | null;
   /** Effective progress units per tap right now (also scales auto fill). */
   tapPower: number;
+  /** Tap counter at last tap (clients drain locally for display). */
+  comboTaps: number;
   /** Ring 0 fill 0–1 at last tap (clients drain locally for display). */
   comboMeter: number;
   comboLevel: number;

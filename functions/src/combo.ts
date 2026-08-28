@@ -1,5 +1,8 @@
-/** Manual-tap nested combo. Keep in lockstep with iOS `ComboEngine.swift`,
+/** Manual-tap odometer combo. Keep in lockstep with iOS `ComboEngine.swift`,
  *  Android `Combo.kt`, and `web/app.js`.
+ *
+ *  One tap counter. Rings are place-value digits:
+ *    ring 0 fills every C0 taps, then ticks ring 1, then ring 2.
  *  Never applied to Auto Tapper, Skip Time, or offline catch-up — live taps only.
  */
 
@@ -8,21 +11,21 @@ export const RING_COUNT = 3;
 export type ComboParams = {
   /** Taps to fill one outermost (ring 0) cycle. */
   comboTapsPerLevel: number;
-  /** Multiplier added each non-overflow completion (1.0 → 1.1 → 1.2 …). */
+  /** Multiplier added each outer-ring complete (1.0 → 1.1 → 1.2 …). */
   comboStep: number;
   /** Starting multiplier with no rings completed. */
   comboBase: number;
   /** Hard cap on the live-tap multiplier. */
   comboAbsMax: number;
-  /** Max contribution from ring 0 (outer). Overflow continues past this. */
+  /** How many outer completes fill ring 1 (max / step). */
   comboRing0Max: number;
   comboRing1Max: number;
   comboRing2Max: number;
   /** Seconds after a tap before idle drain kicks in. */
   comboIdleGraceSeconds: number;
-  /** Ring units (0–1) drained per second while still tapping. */
+  /** Unused. Kept so existing Firestore docs still merge. */
   comboDrainPerSecondActive: number;
-  /** Ring units drained per second after the grace window. */
+  /** Outer-ring units drained per second after the grace window. */
   comboDrainPerSecondIdle: number;
 };
 
@@ -39,40 +42,35 @@ export const DEFAULT_COMBO: ComboParams = {
   comboDrainPerSecondIdle: 0.5,
 };
 
-export type ComboRingState = {
-  meter: number;
-  level: number;
-  contribution: number;
+export type ComboCaps = {
+  c0: number;
+  c1: number;
+  c2: number;
+  maxTaps: number;
+  ring1Enabled: boolean;
+  ring2Enabled: boolean;
 };
 
 export type ComboState = {
-  rings: ComboRingState[];
+  taps: number;
   lastTapAtMs: number | null;
 };
 
-export function emptyCombo(): ComboState {
-  return {
-    rings: [0, 1, 2].map(() => ({ meter: 0, level: 0, contribution: 0 })),
-    lastTapAtMs: null,
-  };
-}
+export type ComboPersist = {
+  comboTaps: number;
+  comboMeter: number;
+  comboLevel: number;
+  comboContrib: number;
+  comboMeter1: number;
+  comboLevel1: number;
+  comboContrib1: number;
+  comboMeter2: number;
+  comboLevel2: number;
+  comboContrib2: number;
+};
 
-export function normalizeCombo(state: ComboState, t: ComboParams): ComboState {
-  const rings: ComboRingState[] = [];
-  for (let i = 0; i < RING_COUNT; i++) {
-    const r = state.rings[i] || { meter: 0, level: 0, contribution: 0 };
-    const level = Math.max(0, Math.floor(r.level || 0));
-    let contribution = Math.max(0, r.contribution || 0);
-    if (contribution <= 0 && level > 0) {
-      contribution = derivedContribution(level, i, t);
-    }
-    rings.push({
-      meter: clamp01(r.meter || 0),
-      level,
-      contribution: nice(contribution),
-    });
-  }
-  return { rings, lastTapAtMs: state.lastTapAtMs };
+export function emptyCombo(): ComboState {
+  return { taps: 0, lastTapAtMs: null };
 }
 
 function nice(n: number): number {
@@ -80,79 +78,88 @@ function nice(n: number): number {
 }
 
 function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n >= 1) return 1;
+  return n;
+}
+
+function clampInt(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo;
+  const x = Math.trunc(n);
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
 }
 
 function stepOf(t: ComboParams): number {
-  return t.comboStep > 0 ? t.comboStep : 0.1;
+  return t.comboStep > 0 && Number.isFinite(t.comboStep) ? t.comboStep : 0.1;
 }
 
-function ringMaxOf(ring: number, t: ComboParams): number {
-  const raw = [t.comboRing0Max, t.comboRing1Max, t.comboRing2Max][ring] ?? 0;
-  return Math.max(0, raw);
+function posMod(a: number, b: number): number {
+  if (!(b > 0) || !Number.isFinite(a)) return 0;
+  const r = a % b;
+  return r < 0 ? r + b : r;
 }
 
-export function maxLevels(ring: number, t: ComboParams): number {
-  const mx = ringMaxOf(ring, t);
-  if (mx <= 0) return 0;
-  return Math.max(0, Math.round(mx / stepOf(t)));
-}
-
-function fillsPerLevel(parentRing: number, t: ComboParams): number {
-  return Math.max(1, maxLevels(parentRing, t));
-}
-
-function ringEnabled(ring: number, t: ComboParams): boolean {
-  return maxLevels(ring, t) > 0;
-}
-
-function isAtMax(state: ComboState, ring: number, t: ComboParams): boolean {
-  const ml = maxLevels(ring, t);
-  if (ml <= 0) return false;
-  return state.rings[ring].level >= ml;
-}
-
-function innerMaxedCount(state: ComboState, ring: number, t: ComboParams): number {
-  let n = 0;
-  for (let j = ring + 1; j < RING_COUNT; j++) {
-    if (isAtMax(state, j, t)) n += 1;
-  }
-  return n;
-}
-
-/** Overflow quantum: 0.01, then 0.001 / 0.0001 as each inner ring maxes. */
-function overflowStep(innerMaxed: number, t: ComboParams): number {
-  const exp = 1 + Math.max(0, innerMaxed);
-  return nice(stepOf(t) / Math.pow(10, exp));
-}
-
-function completionIncrement(state: ComboState, ring: number, t: ComboParams): number {
-  const ml = maxLevels(ring, t);
-  if (state.rings[ring].level < ml) return stepOf(t);
-  return overflowStep(innerMaxedCount(state, ring, t), t);
-}
-
-function derivedContribution(level: number, ring: number, t: ComboParams): number {
+export function comboCaps(t: ComboParams): ComboCaps {
   const step = stepOf(t);
-  const ml = maxLevels(ring, t);
-  const stepLv = Math.min(level, ml);
-  const overflowLv = Math.max(0, level - ml);
-  return nice(stepLv * step + overflowLv * overflowStep(0, t));
+  const c0 = clampInt(t.comboTapsPerLevel, 1, 10000);
+  const raw1 = Math.round(Math.max(0, Number(t.comboRing0Max) || 0) / step);
+  const raw2 = Math.round(Math.max(0, Number(t.comboRing1Max) || 0) / step);
+  const ring1Enabled = clampInt(raw1, 0, 100) > 0;
+  const ring2Enabled =
+    clampInt(raw2, 0, 100) > 0 && (Number(t.comboRing2Max) || 0) > 0;
+  const c1 = ring1Enabled ? clampInt(raw1, 1, 100) : 1;
+  const c2 = ring2Enabled ? clampInt(raw2, 1, 100) : 1;
+  return {
+    c0,
+    c1,
+    c2,
+    maxTaps: c0 * c1 * c2,
+    ring1Enabled,
+    ring2Enabled,
+  };
 }
 
-function totalBonus(state: ComboState): number {
-  let n = 0;
-  for (const r of state.rings) n += r.contribution;
-  return n;
+export function clampTaps(taps: number, t: ComboParams): number {
+  const max = comboCaps(t).maxTaps;
+  if (!Number.isFinite(taps) || taps <= 0) return 0;
+  return taps >= max ? max : taps;
+}
+
+export function normalizeCombo(state: ComboState, t: ComboParams): ComboState {
+  const last = state?.lastTapAtMs;
+  return {
+    taps: clampTaps(state?.taps ?? 0, t),
+    lastTapAtMs: typeof last === "number" && Number.isFinite(last) ? last : null,
+  };
+}
+
+/** Prefer `comboTaps`. Else reconstruct from ring-0 level + meter (old docs). */
+export function tapsFromPersisted(
+  comboTaps: number | null | undefined,
+  comboLevel: number,
+  comboMeter: number,
+  t: ComboParams,
+): number {
+  if (typeof comboTaps === "number" && Number.isFinite(comboTaps)) {
+    return clampTaps(comboTaps, t);
+  }
+  const c0 = comboCaps(t).c0;
+  const level = Number.isFinite(comboLevel) ? Math.max(0, Math.floor(comboLevel)) : 0;
+  return clampTaps(level * c0 + clamp01(comboMeter) * c0, t);
 }
 
 export function comboMultiplier(state: ComboState, t: ComboParams): number {
-  const base = t.comboBase > 0 ? t.comboBase : 1;
-  const abs = t.comboAbsMax > 0 ? t.comboAbsMax : 3;
-  return nice(Math.min(abs, base + totalBonus(state)));
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  const base = t.comboBase > 0 && Number.isFinite(t.comboBase) ? t.comboBase : 1;
+  const abs = t.comboAbsMax > 0 && Number.isFinite(t.comboAbsMax) ? t.comboAbsMax : 3;
+  const laps = Math.floor(taps / caps.c0);
+  return nice(Math.min(abs, base + laps * stepOf(t)));
 }
 
-/** Hub label: one decimal on tenths, extra digits when overflow is in play. */
+/** Hub label: one decimal on tenths, extra digits only if needed. */
 export function formatComboMultiplier(m: number): string {
   if (!(m > 1.001)) return "";
   const tenths = Math.round(m * 10) / 10;
@@ -164,140 +171,83 @@ export function formatComboMultiplier(m: number): string {
   return `×${(Math.round(m * 10000) / 10000).toFixed(4)}`;
 }
 
-/** Visible fill is the current meter. Contribution max does not freeze the arc. */
+/** Visible fill is the current digit of each ring. */
 export function displayMeters(state: ComboState, t: ComboParams): number[] {
-  return state.rings.map((r, i) => {
-    if (!ringEnabled(i, t)) return 0;
-    return clamp01(r.meter);
-  });
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  if (taps >= caps.maxTaps - 1e-12) {
+    return [1, caps.ring1Enabled ? 1 : 0, caps.ring2Enabled ? 1 : 0];
+  }
+  const m0 = posMod(taps, caps.c0) / caps.c0;
+  const laps = Math.floor(taps / caps.c0);
+  const m1 = caps.ring1Enabled ? posMod(laps, caps.c1) / caps.c1 : 0;
+  const inner = Math.floor(taps / (caps.c0 * caps.c1));
+  const m2 = caps.ring2Enabled ? posMod(inner, caps.c2) / caps.c2 : 0;
+  return [clamp01(m0), clamp01(m1), clamp01(m2)];
 }
 
-/** Track stays up once a ring has contribution/levels, even if meter wrapped to 0. */
+/** Track stays up once that digit has started (and after wrap, while a higher digit is live). */
 export function displayTracks(state: ComboState, t: ComboParams): boolean[] {
-  const meters = displayMeters(state, t);
-  return state.rings.map((r, i) => {
-    if (!ringEnabled(i, t)) return false;
-    if (meters[i] > 0.001) return true;
-    if (isAtMax(state, i, t)) return true;
-    return r.level > 0 || r.contribution > 1e-12;
-  });
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  return [
+    taps > 1e-9,
+    caps.ring1Enabled && taps >= caps.c0 - 1e-12,
+    caps.ring2Enabled && taps >= caps.c0 * caps.c1 - 1e-12,
+  ];
 }
 
-function applyCompletion(state: ComboState, ring: number, t: ComboParams): void {
-  const inc = completionIncrement(state, ring, t);
-  const abs = t.comboAbsMax > 0 ? t.comboAbsMax : 3;
-  const base = t.comboBase > 0 ? t.comboBase : 1;
-  const room = Math.max(0, abs - base - totalBonus(state));
-  const applied = Math.min(inc, room);
-  state.rings[ring].level += 1;
-  state.rings[ring].contribution = nice(state.rings[ring].contribution + applied);
-  // Every wrap fills the next inner ring immediately (first outer complete → ring 1 at 10%).
-  if (ring + 1 < RING_COUNT) {
-    addFill(state, ring + 1, 1 / fillsPerLevel(ring, t), t);
-  }
+export function wouldCompleteOuter(state: ComboState, t: ComboParams): boolean {
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  if (taps >= caps.maxTaps - 1e-12) return false;
+  return posMod(taps, caps.c0) + 1 >= caps.c0 - 1e-12;
 }
 
-function addFill(state: ComboState, ring: number, amount: number, t: ComboParams): void {
-  if (!ringEnabled(ring, t) || !(amount > 0)) return;
-  state.rings[ring].meter = nice(state.rings[ring].meter + amount);
-  while (state.rings[ring].meter >= 1 - 1e-12) {
-    state.rings[ring].meter = nice(state.rings[ring].meter - 1);
-    applyCompletion(state, ring, t);
-  }
-}
-
-function reverseCompletion(state: ComboState, ring: number, t: ComboParams): void {
-  const r = state.rings[ring];
-  if (r.level <= 0) return;
-  const ml = maxLevels(ring, t);
-  const step = stepOf(t);
-  const inc = r.level > ml ? overflowStep(innerMaxedCount(state, ring, t), t) : step;
-  r.level -= 1;
-  r.contribution = nice(Math.max(0, r.contribution - inc));
-  if (r.level < ml) {
-    r.contribution = nice(Math.min(r.contribution, r.level * step));
-  } else if (r.level === ml) {
-    r.contribution = nice(Math.min(r.contribution, ringMaxOf(ring, t)));
-  }
-  if (r.level <= 0) {
-    r.level = 0;
-    r.contribution = 0;
-  }
-  if (ring + 1 < RING_COUNT) {
-    unwindFill(state, ring + 1, 1 / fillsPerLevel(ring, t), t);
-  }
-}
-
-function unwindFill(state: ComboState, ring: number, amount: number, t: ComboParams): void {
-  if (!ringEnabled(ring, t) || !(amount > 0)) return;
-  state.rings[ring].meter = nice(state.rings[ring].meter - amount);
-  while (state.rings[ring].meter < -1e-12) {
-    if (state.rings[ring].level <= 0) {
-      state.rings[ring].meter = 0;
-      break;
-    }
-    reverseCompletion(state, ring, t);
-    state.rings[ring].meter = nice(state.rings[ring].meter + 1);
-  }
-}
-
-function peelRing(state: ComboState, ring: number, t: ComboParams): void {
-  reverseCompletion(state, ring, t);
-  state.rings[ring].meter = 1;
-}
-
-function drainAmount(dtSec: number, idle: boolean, t: ComboParams): number {
-  const rate = idle ? t.comboDrainPerSecondIdle : t.comboDrainPerSecondActive;
-  return Math.max(0, dtSec) * Math.max(0, rate);
-}
-
-export function applyDrain(state: ComboState, drain: number, t: ComboParams): ComboState {
-  const next = normalizeCombo(state, t);
-  let remain = Math.max(0, drain);
-  while (remain > 1e-12) {
-    let i = -1;
-    for (let r = 0; r < RING_COUNT; r++) {
-      if (next.rings[r].meter > 1e-12 || next.rings[r].level > 0) {
-        i = r;
-        break;
-      }
-    }
-    if (i < 0) break;
-    const ring = next.rings[i];
-    if (ring.meter > 1e-12) {
-      const take = Math.min(ring.meter, remain);
-      ring.meter = nice(ring.meter - take);
-      remain = nice(remain - take);
-    } else if (ring.level > 0) {
-      peelRing(next, i, t);
-    } else {
-      break;
-    }
-  }
-  return next;
-}
-
-/** Drain from the last tap to `nowMs` (no fill). */
+/** Drain from the last tap to `nowMs` (O(1), idle only). */
 export function comboAt(state: ComboState, nowMs: number, t: ComboParams): ComboState {
   const cur = normalizeCombo(state, t);
-  if (cur.lastTapAtMs == null) {
-    // Missing timestamp: keep meter. Do not treat as idle (that used 0.5/s drain).
-    return cur;
-  }
-  if (nowMs <= cur.lastTapAtMs) return cur;
-  const grace = Math.max(0, t.comboIdleGraceSeconds);
+  if (cur.lastTapAtMs == null) return cur;
+  if (!Number.isFinite(nowMs) || nowMs <= cur.lastTapAtMs) return cur;
+  const grace = Math.max(0, Number(t.comboIdleGraceSeconds) || 0);
   const dt = (nowMs - cur.lastTapAtMs) / 1000;
-  if (dt <= grace) {
-    return applyDrain(cur, drainAmount(dt, false, t), t);
+  if (dt <= grace) return cur;
+  const rate = Math.max(0, Number(t.comboDrainPerSecondIdle) || 0) * comboCaps(t).c0;
+  const drain = (dt - grace) * rate;
+  if (!Number.isFinite(drain) || drain >= cur.taps) {
+    return { taps: 0, lastTapAtMs: cur.lastTapAtMs };
   }
-  const afterGrace = applyDrain(cur, drainAmount(grace, false, t), t);
-  return applyDrain(afterGrace, drainAmount(dt - grace, true, t), t);
+  return { taps: clampTaps(cur.taps - drain, t), lastTapAtMs: cur.lastTapAtMs };
 }
 
-/** Drain to now, add one tap of fill on ring 0, cascade into inner rings. */
+/** Drain to now, then add one tap. Caps at maxTaps. */
 export function applyComboTap(state: ComboState, nowMs: number, t: ComboParams): ComboState {
   const cur = comboAt(state, nowMs, t);
-  const per = Math.max(1, t.comboTapsPerLevel);
-  addFill(cur, 0, 1 / per, t);
-  return { rings: cur.rings, lastTapAtMs: nowMs };
+  const at = Number.isFinite(nowMs) ? nowMs : cur.lastTapAtMs;
+  return { taps: clampTaps(cur.taps + 1, t), lastTapAtMs: at };
+}
+
+/** Derived ring fields for old readers + `comboTaps` as the source of truth. */
+export function persistCombo(state: ComboState, t: ComboParams): ComboPersist {
+  const caps = comboCaps(t);
+  const taps = clampTaps(state.taps, t);
+  const meters = displayMeters({ taps, lastTapAtMs: state.lastTapAtMs }, t);
+  const laps0 = Math.floor(taps / caps.c0);
+  const laps1 = Math.floor(taps / (caps.c0 * caps.c1));
+  const laps2 = Math.floor(taps / (caps.c0 * caps.c1 * caps.c2));
+  const base = t.comboBase > 0 && Number.isFinite(t.comboBase) ? t.comboBase : 1;
+  const abs = t.comboAbsMax > 0 && Number.isFinite(t.comboAbsMax) ? t.comboAbsMax : 3;
+  const bonus = Math.min(Math.max(0, abs - base), laps0 * stepOf(t));
+  return {
+    comboTaps: nice(taps),
+    comboMeter: meters[0],
+    comboLevel: laps0,
+    comboContrib: nice(bonus),
+    comboMeter1: meters[1],
+    comboLevel1: laps1,
+    comboContrib1: 0,
+    comboMeter2: meters[2],
+    comboLevel2: laps2,
+    comboContrib2: 0,
+  };
 }

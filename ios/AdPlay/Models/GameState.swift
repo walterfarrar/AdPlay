@@ -30,6 +30,7 @@ struct GameState: Codable, Equatable {
     var tapStrengthActive: Bool?
     var tapStrengthUntil: String?
     var tapPower: Double?
+    var comboTaps: Double?
     var comboMeter: Double?
     var comboLevel: Int?
     var comboContrib: Double?
@@ -54,44 +55,34 @@ struct GameState: Codable, Equatable {
 
     var effectiveTapPower: Double { tapPower ?? 1 }
 
-    var combo: ComboState {
+    func combo(tunables: ComboTunables = .defaults) -> ComboState {
         ComboState(
-            rings: [
-                ComboRingState(
-                    meter: comboMeter ?? 0,
-                    level: comboLevel ?? 0,
-                    contribution: comboContrib ?? 0
-                ),
-                ComboRingState(
-                    meter: comboMeter1 ?? 0,
-                    level: comboLevel1 ?? 0,
-                    contribution: comboContrib1 ?? 0
-                ),
-                ComboRingState(
-                    meter: comboMeter2 ?? 0,
-                    level: comboLevel2 ?? 0,
-                    contribution: comboContrib2 ?? 0
-                ),
-            ],
+            taps: ComboEngine.tapsFromPersisted(
+                comboTaps: comboTaps,
+                comboLevel: comboLevel ?? 0,
+                comboMeter: comboMeter ?? 0,
+                tunables: tunables
+            ),
             lastTapAt: parseIso8601(lastManualTapAt ?? "")
         )
     }
 
+    var combo: ComboState { combo() }
+
     var effectiveSkipAdsRemaining: Int { skipAdsRemaining ?? 0 }
 
-    mutating func writeCombo(_ next: ComboState) {
-        let r0 = next.rings.count > 0 ? next.rings[0] : .empty
-        let r1 = next.rings.count > 1 ? next.rings[1] : .empty
-        let r2 = next.rings.count > 2 ? next.rings[2] : .empty
-        comboMeter = r0.meter
-        comboLevel = r0.level
-        comboContrib = r0.contribution
-        comboMeter1 = r1.meter
-        comboLevel1 = r1.level
-        comboContrib1 = r1.contribution
-        comboMeter2 = r2.meter
-        comboLevel2 = r2.level
-        comboContrib2 = r2.contribution
+    mutating func writeCombo(_ next: ComboState, tunables: ComboTunables = .defaults) {
+        let p = ComboEngine.persist(next, tunables: tunables)
+        comboTaps = p.taps
+        comboMeter = p.meter0
+        comboLevel = p.level0
+        comboContrib = p.contrib0
+        comboMeter1 = p.meter1
+        comboLevel1 = p.level1
+        comboContrib1 = p.contrib1
+        comboMeter2 = p.meter2
+        comboLevel2 = p.level2
+        comboContrib2 = p.contrib2
         lastManualTapAt = next.lastTapAt.map { iso8601String($0) }
     }
 
@@ -101,8 +92,8 @@ struct GameState: Codable, Equatable {
         guard g.tapsRemaining > 0 else { return g }
         g.tapsRemaining -= 1
         let comboT = ComboTunables.from(tunables)
-        let nextCombo = ComboEngine.applyTap(g.combo, now: now, tunables: comboT)
-        g.writeCombo(nextCombo)
+        let nextCombo = ComboEngine.applyTap(g.combo(tunables: comboT), now: now, tunables: comboT)
+        g.writeCombo(nextCombo, tunables: comboT)
         g.comboMultiplier = comboT.multiplier(of: nextCombo)
         let units = max(1, g.unitsPerSat)
         var progress = g.progress + g.effectiveTapPower * comboT.multiplier(of: nextCombo)
@@ -129,6 +120,7 @@ struct GameState: Codable, Equatable {
         g.progress = from.progress
         g.satsBalance = from.satsBalance
         g.satsEarnedToday = from.satsEarnedToday
+        g.comboTaps = from.comboTaps
         g.comboMeter = from.comboMeter
         g.comboLevel = from.comboLevel
         g.comboContrib = from.comboContrib
@@ -174,6 +166,7 @@ struct GameState: Codable, Equatable {
         tapStrengthActive: false,
         tapStrengthUntil: nil,
         tapPower: 1,
+        comboTaps: 0,
         comboMeter: 0,
         comboLevel: 0,
         comboContrib: 0,

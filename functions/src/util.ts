@@ -94,6 +94,7 @@ export function freshGame(t: Tunables, now = new Date()): import("./types").Game
     hasActivatedAuto: false,
     hasActivatedToday: false,
     hasPaidRedeem: false,
+    comboTaps: 0,
     comboMeter: 0,
     comboLevel: 0,
     comboContrib: 0,
