@@ -5,6 +5,8 @@ import UIKit
 /// and drops burst taps while the wheel view is updating.
 struct InstantTapOverlay: UIViewRepresentable {
     var enabled: Bool = true
+    var hapticsEnabled: Bool = false
+    var ringFill: Bool = false
     var onTap: () -> Void
 
     func makeUIView(context: Context) -> InstantTapUIView {
@@ -12,6 +14,8 @@ struct InstantTapOverlay: UIViewRepresentable {
         view.isOpaque = false
         view.backgroundColor = .clear
         view.onTap = onTap
+        view.hapticsEnabled = hapticsEnabled
+        view.ringFill = ringFill
         view.isUserInteractionEnabled = enabled
         view.isAccessibilityElement = true
         view.accessibilityTraits = .button
@@ -21,12 +25,25 @@ struct InstantTapOverlay: UIViewRepresentable {
 
     func updateUIView(_ uiView: InstantTapUIView, context: Context) {
         uiView.onTap = onTap
+        uiView.hapticsEnabled = hapticsEnabled
+        uiView.ringFill = ringFill
         uiView.isUserInteractionEnabled = enabled
     }
 }
 
 final class InstantTapUIView: UIView {
     var onTap: (() -> Void)?
+    var hapticsEnabled = false
+    var ringFill = false
+
+    private let tick = UISelectionFeedbackGenerator()
+    private let fill = UIImpactFeedbackGenerator(style: .medium)
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        tick.prepare()
+        fill.prepare()
+    }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         let radius = min(bounds.width, bounds.height) / 2
@@ -38,12 +55,25 @@ final class InstantTapUIView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isUserInteractionEnabled else { return }
         for _ in touches {
+            playHaptic()
             onTap?()
         }
     }
 
     override func accessibilityActivate() -> Bool {
+        playHaptic()
         onTap?()
         return true
+    }
+
+    private func playHaptic() {
+        guard hapticsEnabled else { return }
+        if ringFill {
+            fill.impactOccurred(intensity: 1)
+        } else {
+            tick.selectionChanged()
+        }
+        tick.prepare()
+        fill.prepare()
     }
 }

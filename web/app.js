@@ -59,7 +59,7 @@ let knockerAnchorProgress = 0;
 let knockerAnchorMs = 0;
 let lastFillRate = 0;
 let heldDisplay = 0;
-let lastShakeFrame = -1;
+let lastShakeTapAt = null;
 let lastShakeX = 0;
 let lastShakeY = 0;
 
@@ -1348,16 +1348,16 @@ function renderFrame(state, _rafNow) {
     comboBadge.style.filter = "none";
     const shake = comboLabel ? comboShake(comboMult) : 0;
     if (shake > 0.001) {
-      const frame = (nowMs * 0.024) | 0;
-      if (frame !== lastShakeFrame) {
-        lastShakeFrame = frame;
+      const tapAt = comboLive.lastTapAtMs;
+      if (tapAt !== lastShakeTapAt) {
+        lastShakeTapAt = tapAt;
         const xy = comboShakeRandom(shake);
         lastShakeX = xy[0];
         lastShakeY = xy[1];
       }
       comboBadge.setAttribute("transform", `translate(${lastShakeX} ${lastShakeY})`);
     } else {
-      lastShakeFrame = -1;
+      lastShakeTapAt = null;
       comboBadge.removeAttribute("transform");
     }
   }

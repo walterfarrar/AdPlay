@@ -336,10 +336,24 @@ enum ComboEngine {
     }
 
     static func wouldCompleteOuter(_ state: ComboState, tunables t: ComboTunables) -> Bool {
+        completingRing(state, tunables: t) != nil
+    }
+
+    /// Highest ring (0/1/2) the next tap would wrap, if any.
+    static func completingRing(_ state: ComboState, tunables t: ComboTunables) -> Int? {
         let caps = t.caps
         let taps = clampTaps(state.taps, tunables: t)
-        if taps >= caps.maxTaps - 1e-12 { return false }
-        return posMod(taps, Double(caps.c0)) + 1 >= Double(caps.c0) - 1e-12
+        if taps >= caps.maxTaps - 1e-12 { return nil }
+        let c0 = Double(caps.c0)
+        if posMod(taps, c0) + 1 < c0 - 1e-12 { return nil }
+        let newLaps0 = Int(floor(taps / c0)) + 1
+        if caps.ring2Enabled && caps.c1 > 0 && caps.c2 > 0, newLaps0 % (caps.c1 * caps.c2) == 0 {
+            return 2
+        }
+        if caps.ring1Enabled && caps.c1 > 0, newLaps0 % caps.c1 == 0 {
+            return 1
+        }
+        return 0
     }
 
     static func at(_ state: ComboState, now: Date, tunables t: ComboTunables) -> ComboState {

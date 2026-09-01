@@ -74,7 +74,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import android.view.HapticFeedbackConstants
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -365,6 +367,7 @@ fun HomeScreen(
                         tunables = ui.tunables,
                         stage = stage,
                         onTap = onTap,
+                        hapticsEnabled = ui.hapticsEnabled,
                         wheelFlash = barFlashAnimated,
                         onWheelTipPositioned = onWheelTipPositioned,
                         modifier = Modifier.fillMaxWidth(),
@@ -830,6 +833,7 @@ private fun SatEarnStage(
     tunables: Tunables? = null,
     stage: MinerStage = MinerStage.Level1,
     onTap: () -> Unit,
+    hapticsEnabled: Boolean = true,
     wheelFlash: Float = 0f,
     onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -978,6 +982,9 @@ private fun SatEarnStage(
                     comboTracks = comboTracks,
                     comboSpins = comboSpins,
                     comboMultiplier = comboMult,
+                    comboTapAtMs = comboLive.lastTapAtMs,
+                    hapticsEnabled = hapticsEnabled,
+                    ringFill = ComboEngine.completingRing(comboLive, comboT) != null,
                     stage = stage,
                     onTap = onTap,
                     modifier = Modifier
@@ -1089,6 +1096,9 @@ private fun SatWheelView(
     comboTracks: List<Boolean> = listOf(true, false, false),
     comboSpins: List<Double> = listOf(0.0, 0.0, 0.0),
     comboMultiplier: Double = 1.0,
+    comboTapAtMs: Long? = null,
+    hapticsEnabled: Boolean = true,
+    ringFill: Boolean = false,
     stage: MinerStage = MinerStage.Level1,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1101,12 +1111,24 @@ private fun SatWheelView(
         else -> ComboRing0
     }
     val facePainter = painterResource(stage.wheelFaceRes())
+    val view = LocalView.current
     BoxWithConstraints(
         modifier = modifier
             .clip(CircleShape)
-            .pointerInput(onTap) {
+            .pointerInput(onTap, hapticsEnabled, ringFill) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    if (hapticsEnabled) {
+                        val kind = if (ringFill) {
+                            HapticFeedbackConstants.CONTEXT_CLICK
+                        } else {
+                            HapticFeedbackConstants.CLOCK_TICK
+                        }
+                        view.performHapticFeedback(
+                            kind,
+                            HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING,
+                        )
+                    }
                     onTap()
                 }
             },
@@ -1431,18 +1453,10 @@ private fun SatWheelView(
             val shake = ComboEngine.shake(comboMultiplier).toFloat()
             val wheel = minOf(maxWidth, maxHeight)
             val fontSp = (wheel.value * (0.12f + heat * 0.07f)).sp
-            var shakeTick by remember { mutableIntStateOf(0) }
-            LaunchedEffect(shake > 0.001f) {
-                if (shake <= 0.001f) return@LaunchedEffect
-                while (true) {
-                    shakeTick++
-                    delay(42L)
-                }
-            }
             val density = LocalDensity.current
             val amp = ComboEngine.shakeAmplitude(shake.toDouble())
-            val ox = remember(shakeTick) { if (amp <= 0) 0 else (-amp..amp).random() }
-            val oy = remember(shakeTick) { if (amp <= 0) 0 else (-amp..amp).random() }
+            val ox = remember(comboTapAtMs) { if (amp <= 0) 0 else (-amp..amp).random() }
+            val oy = remember(comboTapAtMs) { if (amp <= 0) 0 else (-amp..amp).random() }
             Text(
                 comboLabel,
                 style = TextStyle(

@@ -9,6 +9,7 @@ struct SatWheelView: View, Equatable {
     var comboTracks: [Bool] = [true, false, false]
     var comboSpins: [Double] = [0, 0, 0]
     var comboMultiplier: Double = 1
+    var comboTapAt: Date? = nil
     var look: ThemeLook = .ember
     var stage: MinerStage = .level1
 
@@ -19,6 +20,7 @@ struct SatWheelView: View, Equatable {
             && lhs.comboTracks == rhs.comboTracks
             && lhs.comboSpins == rhs.comboSpins
             && lhs.comboMultiplier == rhs.comboMultiplier
+            && lhs.comboTapAt == rhs.comboTapAt
             && lhs.look.id == rhs.look.id
             && lhs.stage == rhs.stage
     }
@@ -58,7 +60,10 @@ struct SatWheelView: View, Equatable {
                     look: look
                 )
                 .equatable()
-                .modifier(ComboBadgeShake(shake: ComboEngine.shake(comboMultiplier)))
+                .modifier(ComboBadgeShake(
+                    shake: ComboEngine.shake(comboMultiplier),
+                    tapAt: comboTapAt
+                ))
             }
             .frame(width: size, height: size)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -210,22 +215,34 @@ private struct SatWheelComboBadgeLayer: View, Equatable {
     }
 }
 
-/// Cheap ~24fps random pixel hops; no-op below 2×.
+/// One random hop per tap while heat is high; holds until the next tap.
 private struct ComboBadgeShake: ViewModifier {
     var shake: Double
+    var tapAt: Date?
+    @State private var ox: CGFloat = 0
+    @State private var oy: CGFloat = 0
 
     func body(content: Content) -> some View {
-        if shake <= 0.001 {
-            content
-        } else {
-            TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { _ in
-                let amp = ComboEngine.shakeAmplitude(shake)
-                content.offset(
-                    x: CGFloat(Int.random(in: -amp ... amp)),
-                    y: CGFloat(Int.random(in: -amp ... amp))
-                )
+        content
+            .offset(x: ox, y: oy)
+            .onChange(of: tapAt) { _, _ in hop() }
+            .onChange(of: shake) { _, value in
+                if value <= 0.001 {
+                    ox = 0
+                    oy = 0
+                }
             }
+    }
+
+    private func hop() {
+        let amp = ComboEngine.shakeAmplitude(shake)
+        guard amp > 0 else {
+            ox = 0
+            oy = 0
+            return
         }
+        ox = CGFloat(Int.random(in: -amp ... amp))
+        oy = CGFloat(Int.random(in: -amp ... amp))
     }
 }
 

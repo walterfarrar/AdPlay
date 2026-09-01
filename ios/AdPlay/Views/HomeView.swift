@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
@@ -470,7 +469,6 @@ struct SatEarnStage: View {
                 flashWheelForSatEarn(gained: gained)
             }
             .onAppear {
-                WheelHaptics.arm()
                 let currentProgress = progress
                 let now = Date.now
                 anchorProgress = currentProgress
@@ -512,18 +510,6 @@ struct SatEarnStage: View {
     }
 
     private func handleTap() {
-        if settings.hapticsEnabled {
-            let comboT = ComboTunables.from(play.tunables)
-            let raw = play.frame.combo
-            let now = Date()
-            let live: ComboState
-            if let last = raw.lastTapAt, now.timeIntervalSince(last) < 0.2 {
-                live = raw
-            } else {
-                live = ComboEngine.at(raw, now: now, tunables: comboT)
-            }
-            WheelHaptics.impact(leveled: ComboEngine.wouldCompleteOuter(live, tunables: comboT))
-        }
         onTap()
     }
 
@@ -599,6 +585,7 @@ struct SatEarnStage: View {
                         comboTracks: comboTracks,
                         comboSpins: comboSpins,
                         comboMultiplier: comboMult,
+                        comboTapAt: comboLive.lastTapAt,
                         look: look,
                         stage: stage
                     )
@@ -606,7 +593,12 @@ struct SatEarnStage: View {
                     .frame(width: wheelSize, height: wheelSize)
                     .background(wheelTipReporter)
                     .overlay {
-                        InstantTapOverlay(enabled: frame.tapsRemaining > 0, onTap: handleTap)
+                        InstantTapOverlay(
+                            enabled: frame.tapsRemaining > 0,
+                            hapticsEnabled: settings.hapticsEnabled,
+                            ringFill: ComboEngine.completingRing(comboLive, tunables: comboT) != nil,
+                            onTap: handleTap
+                        )
                             .id("sat-wheel-tap")
                     }
                     .overlay {
@@ -1264,22 +1256,6 @@ struct BtcBalanceView: View, Equatable {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
-    }
-}
-
-private enum WheelHaptics {
-    static let light = UIImpactFeedbackGenerator(style: .light)
-    static let medium = UIImpactFeedbackGenerator(style: .medium)
-
-    static func arm() {
-        light.prepare()
-        medium.prepare()
-    }
-
-    static func impact(leveled: Bool) {
-        let gen = leveled ? medium : light
-        gen.impactOccurred()
-        gen.prepare()
     }
 }
 
