@@ -39,11 +39,14 @@ body {
   position: fixed;
   inset: 0;
   z-index: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(247, 147, 26, 0.22), transparent 55%),
-    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(107, 92, 245, 0.18), transparent 50%),
-    linear-gradient(180deg, var(--bg-top), var(--bg-mid), var(--bg-bottom));
+  background-color: var(--bg-mid);
+  background-image:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.42), rgba(10, 11, 18, 0.82)),
+    url("images/stage-01-garage.jpg");
+  background-size: cover;
+  background-position: center;
   pointer-events: none;
+  transition: background-image 0.55s ease;
 }
 
 .shell {
@@ -75,14 +78,6 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-.hint {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-  text-align: left;
-  line-height: 1.35;
 }
 
 .earn-stage {
@@ -166,42 +161,54 @@ body {
   color: var(--accent);
 }
 
-.combo-track {
-  fill: none;
-  stroke: rgba(244, 245, 250, 0.1);
-  stroke-width: 8;
+.level-bar {
+  margin-top: 10px;
 }
 
-.combo-groove {
-  fill: none;
-  stroke: rgba(244, 245, 250, 0.22);
-  stroke-width: 10;
+.level-bar-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.level-bar-track {
+  margin-top: 5px;
+  height: 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.level-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hot));
+}
+
+.combo-groove,
+.combo-track,
+.combo-gear,
+#combo-band-1 .combo-ticks,
+#combo-band-2 .combo-ticks {
+  display: none;
 }
 
 .combo-hash {
   fill: none;
-  stroke: var(--combo-0);
+  stroke: rgba(244, 245, 250, 0.78);
   stroke-width: 7;
-  stroke-dasharray: 1.2 4.8;
-  opacity: 0.38;
+  stroke-dasharray: 1.6 4.4;
 }
 
 .combo-hash-major {
   fill: none;
-  stroke: var(--combo-0);
-  stroke-width: 8;
-  stroke-dasharray: 2 28;
-  opacity: 0.70;
-}
-
-#combo-band-1 .combo-hash,
-#combo-band-1 .combo-hash-major {
-  stroke: var(--combo-1);
-}
-
-#combo-band-2 .combo-hash,
-#combo-band-2 .combo-hash-major {
-  stroke: var(--combo-2);
+  stroke: rgba(244, 245, 250, 0.94);
+  stroke-width: 8.5;
+  stroke-dasharray: 2.6 27.4;
 }
 
 .combo-arc,
@@ -262,9 +269,9 @@ body {
 
 .face-hash {
   fill: none;
-  stroke: rgba(244, 245, 250, 0.1);
-  stroke-width: 5;
-  stroke-dasharray: 0.8 5.2;
+  stroke: rgba(244, 245, 250, 0.62);
+  stroke-width: 6;
+  stroke-dasharray: 1.2 5.0;
 }
 
 .hub-peg-orbit {
@@ -276,10 +283,13 @@ body {
 }
 
 .combo-badge {
-  fill: var(--accent);
-  font-size: 14px;
+  fill: var(--combo-0);
+  font-size: 26px;
   font-weight: 800;
   font-family: Outfit, sans-serif;
+  paint-order: stroke fill;
+  stroke: rgba(10, 11, 18, 0.92);
+  stroke-width: 1.6;
 }
 
 .wheel-arc {
@@ -302,12 +312,16 @@ body {
   transform-origin: 110px 110px;
 }
 
+.wheel-face-scrim {
+  fill: rgba(0, 0, 0, 0.36);
+}
+
 .hub-peg {
   fill: rgba(247, 147, 26, 0.85);
 }
 
 .wheel-pointer {
-  fill: rgba(244, 245, 250, 0.75);
+  fill: rgba(244, 245, 250, 0.95);
 }
 
 .sat-wheel.flashing .wheel-pointer {
@@ -315,23 +329,33 @@ body {
 }
 
 .strike-plate {
-  fill: rgba(244, 245, 250, 0.3);
-  stroke: rgba(244, 245, 250, 0.35);
+  fill: rgba(244, 245, 250, 0.62);
+  stroke: rgba(244, 245, 250, 0.72);
   stroke-width: 1;
 }
 
-.hub {
-  fill: rgba(244, 245, 250, 0.09);
-  stroke: rgba(244, 245, 250, 0.12);
-  stroke-width: 1;
+.wheel-halo {
+  fill: rgba(247, 147, 26, 0);
 }
 
-.hub-core {
-  fill: rgba(247, 147, 26, 0.2);
+.wheel-gold-rim {
+  fill: none;
+  stroke: rgba(242, 199, 71, 0);
+  stroke-width: 2.2;
 }
 
-.sat-wheel.flashing .hub-core {
-  fill: rgba(247, 147, 26, 0.55);
+.wheel-track {
+  display: none;
+}
+
+.wheel-disc {
+  fill: #12131f;
+}
+
+.wheel-bevel {
+  fill: none;
+  stroke: rgba(244, 245, 250, 0.18);
+  stroke-width: 1.4;
 }
 
 .wheel-flash {
@@ -356,46 +380,55 @@ body {
   overflow: visible;
 }
 
+.knocker-halo {
+  fill: transparent;
+}
+
+.knocker-lamp {
+  fill: transparent;
+}
+
 .knocker-plate {
-  fill: rgba(244, 245, 250, 0.14);
-  stroke: rgba(244, 245, 250, 0.22);
-  stroke-width: 1;
+  fill: #6b7385;
+  stroke: #dbe1ed;
+  stroke-width: 2;
+  filter: drop-shadow(2px 3px 4px rgba(0, 0, 0, 0.62));
 }
 
 .knocker-window {
-  fill: none;
-  stroke: rgba(244, 245, 250, 0.1);
+  fill: rgba(0, 0, 0, 0.78);
+  stroke: rgba(178, 186, 204, 0.4);
   stroke-width: 1;
 }
 
 .gear circle:first-child {
-  fill: rgba(244, 245, 250, 0.18);
-  stroke: rgba(244, 245, 250, 0.28);
+  fill: #b2bacd;
+  stroke: #383d4d;
   stroke-width: 1;
 }
 
 .gear-hub {
-  fill: rgba(247, 147, 26, 0.55);
+  fill: #383d4d;
 }
 
 .knocker-stop {
-  fill: rgba(244, 245, 250, 0.2);
+  fill: #383d4d;
 }
 
 .arm-shaft {
-  stroke: rgba(244, 245, 250, 0.55);
-  stroke-width: 5;
+  stroke: #dbe1ed;
+  stroke-width: 12;
   stroke-linecap: round;
 }
 
 .arm-head {
-  fill: rgba(244, 245, 250, 0.55);
-  stroke: rgba(247, 147, 26, 0.45);
+  fill: #f7931a;
+  stroke: #ff6b2c;
   stroke-width: 1.5;
 }
 
 .knocker.idle {
-  opacity: 0.4;
+  opacity: 1;
 }
 
 .impact-flash {
@@ -424,13 +457,31 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.rate-line {
+.rate-lines {
   margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  text-align: center;
   line-height: 1.35;
+}
+
+.rate-line {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.rate-line .rate-label {
+  color: var(--muted);
+  width: 6.8em;
+  flex-shrink: 0;
+  text-align: left;
 }
 
 .rate-line .speed-part {
@@ -438,6 +489,9 @@ body {
 }
 .rate-line .power-part {
   color: var(--power);
+}
+.rate-line .combo-part {
+  color: var(--combo-0);
 }
 .rate-line .fill-part {
   color: var(--fill);

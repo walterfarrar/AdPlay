@@ -25,6 +25,8 @@ struct SatEarnFlightHost<Content: View>: View {
     @State private var satParticles: [SatParticle] = []
     @State private var redeemGlow = false
     @State private var lastCelebrateAt: Date = .distantPast
+    @State private var lastSatsBalance = 0
+    @State private var satEarnPrimed = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -59,8 +61,15 @@ struct SatEarnFlightHost<Content: View>: View {
                     )
             }
         )
-        .onChange(of: session.state.satsBalance) { oldValue, newValue in
-            let gained = newValue - oldValue
+        .onChange(of: session.chromeNonce) { _, _ in
+            let newValue = session.state.satsBalance
+            if !satEarnPrimed {
+                satEarnPrimed = true
+                lastSatsBalance = newValue
+                return
+            }
+            let gained = newValue - lastSatsBalance
+            lastSatsBalance = newValue
             guard gained > 0 else { return }
             celebrateSatEarn(gained: gained)
         }

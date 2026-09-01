@@ -13,7 +13,7 @@ import {
   tap,
 } from "./game";
 import { validateBolt11, nowIso, debugResetAllowed } from "./util";
-import { DEFAULT_TUNABLES, BoostType } from "./types";
+import { DEFAULT_TUNABLES, BoostType, sanitizeMinerStageThresholds } from "./types";
 import { isAdminTokenValid, verifyAdminAction } from "./adminAuth";
 import { notifyWithdrawalRequest } from "./mail";
 
@@ -336,8 +336,18 @@ export const seedTunables = onRequest({ secrets: adminSecrets }, async (req, res
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  await db.doc("config/tunables").set(DEFAULT_TUNABLES, { merge: true });
-  res.json({ ok: true, tunables: DEFAULT_TUNABLES });
+  const snap = await db.doc("config/tunables").get();
+  const existing = snap.exists ? snap.data() ?? {} : {};
+  const tunables = {
+    ...DEFAULT_TUNABLES,
+    ...existing,
+    minerStageThresholds: sanitizeMinerStageThresholds(
+      (existing as { minerStageThresholds?: unknown }).minerStageThresholds ??
+        DEFAULT_TUNABLES.minerStageThresholds,
+    ),
+  };
+  await db.doc("config/tunables").set(tunables);
+  res.json({ ok: true, tunables });
 });
 
 export const adminListWithdrawals = onRequest({ secrets: adminSecrets }, async (req, res) => {

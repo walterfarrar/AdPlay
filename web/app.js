@@ -47,9 +47,10 @@ let rafId = 0;
 let refreshTimerId = null;
 let loading = false;
 let lastRenderedSats = null;
-let lastComboTickDeg = [null, null, null];
+let lastBtcText = "";
 let wheelFlashUntil = 0;
 let lastCelebrateAt = 0;
+let lastComboTick0Deg = null;
 
 /** Local continuous / knocker clocks (mirror iOS SatEarnStage). */
 let displayAnchorProgress = 0;
@@ -58,6 +59,9 @@ let knockerAnchorProgress = 0;
 let knockerAnchorMs = 0;
 let lastFillRate = 0;
 let heldDisplay = 0;
+let lastShakeFrame = -1;
+let lastShakeX = 0;
+let lastShakeY = 0;
 
 const KNOCKER = {
   pivot: { x: 350, y: 78 },
@@ -218,15 +222,55 @@ function comboMultiplier(state, t) {
   return nice(Math.min(abs, base + bonus));
 }
 
+function comboHeat(m, absMax) {
+  const cap = absMax > 1.001 && Number.isFinite(absMax) ? absMax : 3;
+  const t = (m - 1) / (cap - 1);
+  if (!Number.isFinite(t) || t <= 0) return 0;
+  return t >= 1 ? 1 : t;
+}
+
+function comboHeatRing(heat) {
+  if (heat < 0.34) return 0;
+  if (heat < 0.67) return 1;
+  return 2;
+}
+
+/** 0 below 2×, 1 at 3×. Hub badge shake amount. */
+function comboShake(m) {
+  if (m < 2) return 0;
+  const t = m - 2;
+  return t >= 1 ? 1 : t;
+}
+
+function comboShakeAmplitude(shake) {
+  if (shake <= 0.001) return 0;
+  return Math.round(1 + 2 * shake);
+}
+
+function comboShakeRandom(shake) {
+  const amp = comboShakeAmplitude(shake);
+  if (amp <= 0) return [0, 0];
+  const span = amp * 2 + 1;
+  return [
+    (Math.random() * span | 0) - amp,
+    (Math.random() * span | 0) - amp,
+  ];
+}
+
+function formatComboFactor(m) {
+  const v = m > 0 ? m : 1;
+  const tenths = Math.round(v * 10) / 10;
+  if (Math.abs(v - tenths) < 5e-4) return tenths.toFixed(1);
+  const hundredths = Math.round(v * 100) / 100;
+  if (Math.abs(v - hundredths) < 5e-5) return hundredths.toFixed(2);
+  const thousandths = Math.round(v * 1000) / 1000;
+  if (Math.abs(v - thousandths) < 5e-6) return thousandths.toFixed(3);
+  return (Math.round(v * 10000) / 10000).toFixed(4);
+}
+
 function formatComboMultiplier(m) {
   if (!(m > 1.001)) return "";
-  const tenths = Math.round(m * 10) / 10;
-  if (Math.abs(m - tenths) < 5e-4) return `×${tenths.toFixed(1)}`;
-  const hundredths = Math.round(m * 100) / 100;
-  if (Math.abs(m - hundredths) < 5e-5) return `×${hundredths.toFixed(2)}`;
-  const thousandths = Math.round(m * 1000) / 1000;
-  if (Math.abs(m - thousandths) < 5e-6) return `×${thousandths.toFixed(3)}`;
-  return `×${(Math.round(m * 10000) / 10000).toFixed(4)}`;
+  return `×${formatComboFactor(m)}`;
 }
 
 function displayMeters(state, t) {
@@ -327,11 +371,162 @@ function applyComboTap(state, nowMs, t) {
   return { taps: clampTaps(cur.taps + 1, t), lastTapAtMs: at };
 }
 
+function minerStageThresholds() {
+  const defaults = [0, 5, 50, 500, 5000, 50000, 500000, 5000000, 50000000, 500000000];
+  const raw = tunables?.minerStageThresholds;
+  if (!Array.isArray(raw) || raw.length !== defaults.length) return defaults;
+  const nums = raw.map((n) => Math.round(Number(n)));
+  if (nums.some((n) => !Number.isFinite(n) || n < 0)) return defaults;
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] <= nums[i - 1]) return defaults;
+  }
+  return nums;
+}
+
+function minerStage(lifetime) {
+  const sats = Math.max(0, Number(lifetime) || 0);
+  const thresholds = minerStageThresholds();
+  const stages = [
+    { level: 1, title: "Spark", subtitle: "Garage", threshold: thresholds[0], image: "images/stage-01-garage.jpg", wheelFace: "images/wheel-face-01-garage.jpg" },
+    { level: 2, title: "Satoshi Scout", subtitle: "Workbench", threshold: thresholds[1], image: "images/stage-02-workbench.jpg", wheelFace: "images/wheel-face-02-workbench.jpg" },
+    { level: 3, title: "Farm Hand", subtitle: "Small farm", threshold: thresholds[2], image: "images/stage-03-small-farm.jpg", wheelFace: "images/wheel-face-03-small-farm.jpg" },
+    { level: 4, title: "Rig Boss", subtitle: "Mining farm", threshold: thresholds[3], image: "images/stage-04-mining-farm.jpg", wheelFace: "images/wheel-face-04-mining-farm.jpg" },
+    { level: 5, title: "Floor Captain", subtitle: "Warehouse", threshold: thresholds[4], image: "images/stage-05-warehouse.jpg", wheelFace: "images/wheel-face-05-warehouse.jpg" },
+    { level: 6, title: "Plant Lead", subtitle: "Industrial hall", threshold: thresholds[5], image: "images/stage-06-industrial.jpg", wheelFace: "images/wheel-face-06-industrial.jpg" },
+    { level: 7, title: "Hash Warden", subtitle: "Data hall", threshold: thresholds[6], image: "images/stage-07-data-hall.jpg", wheelFace: "images/wheel-face-07-data-hall.jpg" },
+    { level: 8, title: "Mega Operator", subtitle: "Mega farm", threshold: thresholds[7], image: "images/stage-08-mega-farm.jpg", wheelFace: "images/wheel-face-08-mega-farm.jpg" },
+    { level: 9, title: "Campus Baron", subtitle: "Hash campus", threshold: thresholds[8], image: "images/stage-09-campus.jpg", wheelFace: "images/wheel-face-09-campus.jpg" },
+    { level: 10, title: "Genesis Foundry", subtitle: "Foundry", threshold: thresholds[9], image: "images/stage-10-foundry.jpg", wheelFace: "images/wheel-face-10-foundry.jpg" },
+  ];
+  let current = stages[0];
+  for (const stage of stages) {
+    if (sats >= stage.threshold) current = stage;
+  }
+  const next = stages.find((s) => s.level === current.level + 1);
+  const span = next ? next.threshold - current.threshold : 1;
+  const earned = sats - current.threshold;
+  const progress = next ? Math.min(1, Math.max(0, earned / span)) : 1;
+  const label = next ? `${sats} / ${next.threshold} Lifetime Sats` : "Max level";
+  return { ...current, progress, label };
+}
+
+function wheelChrome(level) {
+  const t = Math.max(0, Math.min(1, (level - 1) / 9));
+  return {
+    discCenter: 0.92 + t * 0.05,
+    track: 0.28 + t * 0.34,
+    halo: t * 0.66,
+    bevel: 0.18 + t * 0.56,
+    goldRim: level < 4 ? 0 : Math.min(0.92, (level - 3) * 0.14),
+    tealMix: level === 7 ? 0.55 : t * 0.12,
+    hub: 0.38 + t * 0.42,
+  };
+}
+
+function tapperChrome(level) {
+  const table = {
+    1: { polish: 0, halo: 0, goldTrim: 0, tealMix: 0, hammerBloom: 0, lamp: 0 },
+    2: { polish: 0.12, halo: 0.14, goldTrim: 0, tealMix: 0, hammerBloom: 0.10, lamp: 0 },
+    3: { polish: 0.20, halo: 0.20, goldTrim: 0, tealMix: 0, hammerBloom: 0.16, lamp: 0.55 },
+    4: { polish: 0.28, halo: 0.26, goldTrim: 0.18, tealMix: 0, hammerBloom: 0.22, lamp: 0.65 },
+    5: { polish: 0.36, halo: 0.34, goldTrim: 0.28, tealMix: 0, hammerBloom: 0.32, lamp: 0.75 },
+    6: { polish: 0.42, halo: 0.40, goldTrim: 0.34, tealMix: 0.08, hammerBloom: 0.40, lamp: 0.82 },
+    7: { polish: 0.46, halo: 0.48, goldTrim: 0.18, tealMix: 0.55, hammerBloom: 0.48, lamp: 0.90 },
+    8: { polish: 0.54, halo: 0.56, goldTrim: 0.48, tealMix: 0.18, hammerBloom: 0.56, lamp: 0.92 },
+    9: { polish: 0.62, halo: 0.64, goldTrim: 0.72, tealMix: 0.10, hammerBloom: 0.66, lamp: 0.96 },
+    10: { polish: 0.72, halo: 0.76, goldTrim: 0.92, tealMix: 0.12, hammerBloom: 0.82, lamp: 1 },
+  };
+  return table[level] || table[1];
+}
+
+function tapperGlowRgb(chrome) {
+  if (chrome.tealMix > 0.35) return "32, 235, 217";
+  if (chrome.goldTrim > 0.25) return "242, 199, 71";
+  return "247, 147, 26";
+}
+
+function tapperSteelHex(light, chrome) {
+  const base = light ? [219, 225, 237] : [107, 115, 133];
+  const gold = [242, 199, 71];
+  const teal = [51, 235, 217];
+  const g = chrome.goldTrim * 0.55;
+  const t = chrome.tealMix * 0.45;
+  const p = chrome.polish * 0.16;
+  const remain = Math.max(0, 1 - g - t);
+  const ch = (i) => Math.round(Math.min(255, base[i] * remain + gold[i] * g + teal[i] * t + p * 255 * (i === 2 ? 0.55 : 1)));
+  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`;
+}
+
+function applyTapperChrome(stage) {
+  const chrome = tapperChrome(stage.level);
+  const knocker = $("knocker");
+  if (knocker) knocker.dataset.level = String(stage.level);
+  const glow = tapperGlowRgb(chrome);
+  const steel = tapperSteelHex(false, chrome);
+  const steelLight = tapperSteelHex(true, chrome);
+  const halo = $("knocker-halo");
+  if (halo) halo.setAttribute("fill", `rgba(${glow}, ${chrome.halo * 0.42})`);
+  const plate = $("knocker-plate");
+  if (plate) {
+    plate.setAttribute("fill", steel);
+    plate.setAttribute("stroke", steelLight);
+    plate.setAttribute("stroke-width", chrome.goldTrim > 0.2 ? "2.2" : "2");
+  }
+  const lamp = $("knocker-lamp");
+  if (lamp) {
+    lamp.setAttribute("fill", chrome.lamp > 0.01 ? `rgba(${glow}, ${0.55 + chrome.lamp * 0.45})` : "transparent");
+    lamp.setAttribute("r", chrome.lamp > 0.01 ? "3.5" : "0");
+  }
+  document.querySelectorAll(".gear-hub").forEach((hub) => {
+    hub.setAttribute("fill", chrome.goldTrim > 0.15 || chrome.tealMix > 0.2 ? `rgb(${glow})` : "#383d4d");
+  });
+  document.querySelectorAll(".gear circle:first-child").forEach((c) => {
+    c.setAttribute("fill", steelLight);
+  });
+  const shaft = document.querySelector(".arm-shaft");
+  if (shaft) {
+    shaft.setAttribute("stroke", chrome.goldTrim > 0.2 ? `rgb(${glow})` : steelLight);
+    shaft.setAttribute("stroke-width", chrome.goldTrim > 0.4 ? "13" : "12");
+  }
+  const head = document.querySelector(".arm-head");
+  if (head) {
+    head.setAttribute("stroke", chrome.goldTrim > 0.2 ? `rgb(${glow})` : "#ff6b2c");
+    head.style.filter = chrome.hammerBloom > 0.01
+      ? `drop-shadow(0 0 ${6 + chrome.hammerBloom * 10}px rgba(${glow}, ${chrome.hammerBloom}))`
+      : "";
+  }
+  const flash = $("impact-flash");
+  if (flash) flash.setAttribute("fill", `rgba(${glow}, 0.55)`);
+}
+
+function applyWheelChrome(stage) {
+  const chrome = wheelChrome(stage.level);
+  const wheel = $("sat-wheel");
+  if (wheel) wheel.dataset.level = String(stage.level);
+  const halo = $("wheel-halo");
+  if (halo) {
+    const glow = chrome.tealMix > 0.35 ? "32, 235, 217" : "247, 147, 26";
+    halo.setAttribute("fill", `rgba(${glow}, ${chrome.halo * 0.45})`);
+  }
+  const gold = $("wheel-gold-rim");
+  if (gold) gold.setAttribute("stroke", `rgba(242, 199, 71, ${chrome.goldRim})`);
+  const disc = $("wheel-disc");
+  if (disc) {
+    const r = 18 + chrome.tealMix * 20;
+    const g = 20 + chrome.tealMix * 40;
+    const b = 32 + chrome.tealMix * 12;
+    disc.setAttribute("fill", `rgb(${r}, ${g}, ${b})`);
+    disc.setAttribute("fill-opacity", "1");
+  }
+  const faceImg = $("wheel-face-img");
+  if (faceImg && stage.wheelFace) faceImg.setAttribute("href", stage.wheelFace);
+  const bevel = $("wheel-bevel");
+  if (bevel) bevel.setAttribute("stroke", `rgba(244, 245, 250, ${chrome.bevel})`);
+}
+
 function minerTitle(lifetime) {
-  if (lifetime >= 500) return "Rig Boss";
-  if (lifetime >= 50) return "Farm Hand";
-  if (lifetime >= 1) return "Satoshi Scout";
-  return "Spark";
+  const stage = minerStage(lifetime);
+  return `Level ${stage.level} · ${stage.title}`;
 }
 
 const $ = (id) => document.getElementById(id);
@@ -908,27 +1103,31 @@ function boostVisual(running, enabled) {
   return "locked";
 }
 
-function renderRateLine(autoActive, fillRate, tapPower) {
+function renderRateLine(autoActive, fillRate, tapPower, comboMultiplier) {
   const power = tapPower > 0 ? tapPower : 1;
+  const combo = comboMultiplier > 0 ? comboMultiplier : 1;
   const el = $("rate-line");
+  let autoInner;
   if (!autoActive || fillRate <= 0) {
-    if (power > 1.000000001) {
-      el.innerHTML =
-        `<span class="muted-part">Idle</span>` +
-        `<span class="muted-part"> · </span>` +
-        `<span class="power-part">${power.toFixed(2)} power</span>`;
-    } else {
-      el.innerHTML = `<span class="muted-part">Idle</span>`;
-    }
-    return;
+    autoInner = `<span class="muted-part">Idle</span>`;
+  } else {
+    const tps = fillRate / power;
+    autoInner =
+      `<span class="speed-part">${tps.toFixed(2)} taps/s</span>` +
+      `<span class="muted-part"> × </span>` +
+      `<span class="power-part">${power.toFixed(2)} power</span>` +
+      `<span class="muted-part"> = </span>` +
+      `<span class="fill-part">${fillRate.toFixed(2)}/s</span>`;
   }
-  const tps = fillRate / power;
-  el.innerHTML =
-    `<span class="speed-part">${tps.toFixed(2)} taps/s</span>` +
+  const manualInner =
+    `<span class="combo-part">${formatComboFactor(combo)} combo</span>` +
     `<span class="muted-part"> × </span>` +
     `<span class="power-part">${power.toFixed(2)} power</span>` +
     `<span class="muted-part"> = </span>` +
-    `<span class="fill-part">${fillRate.toFixed(2)}/s</span>`;
+    `<span class="fill-part">${(combo * power).toFixed(2)}/tap</span>`;
+  el.innerHTML =
+    `<p class="rate-line"><span class="rate-label">Autotapper</span>${autoInner}</p>` +
+    `<p class="rate-line"><span class="rate-label">Manual</span>${manualInner}</p>`;
 }
 
 function updateKnocker(pose, tapPower, autoActive) {
@@ -1072,23 +1271,27 @@ function renderFrame(state, _rafNow) {
   const tps = tapsPerSecond(fillRate, tapPower);
   const pose = knockerPose(knockerElapsed, knockerAnchorProgress, tps, tapPower, autoActive);
 
-  $("btc-amount").textContent = formatBtcAmount(state.satsBalance, display, total);
+  const btcText = formatBtcAmount(state.satsBalance, display, total);
+  if (btcText !== lastBtcText) {
+    lastBtcText = btcText;
+    $("btc-amount").textContent = btcText;
+  }
   $("sats-per-hour").textContent = formatSatsPerHour(fillRate, total, autoActive);
   $("tap-count").textContent = `${display.toFixed(1)} / ${total} taps`;
-  renderRateLine(autoActive, fillRate, tapPower);
+  const comboT = comboParams();
+  const comboLive = comboAt(persistedCombo(state), nowMs, comboT);
+  renderRateLine(autoActive, fillRate, tapPower, comboMultiplier(comboLive, comboT));
 
   const arc = $("wheel-arc");
   arc.setAttribute("stroke-dasharray", `${fraction * 100} 100`);
   $("wheel-face").style.transform = `rotate(${fraction * 360}deg)`;
-  const comboT = comboParams();
-  const comboLive = comboAt(persistedCombo(state), nowMs, comboT);
   const meters = displayMeters(comboLive, comboT);
   const tracks = displayTracks(comboLive, comboT);
   const spins = displaySpins(
     { taps: Math.round(comboLive.taps * 2) / 2, lastTapAtMs: comboLive.lastTapAtMs },
     comboT
   );
-  function paintComboArc(id, glowId, frac, showTrack, bandId, spinTurns, spinIdx) {
+  function paintComboArc(id, glowId, frac, bandId, showTicks, spinTurns) {
     const el = $(id);
     if (!el) return;
     const drawArc = frac > 0.001;
@@ -1103,20 +1306,22 @@ function renderFrame(state, _rafNow) {
     }
     const band = bandId ? $(bandId) : null;
     if (band) {
-      band.classList.toggle("hidden", !showTrack && !drawArc);
-      const ticks = band.querySelector(".combo-ticks");
-      if (ticks) {
-        const deg = Math.round((((spinTurns || 0) % 1) * 360 - 90) * 100) / 100;
-        if (lastComboTickDeg[spinIdx] !== deg) {
-          lastComboTickDeg[spinIdx] = deg;
-          ticks.setAttribute("transform", `rotate(${deg} 110 110)`);
+      band.classList.toggle("hidden", !showTicks && !drawArc);
+      if (showTicks) {
+        const ticks = band.querySelector(".combo-ticks");
+        if (ticks) {
+          const deg = Math.round((((spinTurns || 0) % 1) * 360 - 90) * 100) / 100;
+          if (lastComboTick0Deg !== deg) {
+            lastComboTick0Deg = deg;
+            ticks.setAttribute("transform", `rotate(${deg} 110 110)`);
+          }
         }
       }
     }
   }
-  paintComboArc("combo-arc", "combo-glow-0", meters[0] || 0, !!tracks[0], "combo-band-0", spins[0], 0);
-  paintComboArc("combo-arc-1", "combo-glow-1", meters[1] || 0, !!tracks[1], "combo-band-1", spins[1], 1);
-  paintComboArc("combo-arc-2", "combo-glow-2", meters[2] || 0, !!tracks[2], "combo-band-2", spins[2], 2);
+  paintComboArc("combo-arc", "combo-glow-0", meters[0] || 0, "combo-band-0", !!(tracks[0] || (meters[0] || 0) > 0.001), spins[0]);
+  paintComboArc("combo-arc-1", "combo-glow-1", meters[1] || 0, "combo-band-1");
+  paintComboArc("combo-arc-2", "combo-glow-2", meters[2] || 0, "combo-band-2");
   const innerR = (tracks[2] || (meters[2] || 0) > 0.001)
     ? 66
     : (tracks[1] || (meters[1] || 0) > 0.001) ? 76 : 86;
@@ -1128,19 +1333,50 @@ function renderFrame(state, _rafNow) {
   const pegOrbitEl = $("hub-peg-orbit");
   if (pegOrbitEl) pegOrbitEl.style.transform = `rotate(${fraction * 360}deg)`;
   const gear = $("combo-gear");
-  if (gear) {
-    gear.classList.toggle("hidden", !(tracks[0] || (meters[0] || 0) > 0.001));
-    const gearRing = gear.querySelector(".combo-gear-ring");
-    if (gearRing) gearRing.setAttribute("r", String(innerR - 5));
-  }
+  if (gear) gear.classList.add("hidden");
   const comboBadge = $("combo-badge");
+  const comboMult = comboMultiplier(comboLive, comboT);
+  const comboLabel = formatComboMultiplier(comboMult);
+  const heat = comboLabel ? comboHeat(comboMult, comboT.comboAbsMax) : 0;
+  const heatRing = comboHeatRing(heat);
+  const comboFill =
+    heatRing === 2 ? "var(--combo-2)" : heatRing === 1 ? "var(--combo-1)" : "var(--combo-0)";
   if (comboBadge) {
-    comboBadge.textContent = formatComboMultiplier(comboMultiplier(comboLive, comboT));
+    comboBadge.textContent = comboLabel;
+    comboBadge.setAttribute("fill", comboFill);
+    comboBadge.style.fontSize = `${26 + heat * 14}px`;
+    comboBadge.style.filter = "none";
+    const shake = comboLabel ? comboShake(comboMult) : 0;
+    if (shake > 0.001) {
+      const frame = (nowMs * 0.024) | 0;
+      if (frame !== lastShakeFrame) {
+        lastShakeFrame = frame;
+        const xy = comboShakeRandom(shake);
+        lastShakeX = xy[0];
+        lastShakeY = xy[1];
+      }
+      comboBadge.setAttribute("transform", `translate(${lastShakeX} ${lastShakeY})`);
+    } else {
+      lastShakeFrame = -1;
+      comboBadge.removeAttribute("transform");
+    }
   }
   const titleEl = $("player-title");
+  const lifetime = playerProgress?.lifetimeSatsEarned || 0;
+  const stage = minerStage(lifetime);
   if (titleEl) {
-    titleEl.textContent = minerTitle(playerProgress?.lifetimeSatsEarned || 0);
+    titleEl.textContent = minerTitle(lifetime);
   }
+  const placeEl = $("level-place");
+  if (placeEl) placeEl.textContent = stage.subtitle;
+  const progressLabel = $("level-progress-label");
+  if (progressLabel) progressLabel.textContent = stage.label;
+  const fillEl = $("level-bar-fill");
+  if (fillEl) fillEl.style.width = `${Math.round(stage.progress * 1000) / 10}%`;
+  const bg = document.querySelector(".bg");
+  if (bg) bg.style.backgroundImage = `linear-gradient(180deg, rgba(0, 0, 0, 0.42), rgba(10, 11, 18, 0.82)), url("${stage.image}")`;
+  applyWheelChrome(stage);
+  applyTapperChrome(stage);
 
   const flashing = nowMs < wheelFlashUntil;
   $("sat-wheel").classList.toggle("flashing", flashing);
@@ -1274,7 +1510,11 @@ function doTap() {
   void ensureTapFlush();
 }
 
-$("sat-wheel").addEventListener("click", doTap);
+$("sat-wheel").addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  e.preventDefault();
+  doTap();
+});
 
 async function watchBoost(boostType) {
   await withBusy(async () => {

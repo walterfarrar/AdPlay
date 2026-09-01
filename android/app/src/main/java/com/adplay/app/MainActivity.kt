@@ -38,12 +38,14 @@ class MainActivity : ComponentActivity() {
             AdPlayTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val ui by vm.ui.collectAsState()
+                    val play by vm.play.collectAsState()
 
                     if (ui.ready && !ui.hasCompletedOnboarding) {
                         OnboardingScreen(onFinished = { vm.completeOnboarding() })
                     } else {
                         MainShell(
                             ui = ui,
+                            play = play,
                             onTap = { vm.tap() },
                             onActivate = { vm.watch(BoostType.ACTIVATE) },
                             onLonger = { vm.watch(BoostType.DURATION) },

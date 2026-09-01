@@ -143,13 +143,47 @@ private func posMod(_ a: Double, _ b: Double) -> Double {
 enum ComboEngine {
     static func formatMultiplier(_ m: Double) -> String {
         guard m > 1.001 else { return "" }
-        let tenths = (m * 10).rounded() / 10
-        if abs(m - tenths) < 5e-4 { return String(format: "×%.1f", tenths) }
-        let hundredths = (m * 100).rounded() / 100
-        if abs(m - hundredths) < 5e-5 { return String(format: "×%.2f", hundredths) }
-        let thousandths = (m * 1000).rounded() / 1000
-        if abs(m - thousandths) < 5e-6 { return String(format: "×%.3f", thousandths) }
-        return String(format: "×%.4f", (m * 10000).rounded() / 10000)
+        return "×" + formatFactor(m)
+    }
+
+    /// 0 at 1×, 1 at the absolute cap (default 3×).
+    static func heat(_ m: Double, absMax: Double = 3) -> Double {
+        let cap = absMax > 1.001 ? absMax : 3
+        let t = (m - 1) / (cap - 1)
+        if !t.isFinite || t <= 0 { return 0 }
+        return t >= 1 ? 1 : t
+    }
+
+    /// Ring 0 / 1 / 2 for combo heat color.
+    static func heatRing(_ heat: Double) -> Int {
+        if heat < 0.34 { return 0 }
+        if heat < 0.67 { return 1 }
+        return 2
+    }
+
+    /// 0 below 2×, 1 at 3×. Hub badge shake amount.
+    static func shake(_ m: Double) -> Double {
+        if m < 2 { return 0 }
+        let t = m - 2
+        return t >= 1 ? 1 : t
+    }
+
+    /// Inclusive pixel radius: 1 at 2×, 3 at 3×.
+    static func shakeAmplitude(_ shake: Double) -> Int {
+        guard shake > 0.001 else { return 0 }
+        return Int((1 + 2 * shake).rounded())
+    }
+
+    /// Combo factor for rate lines — always numeric, including 1.0.
+    static func formatFactor(_ m: Double) -> String {
+        let v = m > 0 ? m : 1
+        let tenths = (v * 10).rounded() / 10
+        if abs(v - tenths) < 5e-4 { return String(format: "%.1f", tenths) }
+        let hundredths = (v * 100).rounded() / 100
+        if abs(v - hundredths) < 5e-5 { return String(format: "%.2f", hundredths) }
+        let thousandths = (v * 1000).rounded() / 1000
+        if abs(v - thousandths) < 5e-6 { return String(format: "%.3f", thousandths) }
+        return String(format: "%.4f", (v * 10000).rounded() / 10000)
     }
 
     static func clampTaps(_ taps: Double, tunables t: ComboTunables) -> Double {

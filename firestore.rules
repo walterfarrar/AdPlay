@@ -5,8 +5,9 @@
 // Collection: config
 //   Document: tunables
 //     unitsPerSat, tapUnits, dailyTapCap, resetHourUtc, baseFillRate,
-//     durationBoostSeconds, speedBoostAmount, speedBoostSeconds,
-//     adCooldownSeconds, adsPerCycle, dailySatsEarnCap, minWithdrawSats
+    //     durationBoostSeconds, speedBoostAmount, speedBoostSeconds,
+    //     adCooldownSeconds, adsPerCycle, dailySatsEarnCap, minWithdrawSats,
+    //     minerStageThresholds (10 strictly increasing lifetime-sat unlocks)
 //
 // Collection: users
 //   Document: {uid}

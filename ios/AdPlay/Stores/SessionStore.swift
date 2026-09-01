@@ -4,15 +4,63 @@ import AuthenticationServices
 import FirebaseAuth
 import os
 
+/// Boost / ads / auto flags. Combo taps must not change this or Home chrome rebuilds.
+private struct PlayChrome: Equatable {
+    var adsRemainingToday: Int
+    var adCooldownSecondsLeft: Int
+    var adRegenSecondsLeft: Int
+    var skipAdsRemaining: Int
+    var skipAdRegenSecondsLeft: Int
+    var autoFillActive: Bool
+    var longerBoostActive: Bool
+    var speedBoostActive: Bool
+    var tapStrengthActive: Bool
+    var longerBoostCount: Int
+    var fasterBoostCount: Int
+    var strongerBoostCount: Int
+    var fillRate: Double
+    var tapPower: Double
+    var lastBoostType: String?
+    var satsBalance: Int
+
+    init(_ s: GameState) {
+        adsRemainingToday = s.adsRemainingToday
+        adCooldownSecondsLeft = s.adCooldownSecondsLeft
+        adRegenSecondsLeft = s.adRegenSecondsLeft ?? 0
+        skipAdsRemaining = s.effectiveSkipAdsRemaining
+        skipAdRegenSecondsLeft = s.skipAdRegenSecondsLeft ?? 0
+        autoFillActive = s.autoFillActive
+        longerBoostActive = s.longerBoostActive
+        speedBoostActive = s.speedBoostActive
+        tapStrengthActive = s.tapStrengthActive ?? false
+        longerBoostCount = s.longerBoostCount
+        fasterBoostCount = s.fasterBoostCount
+        strongerBoostCount = s.strongerBoostCount
+        fillRate = s.fillRate
+        tapPower = s.effectiveTapPower
+        lastBoostType = s.lastBoostType
+        satsBalance = s.satsBalance
+    }
+}
+
 @MainActor
 final class SessionStore: ObservableObject {
-    @Published var state: GameState = .empty
-    @Published var tunables: Tunables?
+    /// Latest game state, including optimistic taps. Not `@Published` — PlayDisplay
+    /// and `chromeNonce` drive UI so combo bursts do not rebuild the Play shell.
+    private(set) var state: GameState = .empty
+    /// Bumped only when boosts / ads / auto flags change.
+    @Published private(set) var chromeNonce: UInt = 0
+    let play = PlayDisplay()
+    @Published var tunables: Tunables? {
+        didSet { play.apply(state: state, tunables: tunables) }
+    }
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isReady = false
     @Published var bypassAds: Bool = DebugAdBypass.isEnabled
     @Published var progress: PlayerProgress = .empty
+    private var latestProgress: PlayerProgress = .empty
+    private var lastChrome: PlayChrome?
     private var adsWatchedToday = 0
     /// True while a rewarded ad is on screen — skip lifecycle refresh so the watch is not dropped.
     @Published private(set) var watchingAd = false
@@ -109,7 +157,7 @@ final class SessionStore: ObservableObject {
             skipAnimating = false
             anchorDate = Date()
             windowEndHandled = false
-            state = project(serverState, now: Date())
+            setDisplayedState(project(serverState, now: Date()), forceChrome: true)
         }
         // Keep Boost Ad refill / auto-end reminders aligned when leaving the app.
         GameReminderScheduler.sync(project(serverState, now: Date()))
@@ -157,16 +205,26 @@ final class SessionStore: ObservableObject {
     }
 
     /// Instant local feedback; Firebase catch-up is serialized in the background.
-    func tap() async {
+    func tap() {
         guard !skipAnimating else { return }
         guard serverState.tapsRemaining > 0 else { return }
 
         unackedTaps += 1
         serverState = serverState.applyingManualTap(tunables: tunables)
-        state = project(serverState, now: Date())
-        replaceProgress(progress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday))
+        setDisplayedState(project(serverState, now: Date()))
+        replaceProgress(
+            latestProgress.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday)
+        )
         publishPlayPresence()
         ensureTapFlush()
+    }
+
+    /// Push stashed daily-goal tap counts when leaving Play (Daily Goals / Redeem).
+    func flushPublishedProgress() {
+        if progress != latestProgress {
+            progress = latestProgress
+        }
+        chromeNonce &+= 1
     }
 
     /// Recompute display from confirmed server state + unacked optimistic taps.
@@ -177,7 +235,7 @@ final class SessionStore: ObservableObject {
         }
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
-        state = project(s, now: Date())
+        setDisplayedState(project(s, now: Date()))
         // Do not grant tokens here. getState / applyProgress already sent the
         // remaining bank; treating a stale local max as the floor was adding
         // those slots again (full bar after coming back).
@@ -214,7 +272,7 @@ final class SessionStore: ObservableObject {
                     self.confirmedState = next.takingLiveTapUnits(from: afterTap)
                     self.unackedTaps = max(0, self.unackedTaps - 1)
                     self.windowEndHandled = false
-                    self.state = self.project(self.serverState, now: Date())
+                    self.setDisplayedState(self.project(self.serverState, now: Date()))
                     self.applyProgress(p)
                     self.ensureTicker()
                 } catch {
@@ -342,7 +400,7 @@ final class SessionStore: ObservableObject {
                     d.nextSkipAdChargeAt = to.nextSkipAdChargeAt
                 }
 
-                self.state = d
+                self.setDisplayedState(d)
                 if u >= 1 { break }
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
@@ -355,7 +413,7 @@ final class SessionStore: ObservableObject {
         guard !Task.isCancelled else { return }
         anchorDate = Date()
         windowEndHandled = false
-        state = project(to, now: Date())
+        setDisplayedState(project(to, now: Date()), forceChrome: true)
         ensureTicker()
     }
 
@@ -405,9 +463,10 @@ final class SessionStore: ObservableObject {
         do {
             try await api.deleteAccount()
             GameReminderScheduler.clearAll()
-            state = .empty
+            setDisplayedState(.empty, forceChrome: true)
             serverState = .empty
             confirmedState = .empty
+            latestProgress = .empty
             progress = .empty
             adsWatchedToday = 0
             lastUpdatedAt = nil
@@ -512,9 +571,10 @@ final class SessionStore: ObservableObject {
 
     private func adoptSwitchedUser() async throws {
         GameReminderScheduler.clearAll()
-        state = .empty
+        setDisplayedState(.empty, forceChrome: true)
         serverState = .empty
         confirmedState = .empty
+        latestProgress = .empty
         progress = .empty
         adsWatchedToday = 0
         lastUpdatedAt = nil
@@ -541,7 +601,7 @@ final class SessionStore: ObservableObject {
         if let server, let ads = server.dailyGoals.first(where: { $0.id == "ads" }) {
             adsWatchedToday = ads.current
         }
-        let incoming = progress.takingServer(server)
+        let incoming = latestProgress.takingServer(server)
         let next = incoming.syncedWith(state: state, tunables: tunables, adsWatched: adsWatchedToday)
         // Server remaining already includes tokens for this hold. Only grant slots
         // that local goal completion added on top (optimistic taps / this session).
@@ -553,21 +613,37 @@ final class SessionStore: ObservableObject {
         } else if server != nil {
             grantAbove = incoming.adBank.max
         } else {
-            grantAbove = progress.adBank.max
+            grantAbove = latestProgress.adBank.max
         }
-        replaceProgress(next, grantAbove: grantAbove)
-        GameCenterService.report(progress: progress)
+        replaceProgress(next, grantAbove: grantAbove, forcePublish: server != nil)
+        if progress == latestProgress {
+            GameCenterService.report(progress: progress)
+        }
         publishPlayPresence()
     }
 
-    private func replaceProgress(_ next: PlayerProgress, grantAbove: Int? = nil) {
-        let floor = grantAbove ?? progress.adBank.max
+    private func replaceProgress(_ next: PlayerProgress, grantAbove: Int? = nil, forcePublish: Bool = false) {
+        let floor = grantAbove ?? latestProgress.adBank.max
         let oldRemaining = state.adsRemainingToday
-        progress = next
+        let publish = forcePublish || Self.progressChromeChanged(latestProgress, next)
+        latestProgress = next
+        if publish {
+            progress = next
+        }
         let gained = max(0, next.adBank.max - floor)
         if gained > 0, state.adsRemainingToday <= oldRemaining {
             grantCharges(gained, cap: next.adBank.max)
         }
+    }
+
+    private static func progressChromeChanged(_ a: PlayerProgress, _ b: PlayerProgress) -> Bool {
+        if a.lifetimeSats != b.lifetimeSats { return true }
+        if a.adBank != b.adBank { return true }
+        if a.achievements != b.achievements { return true }
+        if a.loginStreak != b.loginStreak { return true }
+        let aDone = a.dailyGoals.map { ($0.id, $0.completed) }
+        let bDone = b.dailyGoals.map { ($0.id, $0.completed) }
+        return aDone != bDone
     }
 
     private func grantCharges(_ gained: Int, cap: Int) {
@@ -580,7 +656,7 @@ final class SessionStore: ObservableObject {
             }
             return c
         }
-        state = bump(state)
+        setDisplayedState(bump(state), forceChrome: true)
         serverState = bump(serverState)
         confirmedState = bump(confirmedState)
     }
@@ -631,7 +707,7 @@ final class SessionStore: ObservableObject {
             serverState = adopted
             anchorDate = Date()
             windowEndHandled = false
-            state = project(adopted, now: anchorDate)
+            setDisplayedState(project(adopted, now: anchorDate), forceChrome: true)
         } else {
             confirmedState = adopted
             if !preserveLiveTaps {
@@ -643,6 +719,17 @@ final class SessionStore: ObservableObject {
         GameReminderScheduler.sync(state)
         publishPlayPresence()
         ensureTicker()
+    }
+
+    /// Push wheel/BTC/combo without rebuilding Home chrome unless boosts/ads changed.
+    private func setDisplayedState(_ next: GameState, forceChrome: Bool = false) {
+        state = next
+        play.apply(state: next, tunables: tunables)
+        let chrome = PlayChrome(next)
+        if forceChrome || lastChrome != chrome {
+            lastChrome = chrome
+            chromeNonce &+= 1
+        }
     }
 
     private func comboRecentlyTapped(_ s: GameState) -> Bool {
@@ -658,7 +745,7 @@ final class SessionStore: ObservableObject {
         tickTask = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled && self.foreground && !self.skipAnimating {
-                self.state = self.project(self.serverState, now: Date())
+                self.setDisplayedState(self.project(self.serverState, now: Date()))
 
                 if self.serverState.autoFillActive, !self.windowEndHandled,
                    let until = parseIso8601(self.serverState.autoFillUntil ?? ""),
@@ -790,7 +877,7 @@ final class SessionStore: ObservableObject {
     /// Hold size for regen / display. Never below the server remaining we just loaded,
     /// so a stale default bank of 5 cannot recap a full 13-token hold.
     private func adsHoldMax(for s: GameState) -> Int {
-        max(progress.adBank.max, tunables?.adsPerCycle ?? 0, s.adsRemainingToday, 1)
+        max(latestProgress.adBank.max, tunables?.adsPerCycle ?? 0, s.adsRemainingToday, 1)
     }
 
     /// Local display of banked charges + regen countdown from the server anchor.
@@ -867,7 +954,7 @@ final class SessionStore: ObservableObject {
         let comboT = ComboTunables.from(tunables)
         let live = ComboEngine.at(state.combo, now: Date(), tunables: comboT)
         let mult = comboT.multiplier(of: live)
-        let stage = MinerStage.from(lifetimeSats: progress.lifetimeSats)
+        let stage = MinerStage.from(lifetimeSats: progress.lifetimeSats, tunables: tunables)
         PlaySnapshot.write(
             .init(
                 satsBalance: state.satsBalance,

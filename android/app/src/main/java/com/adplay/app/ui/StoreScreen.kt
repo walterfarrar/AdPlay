@@ -16,7 +16,7 @@ import com.adplay.app.UiState
 @Composable
 fun StoreScreen(ui: UiState) {
     val p = ui.progress
-    CenteredFitPage {
+    CenteredFitPage(lifetimeSats = ui.progress.lifetimeSatsEarned, tunables = ui.tunables) {
             Text("Store", color = BrandInk, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
             Panel("Ad Tokens") {

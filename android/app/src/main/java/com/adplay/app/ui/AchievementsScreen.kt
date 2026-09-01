@@ -22,7 +22,11 @@ import com.adplay.app.data.Achievement
 
 @Composable
 fun AchievementsScreen(ui: UiState, onClose: () -> Unit) {
-    CenteredFitPage(Modifier.statusBarsPadding().navigationBarsPadding()) {
+    CenteredFitPage(
+        Modifier.statusBarsPadding().navigationBarsPadding(),
+        lifetimeSats = ui.progress.lifetimeSatsEarned,
+        tunables = ui.tunables,
+    ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

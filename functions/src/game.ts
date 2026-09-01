@@ -5,6 +5,7 @@ import {
   PublicGameState,
   Tunables,
   DEFAULT_TUNABLES,
+  sanitizeMinerStageThresholds,
 } from "./types";
 import {
   debugResetAllowed,
@@ -52,6 +53,7 @@ export async function loadTunables(): Promise<Tunables> {
   } else {
     t.resetHourUtc = Math.max(1, Math.min(23, Math.trunc(t.resetHourUtc)));
   }
+  t.minerStageThresholds = sanitizeMinerStageThresholds(t.minerStageThresholds);
   return t;
 }
 
