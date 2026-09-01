@@ -641,9 +641,8 @@ final class SessionStore: ObservableObject {
         if a.adBank != b.adBank { return true }
         if a.achievements != b.achievements { return true }
         if a.loginStreak != b.loginStreak { return true }
-        let aDone = a.dailyGoals.map { ($0.id, $0.completed) }
-        let bDone = b.dailyGoals.map { ($0.id, $0.completed) }
-        return aDone != bDone
+        return a.dailyGoals.map(\.id) != b.dailyGoals.map(\.id)
+            || a.dailyGoals.map(\.completed) != b.dailyGoals.map(\.completed)
     }
 
     private func grantCharges(_ gained: Int, cap: Int) {
