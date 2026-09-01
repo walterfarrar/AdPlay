@@ -102,7 +102,7 @@ fun RedeemScreen(
         RedeemHowToDialog(onDismiss = { showHowTo = false })
     }
 
-    CenteredFitPage {
+    CenteredFitPage(lifetimeSats = ui.progress.lifetimeSatsEarned, tunables = ui.tunables) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

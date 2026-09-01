@@ -26,6 +26,7 @@ struct MainTabView: View {
             .preferredColorScheme(.dark)
         }
         .onChange(of: tab) { _, t in
+            session.flushPublishedProgress()
             if t == 1 {
                 settings.acknowledgeDailyGoals(session.progress.displayedDailyGoals)
             }

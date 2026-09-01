@@ -39,7 +39,7 @@ fun ActivityScreen(ui: UiState, onRefresh: () -> Unit) {
     val bank = p.adBank
     LaunchedEffect(Unit) { onRefresh() }
 
-    CenteredFitPage {
+    CenteredFitPage(lifetimeSats = ui.progress.lifetimeSatsEarned, tunables = ui.tunables) {
             Text("Daily Goals", color = BrandInk, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
             Panel("Login streak") {

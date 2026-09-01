@@ -162,6 +162,8 @@ data class Tunables(
     val comboIdleGraceSeconds: Double = 1.5,
     val comboDrainPerSecondActive: Double = 0.002,
     val comboDrainPerSecondIdle: Double = 0.5,
+    /** Lifetime sats to unlock miner levels 1–10. */
+    val minerStageThresholds: List<Int>? = null,
 )
 data class Withdrawal(
     val id: String,

@@ -87,6 +87,11 @@ export type Tunables = {
   comboDrainPerSecondActive: number;
   /** Outer-ring units drained per second after the grace window. */
   comboDrainPerSecondIdle: number;
+  /**
+   * Lifetime sats to reach miner levels 1–10. Must be 10 strictly increasing
+   * non-negative integers. Invalid values fall back to the shipped defaults.
+   */
+  minerStageThresholds: number[];
 };
 /** Defaults — also seeded to Firestore config/tunables (server-only writes). */
 export const DEFAULT_TUNABLES: Tunables = {
@@ -129,7 +134,20 @@ export const DEFAULT_TUNABLES: Tunables = {
   comboIdleGraceSeconds: 1.5,
   comboDrainPerSecondActive: 0.002,
   comboDrainPerSecondIdle: 0.5,
+  minerStageThresholds: [0, 5, 50, 500, 5_000, 50_000, 500_000, 5_000_000, 50_000_000, 500_000_000],
 };
+
+/** Lifetime sats for Play levels 1–10. Invalid config uses these defaults. */
+export function sanitizeMinerStageThresholds(raw: unknown): number[] {
+  const defaults = [...DEFAULT_TUNABLES.minerStageThresholds];
+  if (!Array.isArray(raw) || raw.length !== defaults.length) return defaults;
+  const nums = raw.map((n) => Math.round(Number(n)));
+  if (nums.some((n) => !Number.isFinite(n) || n < 0)) return defaults;
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] <= nums[i - 1]) return defaults;
+  }
+  return nums;
+}
 export type GameStateDoc = {
   progress: number;
   fillRate: number;

@@ -4,7 +4,6 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -17,6 +16,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -42,7 +44,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,12 +62,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -83,11 +87,13 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.adplay.app.PlayFrame
 import com.adplay.app.UiState
 import com.adplay.app.data.ComboEngine
 import com.adplay.app.data.ComboState
 import com.adplay.app.data.ComboTunables
 import com.adplay.app.data.MinerStage
+import com.adplay.app.data.TapperChrome
 import com.adplay.app.data.Tunables
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -114,8 +120,42 @@ private enum class BoostVisual {
 }
 
 @Composable
+private fun MinerLevelBar(lifetimeSats: Int, accent: Color, tunables: Tunables? = null) {
+    val thresholds = MinerStage.thresholdsFrom(tunables)
+    val stage = MinerStage.from(lifetimeSats, thresholds)
+    val fill = stage.progress(lifetimeSats, thresholds)
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stage.subtitle, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = BrandMuted)
+            Text(
+                stage.progressLabel(lifetimeSats, thresholds),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = BrandMuted,
+            )
+        }
+        Box(
+            Modifier
+                .padding(top = 5.dp)
+                .fillMaxWidth()
+                .height(7.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color.White.copy(alpha = 0.14f)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fill)
+                    .background(Brush.horizontalGradient(listOf(accent, BrandAccentHot))),
+            )
+        }
+    }
+}
+
+@Composable
 fun HomeScreen(
     ui: UiState,
+    play: PlayFrame,
     onTap: () -> Unit,
     onActivate: () -> Unit,
     onLonger: () -> Unit,
@@ -129,20 +169,18 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
 ) {
+    val stage = MinerStage.from(ui.progress.lifetimeSatsEarned, ui.tunables)
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(listOf(BrandBgTop, BrandBgMid, BrandBgBottom)),
-            ),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        StageBackdrop(ui.progress.lifetimeSatsEarned, ui.tunables)
         Box(
             Modifier
                 .size(360.dp)
                 .align(Alignment.TopStart)
                 .offset(x = (-120).dp, y = (-150).dp)
                 .background(
-                    Brush.radialGradient(listOf(BrandAccent.copy(alpha = 0.22f), Color.Transparent)),
+                    Brush.radialGradient(listOf(BrandAccent.copy(alpha = 0.16f), Color.Transparent)),
                     CircleShape,
                 ),
         )
@@ -227,11 +265,11 @@ fun HomeScreen(
                     }
                 }
 
-                LaunchedEffect(state.satsBalance) {
+                LaunchedEffect(play.satsBalance) {
                     val prev = previousSats
-                    previousSats = state.satsBalance
+                    previousSats = play.satsBalance
                     if (prev == null) return@LaunchedEffect
-                    val gained = state.satsBalance - prev
+                    val gained = play.satsBalance - prev
                     if (gained <= 0) return@LaunchedEffect
                     val bursts = gained.coerceIn(1, 4)
                     for (i in 0 until bursts) {
@@ -260,7 +298,7 @@ fun HomeScreen(
                         Column {
                             Text("AdPlay", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = BrandInk)
                             Text(
-                                MinerStage.from(ui.progress.lifetimeSatsEarned).title,
+                                "Level ${stage.level} · ${stage.title}",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = BrandAccent,
@@ -311,27 +349,21 @@ fun HomeScreen(
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    Text(
-                        "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
-                            "they can improve as more players join and ad revenue grows.",
-                        color = BrandMuted,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    MinerLevelBar(lifetimeSats = ui.progress.lifetimeSatsEarned, accent = BrandAccent, tunables = ui.tunables)
 
                     Spacer(Modifier.weight(1f))
 
                     SatEarnStage(
-                        satsBalance = state.satsBalance,
-                        displayProgress = state.progress,
-                        unitsPerSat = state.unitsPerSat,
-                        autoActive = state.autoFillActive,
-                        autoFillUntil = state.autoFillUntil,
-                        fillRate = state.fillRate,
-                        tapPower = state.tapPower,
-                        combo = state.combo(ComboTunables.from(ui.tunables)),
+                        satsBalance = play.satsBalance,
+                        displayProgress = play.progress,
+                        unitsPerSat = play.unitsPerSat,
+                        autoActive = play.autoFillActive,
+                        autoFillUntil = play.autoFillUntil,
+                        fillRate = play.fillRate,
+                        tapPower = play.tapPower,
+                        combo = play.combo,
                         tunables = ui.tunables,
+                        stage = stage,
                         onTap = onTap,
                         wheelFlash = barFlashAnimated,
                         onWheelTipPositioned = onWheelTipPositioned,
@@ -340,8 +372,8 @@ fun HomeScreen(
 
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        if (state.tapsRemaining > 0) {
-                            "Tap the wheel · ${state.tapsRemaining} taps left today"
+                        if (play.tapsRemaining > 0) {
+                            "Tap the wheel · ${play.tapsRemaining} taps left today"
                         } else {
                             "0 taps left today"
                         },
@@ -571,184 +603,52 @@ internal fun formatBtcQuanta(quanta: Long): String {
     return String.format("%d.%013d", whole, frac)
 }
 
-/**
- * Upward odometer ticks for place 10^power.
- * Carries count: +10 on the value → ones place ticks 10 (full turn) even if the glyph ends the same.
- */
-private fun odometerSteps(fromQuanta: Long, toQuanta: Long, power: Int, toDigit: Int): Int {
-    var place = 1L
-    repeat(power.coerceAtLeast(0)) { place *= 10L }
-    return if (toQuanta >= fromQuanta) {
-        val raw = toQuanta / place - fromQuanta / place
-        raw.coerceIn(0L, 40L).toInt()
-    } else {
-        val fromDigit = ((fromQuanta / place) % 10L).toInt()
-        (toDigit - fromDigit + 10) % 10
-    }
-}
-
-private data class BtcGlyph(
-    val key: String,
-    val digit: Int?,
-    val steps: Int,
-    val literal: String?,
-)
-
-private fun btcGlyphs(fromQuanta: Long, toQuanta: Long): List<BtcGlyph> {
-    val text = formatBtcQuanta(toQuanta)
-    val digitCount = text.count { it.isDigit() }
-    var power = digitCount - 1
-    return text.map { ch ->
-        if (ch.isDigit()) {
-            val p = power
-            power -= 1
-            val d = ch - '0'
-            BtcGlyph(
-                key = "p$p",
-                digit = d,
-                steps = odometerSteps(fromQuanta, toQuanta, p, d),
-                literal = null,
-            )
-        } else {
-            BtcGlyph(key = "lit-$ch", digit = null, steps = 0, literal = ch.toString())
-        }
-    }
-}
-
-/** Odometer-style label: each digit slides vertically; punctuation stays put. */
 @Composable
-private fun RollingDigitsLabel(
-    quanta: Long,
-    fontSizeSp: Float = 42f,
-    modifier: Modifier = Modifier,
-) {
-    var fromQuanta by remember { mutableLongStateOf(quanta) }
-    var primed by remember { mutableStateOf(false) }
-    var lastChangeMs by remember { mutableLongStateOf(0L) }
-    val nowMs = SystemClock.uptimeMillis()
-    val rapid = lastChangeMs > 0L && nowMs - lastChangeMs < 120L
-    val jump = kotlin.math.abs(quanta - fromQuanta) > 400L
-    val rollFrom = if (
-        !primed ||
-        (fromQuanta <= 0L && quanta >= 100_000L) ||
-        rapid ||
-        jump
-    ) quanta else fromQuanta
-    val glyphs = remember(quanta, rollFrom) { btcGlyphs(rollFrom, quanta) }
-    LaunchedEffect(quanta) {
-        lastChangeMs = SystemClock.uptimeMillis()
-        if (!primed || (fromQuanta <= 0L && quanta >= 100_000L)) {
-            fromQuanta = quanta
-            primed = true
-            return@LaunchedEffect
-        }
-        fromQuanta = quanta
-    }
-
-    val text = formatBtcQuanta(quanta)
-    val digitStyle = TextStyle(
-        fontSize = fontSizeSp.sp,
+private fun BtcAmountLabel(text: String, modifier: Modifier = Modifier) {
+    val style = TextStyle(
+        fontSize = 42.sp,
         fontWeight = FontWeight.Black,
         color = BrandInk,
         textAlign = TextAlign.Center,
+        fontFeatureSettings = "tnum",
     )
     val measurer = rememberTextMeasurer()
-    val measured = remember(text, digitStyle) { measurer.measure(text, style = digitStyle) }
-
+    val widthPx = remember(text.length, style, measurer) {
+        val probe = text.map { if (it.isDigit()) '8' else it }.joinToString("")
+        measurer.measure(probe, style = style).size.width.coerceAtLeast(1)
+    }
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
-        val maxPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-        val scale = min(1f, maxPx / measured.size.width.toFloat().coerceAtLeast(1f))
-        Row(
+        val scale = min(1f, constraints.maxWidth / widthPx.toFloat())
+        Text(
+            text = text,
+            style = style,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            glyphs.forEach { glyph ->
-                key(glyph.key) {
-                    val d = glyph.digit
-                    if (d != null) {
-                        RollingDigitSlot(
-                            digit = d,
-                            steps = glyph.steps,
-                            rollId = quanta,
-                            textStyle = digitStyle,
-                        )
-                    } else {
-                        Text(glyph.literal.orEmpty(), style = digitStyle)
-                    }
-                }
-            }
-        }
+        )
     }
 }
 
-@Composable
-private fun RollingDigitSlot(
-    digit: Int,
-    steps: Int,
-    rollId: Long,
-    textStyle: TextStyle,
-) {
-    val target = digit.coerceIn(0, 9)
-    // No slide — just tick the glyph through intermediates (incl. full-turn carries).
-    var displayed by remember { mutableIntStateOf(target) }
-    var primed by remember { mutableStateOf(false) }
-
-    LaunchedEffect(rollId) {
-        if (!primed) {
-            displayed = target
-            primed = true
-            return@LaunchedEffect
-        }
-        val n = steps.coerceAtLeast(0)
-        if (n == 0 || n > 6) {
-            displayed = target
-            return@LaunchedEffect
-        }
-        try {
-            repeat(n) {
-                displayed = (displayed + 1) % 10
-                delay(35L)
-            }
-            displayed = target
-        } finally {
-            // Cancelled mid-sequence (rapid quanta updates): snap to latest.
-            displayed = target
-        }
-    }
-
-    Text(
-        text = "$displayed",
-        style = textStyle,
-        modifier = Modifier.padding(horizontal = 0.5.dp),
-    )
-}
-
-
-/** Rate line under the wheel stage: taps/s · power · fill/s — colored by Speed / Power. */
+/** Rate lines under the wheel: autotapper fill/s and manual combo × power /tap. */
 @Composable
 private fun BarRateStatus(
     autoActive: Boolean,
     fillRate: Double,
     tapPower: Double,
+    comboMultiplier: Double,
 ) {
     val power = if (tapPower > 0.0) tapPower else 1.0
-    val annotated = remember(autoActive, fillRate, power) {
+    val combo = if (comboMultiplier > 0.0) comboMultiplier else 1.0
+    val autoText = remember(autoActive, fillRate, power) {
         buildAnnotatedString {
             if (!autoActive || fillRate <= 0.0) {
                 withStyle(SpanStyle(color = BrandMuted)) { append("Idle") }
-                if (power > 1.0 + 1e-9) {
-                    withStyle(SpanStyle(color = BrandMuted)) { append(" · ") }
-                    withStyle(SpanStyle(color = BrandPower)) {
-                        append(String.format("%.2f power", power))
-                    }
-                }
             } else {
                 val tapsPerSec = fillRate / power
                 withStyle(SpanStyle(color = BrandSpeed)) {
@@ -765,12 +665,33 @@ private fun BarRateStatus(
             }
         }
     }
-    Text(
-        annotated,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 12.sp,
-        maxLines = 1,
-    )
+    val manualText = remember(power, combo) {
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = ComboRing0)) {
+                append("${ComboEngine.formatFactor(combo)} combo")
+            }
+            withStyle(SpanStyle(color = BrandMuted)) { append(" × ") }
+            withStyle(SpanStyle(color = BrandPower)) {
+                append(String.format("%.2f power", power))
+            }
+            withStyle(SpanStyle(color = BrandMuted)) { append(" = ") }
+            withStyle(SpanStyle(color = BrandFill)) {
+                append(String.format("%.2f/tap", combo * power))
+            }
+        }
+    }
+    val labelMod = Modifier.width(80.dp)
+    Column(horizontalAlignment = Alignment.Start) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Autotapper", color = BrandMuted, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, modifier = labelMod)
+            Text(autoText, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(3.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Manual", color = BrandMuted, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, modifier = labelMod)
+            Text(manualText, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1)
+        }
+    }
 }
 
 internal fun formatLongerAction(t: Tunables?): String {
@@ -907,6 +828,7 @@ private fun SatEarnStage(
     tapPower: Double,
     combo: ComboState = ComboState(),
     tunables: Tunables? = null,
+    stage: MinerStage = MinerStage.Level1,
     onTap: () -> Unit,
     wheelFlash: Float = 0f,
     onWheelTipPositioned: (LayoutCoordinates) -> Unit = {},
@@ -1015,13 +937,8 @@ private fun SatEarnStage(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            RollingDigitsLabel(
-                quanta = btcQuanta(
-                    satsBalance = satsBalance,
-                    barProgress = visualProgress,
-                    unitsPerSat = unitsPerSat,
-                ),
-                fontSizeSp = 42f,
+            BtcAmountLabel(
+                text = formatBtcAmount(satsBalance, visualProgress, unitsPerSat),
             )
             Spacer(Modifier.height(2.dp))
             Text(
@@ -1061,12 +978,13 @@ private fun SatEarnStage(
                     comboTracks = comboTracks,
                     comboSpins = comboSpins,
                     comboMultiplier = comboMult,
+                    stage = stage,
                     onTap = onTap,
                     modifier = Modifier
                         .size(wheelSize)
                         .onGloballyPositioned(onWheelTipPositioned),
                 )
-                AutoKnockerView(pose = pose, active = autoActive, tapPower = tapPower)
+                AutoKnockerView(pose = pose, active = autoActive, tapPower = tapPower, stage = stage)
                 Box(
                     modifier = Modifier
                         .offset(x = 153.dp, y = 74.dp)
@@ -1088,7 +1006,12 @@ private fun SatEarnStage(
         )
 
         Spacer(Modifier.height(12.dp))
-        BarRateStatus(autoActive = autoActive, fillRate = fillRate, tapPower = tapPower)
+        BarRateStatus(
+            autoActive = autoActive,
+            fillRate = fillRate,
+            tapPower = tapPower,
+            comboMultiplier = comboMult,
+        )
     }
 }
 
@@ -1166,17 +1089,31 @@ private fun SatWheelView(
     comboTracks: List<Boolean> = listOf(true, false, false),
     comboSpins: List<Double> = listOf(0.0, 0.0, 0.0),
     comboMultiplier: Double = 1.0,
+    stage: MinerStage = MinerStage.Level1,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val comboLabel = ComboEngine.formatMultiplier(comboMultiplier)
-    Box(
+    val comboHeat = if (comboLabel.isEmpty()) 0.0 else ComboEngine.heat(comboMultiplier)
+    val comboFill = when (ComboEngine.heatRing(comboHeat)) {
+        1 -> ComboRing1
+        2 -> ComboRing2
+        else -> ComboRing0
+    }
+    val facePainter = painterResource(stage.wheelFaceRes())
+    BoxWithConstraints(
         modifier = modifier
             .clip(CircleShape)
-            .clickable(onClick = onTap),
+            .pointerInput(onTap) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    onTap()
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
+            val chrome = stage.wheelChrome
             val sizeMin = size.minDimension
             val rim = sizeMin * 0.06f
             val center = Offset(size.width / 2f, size.height / 2f)
@@ -1188,101 +1125,129 @@ private fun SatWheelView(
             val show1 = comboTracks.getOrNull(1) == true
             val show2 = comboTracks.getOrNull(2) == true
 
-            fun appendComboTicks(
-                path: Path,
-                ringRadius: Float,
-                stroke: Float,
-                length: Float,
-                count: Int,
-            ) {
-                val outer = ringRadius + stroke * 0.36f
-                val inner = outer - length
-                var angle = -PI / 2.0
-                val step = 2.0 * PI / count
-                repeat(count) {
-                    val cosA = cos(angle).toFloat()
-                    val sinA = sin(angle).toFloat()
-                    path.moveTo(center.x + cosA * inner, center.y + sinA * inner)
-                    path.lineTo(center.x + cosA * outer, center.y + sinA * outer)
-                    angle += step
-                }
-            }
-
             fun drawComboRing(
                 ringRadius: Float,
                 stroke: Float,
                 frac: Float,
                 color: Color,
-                showTrack: Boolean,
-                trackAlpha: Float,
-                spinTurns: Float,
             ) {
                 val drawArc = frac > 0.001f
-                if (!showTrack && !drawArc) return
-                drawCircle(
-                    color = BrandInk.copy(alpha = 0.22f),
-                    radius = ringRadius,
-                    center = center,
-                    style = Stroke(width = stroke * 1.22f),
+                if (!drawArc) return
+                val sweep = 360f * frac.coerceIn(0f, 1f)
+                val fresh = frac < 0.18f
+                val box = Offset(center.x - ringRadius, center.y - ringRadius)
+                val boxSize = Size(ringRadius * 2f, ringRadius * 2f)
+                drawArc(
+                    color = color.copy(alpha = if (fresh) 0.42f else 0.22f),
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = box,
+                    size = boxSize,
+                    style = Stroke(width = stroke * if (fresh) 1.55f else 1.25f, cap = StrokeCap.Round),
                 )
-                drawCircle(
-                    color = BrandInk.copy(alpha = trackAlpha),
-                    radius = ringRadius,
-                    center = center,
-                    style = Stroke(width = stroke),
+                drawArc(
+                    color = color,
+                    startAngle = -90f,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = box,
+                    size = boxSize,
+                    style = Stroke(width = stroke * 0.70f, cap = StrokeCap.Round),
                 )
-                if (drawArc) {
-                    val sweep = 360f * frac.coerceIn(0f, 1f)
-                    val fresh = frac < 0.18f
-                    val box = Offset(center.x - ringRadius, center.y - ringRadius)
-                    val boxSize = Size(ringRadius * 2f, ringRadius * 2f)
-                    drawArc(
-                        color = color.copy(alpha = if (fresh) 0.42f else 0.22f),
-                        startAngle = -90f,
-                        sweepAngle = sweep,
-                        useCenter = false,
-                        topLeft = box,
-                        size = boxSize,
-                        style = Stroke(width = stroke * if (fresh) 1.85f else 1.55f, cap = StrokeCap.Round),
-                    )
-                    drawArc(
-                        color = BrandInk.copy(alpha = 0.38f),
-                        startAngle = -90f,
-                        sweepAngle = sweep,
-                        useCenter = false,
-                        topLeft = box,
-                        size = boxSize,
-                        style = Stroke(width = stroke, cap = StrokeCap.Round),
-                    )
-                    drawArc(
-                        color = color,
-                        startAngle = -90f,
-                        sweepAngle = sweep,
-                        useCenter = false,
-                        topLeft = box,
-                        size = boxSize,
-                        style = Stroke(width = stroke * 0.70f, cap = StrokeCap.Round),
-                    )
+            }
+
+            fun drawComboTicks(
+                ringRadius: Float,
+                stroke: Float,
+                spinTurns: Double,
+            ) {
+                val tick = Color(0xFFF4F5FA)
+                val tickOuter = ringRadius + stroke * 0.36f
+                val spinDeg = spinTurns * 360.0 - 90.0
+                fun strokeTicks(count: Int, stepDeg: Double, length: Float, width: Float, alpha: Float) {
+                    var angle = Math.toRadians(spinDeg)
+                    val step = Math.toRadians(stepDeg)
+                    val inner = tickOuter - length
+                    repeat(count) {
+                        val cosA = cos(angle).toFloat()
+                        val sinA = sin(angle).toFloat()
+                        drawLine(
+                            color = tick.copy(alpha = alpha),
+                            start = Offset(center.x + cosA * inner, center.y + sinA * inner),
+                            end = Offset(center.x + cosA * tickOuter, center.y + sinA * tickOuter),
+                            strokeWidth = width,
+                            cap = StrokeCap.Round,
+                        )
+                        angle += step
+                    }
                 }
-                val minor = Path()
-                val major = Path()
-                appendComboTicks(minor, ringRadius, stroke, stroke * 0.40f, 24)
-                appendComboTicks(major, ringRadius, stroke, stroke * 0.78f, 8)
-                rotate(degrees = spinTurns * 360f, pivot = center) {
-                    drawPath(minor, color.copy(alpha = 0.38f), style = Stroke(width = 1.05f, cap = StrokeCap.Round))
-                    drawPath(major, color.copy(alpha = 0.70f), style = Stroke(width = 1.65f, cap = StrokeCap.Round))
-                }
+                strokeTicks(24, 15.0, stroke * 0.55f, 1.7f, 0.78f)
+                strokeTicks(8, 45.0, stroke * 0.95f, 2.5f, 0.94f)
+            }
+
+            val navy = Color(
+                red = 0.07f + 0.04f * chrome.tealMix,
+                green = 0.08f + 0.10f * chrome.tealMix,
+                blue = 0.13f + 0.04f * chrome.tealMix,
+            )
+            val gold = Color(0xFFF2C747)
+            val teal = Color(0xFF33EBD9)
+            val faceR = sizeMin * 0.42f
+            val plateR = radius + rim * 0.5f
+
+            if (chrome.halo > 0.001f) {
+                drawCircle(
+                    color = (if (chrome.tealMix > 0.35f) teal else BrandAccent).copy(alpha = chrome.halo * 0.55f),
+                    radius = sizeMin * 0.52f,
+                    center = center,
+                )
             }
 
             drawCircle(
-                color = BrandInk.copy(alpha = 0.08f),
-                radius = radius,
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        navy,
+                        Color(red = 0.03f, green = 0.035f, blue = 0.055f),
+                    ),
+                    center = center,
+                    radius = plateR,
+                ),
+                radius = plateR,
                 center = center,
-                style = Stroke(width = rim),
             )
+
+            if (chrome.goldRim > 0.001f) {
+                drawCircle(
+                    color = gold.copy(alpha = chrome.goldRim),
+                    radius = radius + rim * 0.35f,
+                    center = center,
+                    style = Stroke(width = 2.2f),
+                )
+            }
+
+            if (chrome.bevel > 0.001f) {
+                drawCircle(
+                    color = BrandInk.copy(alpha = chrome.bevel),
+                    radius = faceR - 2f,
+                    center = center,
+                    style = Stroke(width = 1.4f),
+                )
+            }
 
             val sweep = 360f * fraction
             if (sweep > 0.1f) {
+                if (chrome.fillBloom > 0.001f) {
+                    drawArc(
+                        color = (if (flash > 0.3f) BrandAccent else BrandFill).copy(alpha = 0.35f + chrome.fillBloom * 0.4f),
+                        startAngle = -90f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        topLeft = Offset(center.x - radius, center.y - radius),
+                        size = Size(radius * 2f, radius * 2f),
+                        style = Stroke(width = rim * (1.35f + chrome.fillBloom * 0.4f), cap = StrokeCap.Round),
+                    )
+                }
                 drawArc(
                     brush = Brush.sweepGradient(
                         colors = if (flash > 0.3f) {
@@ -1318,66 +1283,100 @@ private fun SatWheelView(
                 else -> comboRadius
             }
             val pegOrbit = maxOf(sizeMin * 0.16f, innerComboR - comboRim * 0.55f - 5f)
+            val clipR = radius - rim * 0.5f
 
             rotate(degrees = fraction * 360f, pivot = center) {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            BrandInk.copy(alpha = 0.04f),
-                            BrandInk.copy(alpha = 0.10f),
-                        ),
-                        center = center,
-                        radius = sizeMin * 0.48f,
-                    ),
-                    radius = sizeMin * 0.42f,
-                    center = center,
-                )
+                clipPath(
+                    Path().apply {
+                        addOval(
+                            Rect(
+                                left = center.x - clipR,
+                                top = center.y - clipR,
+                                right = center.x + clipR,
+                                bottom = center.y + clipR,
+                            ),
+                        )
+                    },
+                ) {
+                    translate(left = center.x - clipR, top = center.y - clipR) {
+                        with(facePainter) {
+                            draw(Size(clipR * 2f, clipR * 2f))
+                        }
+                    }
+                    drawCircle(Color.Black.copy(alpha = 0.36f), radius = clipR, center = center)
+                }
+                if (chrome.gearTeeth > 0) {
+                    val teeth = chrome.gearTeeth
+                    val outer = faceR - 1f
+                    val inner = outer - rim * 0.42f
+                    val gearColor = (if (chrome.goldRim > 0.4f) gold else BrandInk)
+                        .copy(alpha = 0.40f + chrome.goldRim * 0.25f)
+                    for (i in 0 until teeth) {
+                        val angleRad = Math.toRadians(i * (360.0 / teeth) - 90.0)
+                        val cosA = cos(angleRad).toFloat()
+                        val sinA = sin(angleRad).toFloat()
+                        drawLine(
+                            color = gearColor,
+                            start = Offset(center.x + cosA * inner, center.y + sinA * inner),
+                            end = Offset(center.x + cosA * outer, center.y + sinA * outer),
+                            strokeWidth = 1.4f,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                }
+                val tick = Color(0xFFF4F5FA)
                 for (i in 0 until 60) {
                     val angleRad = Math.toRadians(i * 6.0 - 90.0)
                     val outer = sizeMin * 0.365f
-                    val inner = outer - 5f
+                    val inner = outer - 7f
                     val cosA = cos(angleRad).toFloat()
                     val sinA = sin(angleRad).toFloat()
                     drawLine(
-                        color = BrandInk.copy(alpha = 0.10f),
+                        color = tick.copy(alpha = (chrome.tickMinor + 0.38f).coerceAtMost(1f)),
                         start = Offset(center.x + cosA * inner, center.y + sinA * inner),
                         end = Offset(center.x + cosA * outer, center.y + sinA * outer),
-                        strokeWidth = 0.8f,
+                        strokeWidth = 1.6f,
                         cap = StrokeCap.Round,
                     )
                 }
                 for (i in 0 until 12) {
                     val angleRad = Math.toRadians(i * 30.0 - 90.0)
                     val outer = sizeMin * 0.38f
-                    val inner = outer - if (i % 3 == 0) 14f else 9f
+                    val inner = outer - if (i % 3 == 0) 16f else 11f
                     val cosA = cos(angleRad).toFloat()
                     val sinA = sin(angleRad).toFloat()
                     drawLine(
-                        color = BrandInk.copy(alpha = if (i % 3 == 0) 0.35f else 0.16f),
+                        color = tick.copy(
+                            alpha = if (i % 3 == 0) {
+                                (chrome.tickCardinal + 0.08f).coerceAtMost(1f)
+                            } else {
+                                (chrome.tickMajor + 0.22f).coerceAtMost(1f)
+                            },
+                        ),
                         start = Offset(center.x + cosA * inner, center.y + sinA * inner),
                         end = Offset(center.x + cosA * outer, center.y + sinA * outer),
-                        strokeWidth = if (i % 3 == 0) 3f else 2f,
+                        strokeWidth = if (i % 3 == 0) 3.2f else 2.4f,
                         cap = StrokeCap.Round,
                     )
                 }
             }
 
-            val spin0 = comboSpins.getOrNull(0)?.toFloat() ?: 0f
-            val spin1 = comboSpins.getOrNull(1)?.toFloat() ?: 0f
-            val spin2 = comboSpins.getOrNull(2)?.toFloat() ?: 0f
-            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0, showTrack = show0, trackAlpha = 0.10f, spinTurns = spin0)
-            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1, showTrack = show1, trackAlpha = 0.14f, spinTurns = spin1)
-            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2, showTrack = show2, trackAlpha = 0.18f, spinTurns = spin2)
+            drawComboRing(comboRadius, comboRim, outerFrac, ComboRing0)
+            if (show0 || outerFrac > 0.001f) {
+                drawComboTicks(comboRadius, comboRim, comboSpins.getOrNull(0) ?: 0.0)
+            }
+            drawComboRing(ring1Radius, comboRim, innerFrac, ComboRing1)
+            drawComboRing(ring2Radius, comboRim, coreFrac, ComboRing2)
 
             // Peg just inside the innermost drawn combo stroke, on top of the rings.
             rotate(degrees = fraction * 360f, pivot = center) {
                 drawCircle(
-                    color = BrandInk.copy(alpha = 0.55f),
+                    color = BrandInk.copy(alpha = 0.75f),
                     radius = 5f,
                     center = Offset(center.x, center.y - pegOrbit),
                 )
                 drawCircle(
-                    color = BrandAccent.copy(alpha = 0.95f),
+                    color = BrandAccent.copy(alpha = 0.98f),
                     radius = 3.5f,
                     center = Offset(center.x, center.y - pegOrbit),
                 )
@@ -1393,13 +1392,13 @@ private fun SatWheelView(
             }
             drawPath(
                 path = pointer,
-                color = if (flash > 0.3f) BrandAccent else BrandInk.copy(alpha = 0.75f),
+                color = if (flash > 0.3f) BrandAccent else BrandInk.copy(alpha = chrome.pointer),
             )
 
             // Strike plate at 3 o'clock — where the auto tapper lands.
             val plateUnit = 1.dp.toPx()
             drawRoundRect(
-                color = BrandInk.copy(alpha = 0.30f),
+                color = BrandInk.copy(alpha = chrome.plate),
                 topLeft = Offset(
                     center.x + sizeMin * 0.5f - 4.5f * plateUnit,
                     center.y - 13f * plateUnit,
@@ -1408,7 +1407,7 @@ private fun SatWheelView(
                 cornerRadius = CornerRadius(3f * plateUnit, 3f * plateUnit),
             )
             drawRoundRect(
-                color = BrandInk.copy(alpha = 0.35f),
+                color = BrandInk.copy(alpha = (chrome.plate + 0.12f).coerceAtMost(1f)),
                 topLeft = Offset(
                     center.x + sizeMin * 0.5f - 4.5f * plateUnit,
                     center.y - 13f * plateUnit,
@@ -1417,27 +1416,6 @@ private fun SatWheelView(
                 cornerRadius = CornerRadius(3f * plateUnit, 3f * plateUnit),
                 style = Stroke(width = plateUnit),
             )
-
-            drawCircle(
-                brush = Brush.verticalGradient(
-                    colors = listOf(BrandInk.copy(alpha = 0.12f), BrandInk.copy(alpha = 0.06f)),
-                ),
-                radius = sizeMin * 0.14f,
-                center = center,
-            )
-            drawCircle(
-                color = BrandInk.copy(alpha = 0.12f),
-                radius = sizeMin * 0.14f,
-                center = center,
-                style = Stroke(width = 1f),
-            )
-            if (comboLabel.isEmpty()) {
-                drawCircle(
-                    color = BrandAccent.copy(alpha = if (flash > 0.3f) 0.55f else 0.2f),
-                    radius = sizeMin * 0.04f,
-                    center = center,
-                )
-            }
 
             if (flash > 0.3f) {
                 drawCircle(
@@ -1449,11 +1427,44 @@ private fun SatWheelView(
             }
         }
         if (comboLabel.isNotEmpty()) {
+            val heat = comboHeat.toFloat()
+            val shake = ComboEngine.shake(comboMultiplier).toFloat()
+            val wheel = minOf(maxWidth, maxHeight)
+            val fontSp = (wheel.value * (0.12f + heat * 0.07f)).sp
+            var shakeTick by remember { mutableIntStateOf(0) }
+            LaunchedEffect(shake > 0.001f) {
+                if (shake <= 0.001f) return@LaunchedEffect
+                while (true) {
+                    shakeTick++
+                    delay(42L)
+                }
+            }
+            val density = LocalDensity.current
+            val amp = ComboEngine.shakeAmplitude(shake.toDouble())
+            val ox = remember(shakeTick) { if (amp <= 0) 0 else (-amp..amp).random() }
+            val oy = remember(shakeTick) { if (amp <= 0) 0 else (-amp..amp).random() }
             Text(
                 comboLabel,
-                color = BrandAccent,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
+                style = TextStyle(
+                    color = comboFill,
+                    fontSize = fontSp,
+                    fontWeight = FontWeight.Black,
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.88f),
+                        offset = Offset.Zero,
+                        blurRadius = 2.5f,
+                    ),
+                ),
+                maxLines = 1,
+                modifier = Modifier.graphicsLayer {
+                    val s = 1f + heat * 0.1f
+                    scaleX = s
+                    scaleY = s
+                    if (amp > 0) {
+                        translationX = with(density) { ox.dp.toPx() }
+                        translationY = with(density) { oy.dp.toPx() }
+                    }
+                },
             )
         }
     }
@@ -1505,24 +1516,54 @@ private object KnockerGeometry {
         strikeAngle - (SWEEP_DEGREES * PI.toFloat() / 180f) * (1f - arm)
 }
 
+private fun tapperSteel(light: Boolean, chrome: TapperChrome): Color {
+    val base = if (light) Color(0xFFDBE1ED) else Color(0xFF6B7385)
+    val gold = Color(0xFFF2C747)
+    val teal = Color(0xFF33EBD9)
+    val g = chrome.goldTrim * 0.55f
+    val t = chrome.tealMix * 0.45f
+    val p = chrome.polish * 0.16f
+    val remain = (1f - g - t).coerceAtLeast(0f)
+    return Color(
+        red = (base.red * remain + gold.red * g + teal.red * t + p).coerceIn(0f, 1f),
+        green = (base.green * remain + gold.green * g + teal.green * t + p).coerceIn(0f, 1f),
+        blue = (base.blue * remain + gold.blue * g + teal.blue * t + p * 0.55f).coerceIn(0f, 1f),
+    )
+}
+
+private fun tapperGlow(chrome: TapperChrome): Color = when {
+    chrome.tealMix > 0.35f -> Color(0xFF33EBD9)
+    chrome.goldTrim > 0.25f -> Color(0xFFF2C747)
+    else -> BrandAccent
+}
+
 /**
  * Side-mounted auto tapper: a geared hammer that swings onto the wheel rim.
  * Driven only by Auto fill progress — manual taps do not move it.
  */
 @Composable
-private fun AutoKnockerView(pose: KnockerPose, active: Boolean, tapPower: Double = 1.0) {
+private fun AutoKnockerView(
+    pose: KnockerPose,
+    active: Boolean,
+    tapPower: Double = 1.0,
+    stage: MinerStage = MinerStage.Level1,
+) {
     Canvas(Modifier.requiredSize(400.dp, 300.dp)) {
-        drawTapper(pose = pose, tapPower = tapPower, active = active)
+        drawTapper(pose = pose, tapPower = tapPower, active = active, chrome = stage.tapperChrome)
     }
 }
 
-private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Boolean) {
+private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Boolean, chrome: TapperChrome) {
     val g = KnockerGeometry
     val u = 1.dp.toPx()
     val origin = Offset(size.width / 2f, size.height / 2f)
     val impact = if (active) pose.impact else 0f
     val hitScale = if (active) knockerImpactScale(tapPower) else 1f
-    val fade = if (active) 1f else 0.4f
+    val fade = 1f
+    val glow = tapperGlow(chrome)
+    val steel = tapperSteel(light = false, chrome)
+    val steelDark = Color(0xFF292C38)
+    val steelLight = tapperSteel(light = true, chrome)
 
     val angle = g.angle(pose.arm)
     // Contact shoves the whole mount back along the strike axis.
@@ -1537,11 +1578,29 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
     val plateTopLeft = mounted(g.PLATE_X, g.PLATE_Y)
     val plateSize = Size(g.PLATE_W * u, g.PLATE_H * u)
     drawRoundRect(
+        color = Color.Black.copy(alpha = 0.58f),
+        topLeft = Offset(plateTopLeft.x + 2.5f * u, plateTopLeft.y + 3.5f * u),
+        size = plateSize,
+        cornerRadius = CornerRadius(8f * u, 8f * u),
+    )
+    if (chrome.halo > 0.001f) {
+        val pad = (6f + 10f * chrome.halo) * u
+        drawRoundRect(
+            color = glow.copy(alpha = chrome.halo * 0.42f),
+            topLeft = Offset(plateTopLeft.x - pad, plateTopLeft.y - pad),
+            size = Size(plateSize.width + pad * 2f, plateSize.height + pad * 2f),
+            cornerRadius = CornerRadius(14f * u, 14f * u),
+        )
+    }
+    drawRoundRect(
+        color = Color.Black.copy(alpha = 0.78f),
+        topLeft = Offset(plateTopLeft.x - 2.5f * u, plateTopLeft.y - 2.5f * u),
+        size = Size(plateSize.width + 5f * u, plateSize.height + 5f * u),
+        cornerRadius = CornerRadius(10f * u, 10f * u),
+    )
+    drawRoundRect(
         brush = Brush.linearGradient(
-            colors = listOf(
-                BrandInk.copy(alpha = 0.21f * fade),
-                BrandInk.copy(alpha = 0.07f * fade),
-            ),
+            colors = listOf(steel, steelDark),
             start = plateTopLeft,
             end = Offset(plateTopLeft.x + plateSize.width, plateTopLeft.y + plateSize.height),
         ),
@@ -1550,14 +1609,15 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
         cornerRadius = CornerRadius(8f * u, 8f * u),
     )
     drawRoundRect(
-        color = BrandInk.copy(alpha = 0.22f * fade),
+        color = steelLight.copy(alpha = 0.85f * fade),
         topLeft = plateTopLeft,
         size = plateSize,
         cornerRadius = CornerRadius(8f * u, 8f * u),
-        style = Stroke(width = u),
+        style = Stroke(width = (if (chrome.goldTrim > 0.2f) 2f else 1.4f) * u),
     )
+    val innerTrim = if (chrome.goldTrim > 0.15f) glow else steelLight
     drawRoundRect(
-        color = BrandInk.copy(alpha = 0.10f * fade),
+        color = innerTrim.copy(alpha = 0.40f + chrome.goldTrim * 0.35f),
         topLeft = Offset(plateTopLeft.x + 5f * u, plateTopLeft.y + 5f * u),
         size = Size(plateSize.width - 10f * u, plateSize.height - 10f * u),
         cornerRadius = CornerRadius(5f * u, 5f * u),
@@ -1566,38 +1626,57 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
 
     // Gear window, then the drive train — one turn per tap, so the machine reads
     // as the thing swinging the arm.
+    val windowTop = mounted(g.WINDOW_X, g.WINDOW_Y)
+    val windowSize = Size(g.WINDOW_W * u, g.WINDOW_H * u)
     drawRoundRect(
-        color = Color.Black.copy(alpha = 0.35f * fade),
-        topLeft = mounted(g.WINDOW_X, g.WINDOW_Y),
-        size = Size(g.WINDOW_W * u, g.WINDOW_H * u),
+        color = Color.Black.copy(alpha = 0.78f * fade),
+        topLeft = windowTop,
+        size = windowSize,
         cornerRadius = CornerRadius(13f * u, 13f * u),
     )
+    if (chrome.halo > 0.2f) {
+        drawRoundRect(
+            color = glow.copy(alpha = 0.12f + chrome.halo * 0.18f),
+            topLeft = Offset(windowTop.x + 4f * u, windowTop.y + 4f * u),
+            size = Size(windowSize.width - 8f * u, windowSize.height - 8f * u),
+            cornerRadius = CornerRadius(10f * u, 10f * u),
+        )
+    }
     val turn = pose.phase * 2f * PI.toFloat()
+    val driveHub = if (chrome.goldTrim > 0.15f || chrome.tealMix > 0.2f) glow else steel
     drawGear(
         center = mounted(g.DRIVE_X, g.DRIVE_Y),
         radius = g.DRIVE_RADIUS * u,
         teeth = 9,
         rotation = turn,
-        color = BrandInk.copy(alpha = 0.34f * fade),
-        hub = BrandInk.copy(alpha = 0.5f * fade),
+        color = steelLight.copy(alpha = fade),
+        hub = driveHub.copy(alpha = fade),
     )
     drawGear(
         center = mounted(g.IDLER_X, g.IDLER_Y),
         radius = g.IDLER_RADIUS * u,
         teeth = 6,
         rotation = -turn * (g.DRIVE_RADIUS / g.IDLER_RADIUS) + PI.toFloat() / 6f,
-        color = BrandInk.copy(alpha = 0.28f * fade),
-        hub = BrandInk.copy(alpha = 0.44f * fade),
+        color = steel.copy(alpha = fade),
+        hub = steelLight.copy(alpha = 0.9f * fade),
     )
 
+    val boltFill = if (chrome.goldTrim > 0.15f) glow else steelLight
     for (boltX in listOf(g.PLATE_X + 9f, g.PLATE_X + g.PLATE_W - 9f)) {
         val bolt = mounted(boltX, g.PLATE_Y + g.PLATE_H - 9f)
-        drawCircle(BrandInk.copy(alpha = 0.26f * fade), radius = 3f * u, center = bolt)
-        drawCircle(BrandInk.copy(alpha = 0.5f * fade), radius = 1.2f * u, center = bolt)
+        drawCircle(boltFill.copy(alpha = 0.85f * fade), radius = 3f * u, center = bolt)
+        drawCircle(steelDark.copy(alpha = fade), radius = 1.2f * u, center = bolt)
+    }
+
+    if (chrome.lamp > 0.001f) {
+        val lamp = mounted(g.PLATE_X + g.PLATE_W / 2f, g.PLATE_Y + g.PLATE_H - 18f)
+        drawCircle(glow.copy(alpha = chrome.lamp * 0.45f), radius = 6f * u, center = lamp)
+        drawCircle(glow.copy(alpha = 0.55f + chrome.lamp * 0.45f), radius = 3.2f * u, center = lamp)
+        drawCircle(Color.White.copy(alpha = 0.75f * chrome.lamp), radius = 1.4f * u, center = lamp)
     }
 
     drawRoundRect(
-        color = BrandInk.copy(alpha = 0.30f * fade),
+        color = steel.copy(alpha = fade),
         topLeft = mounted(g.STOP_X, g.STOP_Y),
         size = Size(g.STOP_W * u, g.STOP_H * u),
         cornerRadius = CornerRadius(3f * u, 3f * u),
@@ -1606,44 +1685,34 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
     // Arm and head, drawn along +x from the pivot.
     val pivot = mounted(g.PIVOT_X, g.PIVOT_Y)
     val length = g.armLength * u
+    val edgeColor = if (chrome.goldTrim > 0.2f) glow else steelLight
     withTransform({
         translate(pivot.x, pivot.y)
         rotate(angle * 180f / PI.toFloat(), Offset.Zero)
     }) {
         val bar = Path().apply {
-            fillType = PathFillType.EvenOdd
             moveTo(-11f * u, -9f * u)
             lineTo(length - 8f * u, -5.5f * u)
             lineTo(length - 8f * u, 5.5f * u)
             lineTo(-11f * u, 9f * u)
             close()
-            for (at in listOf(length * 0.34f, length * 0.56f)) {
-                addOval(
-                    Rect(
-                        left = at - 3.2f * u,
-                        top = -3.2f * u,
-                        right = at + 3.2f * u,
-                        bottom = 3.2f * u,
-                    ),
-                )
-            }
         }
         drawPath(
             path = bar,
             brush = Brush.verticalGradient(
-                colors = listOf(
-                    BrandInk.copy(alpha = 0.58f * fade),
-                    BrandInk.copy(alpha = 0.22f * fade),
-                ),
+                colors = listOf(steelLight, steel),
                 startY = -9f * u,
                 endY = 9f * u,
             ),
         )
+        for (at in listOf(length * 0.34f, length * 0.56f)) {
+            drawCircle(steelDark, radius = 3.2f * u, center = Offset(at, 0f))
+        }
         drawLine(
-            color = BrandInk.copy(alpha = 0.72f * fade),
+            color = edgeColor.copy(alpha = fade),
             start = Offset(-8f * u, -7f * u),
             end = Offset(length - 8f * u, -4f * u),
-            strokeWidth = 1.5f * u,
+            strokeWidth = (if (chrome.goldTrim > 0.4f) 2.2f else 1.5f) * u,
         )
 
         withTransform({
@@ -1654,11 +1723,19 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
             val halfLength = g.HEAD_HALF_LENGTH * u
             val halfWidth = g.HEAD_HALF_WIDTH * u
             drawRoundRect(
-                color = BrandInk.copy(alpha = 0.45f * fade),
+                color = steel.copy(alpha = fade),
                 topLeft = Offset(-14f * u, -9f * u),
                 size = Size(8f * u, 18f * u),
                 cornerRadius = CornerRadius(2.5f * u, 2.5f * u),
             )
+            if (chrome.hammerBloom > 0.001f) {
+                drawRoundRect(
+                    color = glow.copy(alpha = chrome.hammerBloom * 0.42f),
+                    topLeft = Offset(-halfLength - 5f * u, -halfWidth - 5f * u),
+                    size = Size(halfLength * 2f + 10f * u, halfWidth * 2f + 10f * u),
+                    cornerRadius = CornerRadius(8f * u, 8f * u),
+                )
+            }
             drawRoundRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
@@ -1672,6 +1749,15 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
                 size = Size(halfLength * 2f, halfWidth * 2f),
                 cornerRadius = CornerRadius(5f * u, 5f * u),
             )
+            if (chrome.goldTrim > 0.2f) {
+                drawRoundRect(
+                    color = glow.copy(alpha = 0.35f + chrome.goldTrim * 0.5f),
+                    topLeft = Offset(-halfLength, -halfWidth),
+                    size = Size(halfLength * 2f, halfWidth * 2f),
+                    cornerRadius = CornerRadius(5f * u, 5f * u),
+                    style = Stroke(width = 1.4f * u),
+                )
+            }
             drawRoundRect(
                 color = Color.White.copy(alpha = (0.28f + 0.55f * impact) * fade),
                 topLeft = Offset(halfLength - 6f * u, -halfWidth + 3f * u),
@@ -1683,33 +1769,42 @@ private fun DrawScope.drawTapper(pose: KnockerPose, tapPower: Double, active: Bo
     }
 
     // Pivot boss on top of the arm root.
-    drawCircle(BrandInk.copy(alpha = 0.34f * fade), radius = 9f * u, center = pivot)
     drawCircle(
-        BrandInk.copy(alpha = 0.3f * fade),
+        brush = Brush.linearGradient(
+            colors = listOf(steelLight.copy(alpha = fade), steel.copy(alpha = fade)),
+            start = Offset(pivot.x - 9f * u, pivot.y - 9f * u),
+            end = Offset(pivot.x + 9f * u, pivot.y + 9f * u),
+        ),
+        radius = 9f * u,
+        center = pivot,
+    )
+    drawCircle(
+        (if (chrome.goldTrim > 0.2f) glow else steelLight).copy(alpha = 0.85f * fade),
         radius = 9f * u,
         center = pivot,
         style = Stroke(width = u),
     )
-    drawCircle(BrandInk.copy(alpha = 0.55f * fade), radius = 3.5f * u, center = pivot)
+    drawCircle(steelDark.copy(alpha = fade), radius = 3.5f * u, center = pivot)
 
     if (impact <= 0.01f) return
 
     // Contact flash on the rim — grows with Stronger (capped at power 10).
     val hit = Offset(origin.x + g.STRIKE_X * u, origin.y + g.STRIKE_Y * u)
     val strokeW = (1.5f + 0.5f * hitScale) * u
+    val flashColor = if (chrome.tealMix > 0.35f) glow else BrandAccent
     drawCircle(
-        color = BrandAccent.copy(alpha = 0.6f * impact),
+        color = flashColor.copy(alpha = 0.6f * impact),
         radius = (10f + 24f * (1f - impact)) * hitScale * u,
         center = hit,
         style = Stroke(width = strokeW),
     )
-    val sparkCount = 4 + (((hitScale - 1f) / 1.25f) * 4f).toInt() // 4…8
+    val sparkCount = 4 + chrome.extraSparks + (((hitScale - 1f) / 1.25f) * 4f).toInt()
     for (i in 0 until sparkCount) {
         val a = (45f + i * (360f / sparkCount)) * PI.toFloat() / 180f
         val near = (10f + 8f * (1f - impact)) * hitScale * u
         val far = near + (8f + 14f * (1f - impact)) * hitScale * u
         drawLine(
-            color = BrandAccent.copy(alpha = 0.85f * impact),
+            color = flashColor.copy(alpha = 0.85f * impact),
             start = Offset(hit.x + cos(a) * near, hit.y + sin(a) * near),
             end = Offset(hit.x + cos(a) * far, hit.y + sin(a) * far),
             strokeWidth = strokeW,

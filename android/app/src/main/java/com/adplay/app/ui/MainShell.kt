@@ -39,12 +39,14 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.adplay.app.PlayFrame
 import com.adplay.app.UiState
 import kotlinx.coroutines.delay
 
 @Composable
 fun MainShell(
     ui: UiState,
+    play: PlayFrame,
     onTap: () -> Unit,
     onActivate: () -> Unit,
     onLonger: () -> Unit,
@@ -233,6 +235,7 @@ fun MainShell(
                 when (tab) {
                     0 -> HomeScreen(
                         ui = ui,
+                        play = play,
                         onTap = onTap,
                         onActivate = onActivate,
                         onLonger = onLonger,

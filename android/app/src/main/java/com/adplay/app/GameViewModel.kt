@@ -8,6 +8,8 @@ import com.adplay.app.data.AdServiceFactory
 import com.adplay.app.data.AdServing
 import com.adplay.app.data.ApiClient
 import com.adplay.app.data.BoostType
+import com.adplay.app.data.ComboState
+import com.adplay.app.data.ComboTunables
 import com.adplay.app.data.DebugAdBypass
 import com.adplay.app.data.GameState
 import com.adplay.app.data.PlayerProgress
@@ -28,6 +30,18 @@ import java.time.Instant
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
+
+data class PlayFrame(
+    val satsBalance: Int = 0,
+    val progress: Double = 0.0,
+    val unitsPerSat: Int = 1000,
+    val fillRate: Double = 0.0,
+    val tapPower: Double = 1.0,
+    val autoFillActive: Boolean = false,
+    val autoFillUntil: String? = null,
+    val tapsRemaining: Int = 0,
+    val combo: ComboState = ComboState(),
+)
 
 data class UiState(
     val ready: Boolean = false,
@@ -88,6 +102,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
+    private val _play = MutableStateFlow(PlayFrame())
+    val play: StateFlow<PlayFrame> = _play.asStateFlow()
+    private var displayedState: GameState = GameState()
 
     init {
         GameReminderScheduler.ensureChannel(appContext)
@@ -166,7 +183,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
         unackedTaps += 1
         serverState = serverState.applyingManualTap(_ui.value.tunables)
-        _ui.update { it.copy(state = project(serverState, System.currentTimeMillis())) }
+        setDisplayedState(project(serverState, System.currentTimeMillis()))
         syncProgress()
         ensureTapFlush()
     }
@@ -177,7 +194,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         repeat(unackedTaps) { s = s.applyingManualTap(_ui.value.tunables) }
         // Keep the auto-fill clock; only progress / taps change.
         serverState = s
-        _ui.update { it.copy(state = project(s, System.currentTimeMillis())) }
+        setDisplayedState(project(s, System.currentTimeMillis()))
     }
 
     /** Finish uploading optimistic taps so the next getState includes them. */
@@ -207,7 +224,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     confirmedState = credit.state.takingLiveTapUnits(afterTap)
                     unackedTaps = (unackedTaps - 1).coerceAtLeast(0)
                     windowEndHandled = false
-                    _ui.update { it.copy(state = project(serverState, nowMs)) }
+                    setDisplayedState(project(serverState, nowMs))
                     applyProgress(credit.progress)
                     ensureTicker()
                 } catch (_: Exception) {
@@ -230,7 +247,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(watchingAd = true, error = null) }
             try {
                 val service = ads ?: throw IllegalStateException("Ad service not ready")
-                val from = _ui.value.state
+                val from = displayedState
                 val credit = service.showBoostAd(boost)
                 val to = credit.state
                 adsWatchedToday += 1
@@ -330,7 +347,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 skipAdRegenSecondsLeft = skipRegenLeft.roundToInt(),
                 nextSkipAdChargeAt = nextSkipCharge,
             )
-            _ui.update { it.copy(state = display) }
+            setDisplayedState(display)
             if (u >= 1.0) break
             delay(16)
         }
@@ -338,7 +355,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         skipAnimating = false
         anchorMs = System.currentTimeMillis()
         windowEndHandled = false
-        _ui.update { it.copy(state = project(to, System.currentTimeMillis())) }
+        setDisplayedState(project(to, System.currentTimeMillis()), forceChrome = true)
         ensureTicker()
     }
 
@@ -444,7 +461,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         settings.remindersEnabled = enabled
         _ui.update { it.copy(remindersEnabled = enabled) }
         if (enabled) {
-            GameReminderScheduler.sync(appContext, _ui.value.state)
+            GameReminderScheduler.sync(appContext, displayedState)
         } else {
             GameReminderScheduler.clearAll(appContext)
         }
@@ -463,6 +480,46 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshActivity() {
         viewModelScope.launch { runCatching { refresh(force = true) } }
     }
+
+    private fun setDisplayedState(projected: GameState, forceChrome: Boolean = false) {
+        displayedState = projected
+        val tunables = _ui.value.tunables
+        val nextPlay = PlayFrame(
+            satsBalance = projected.satsBalance,
+            progress = projected.progress,
+            unitsPerSat = projected.unitsPerSat.coerceAtLeast(1),
+            fillRate = projected.fillRate,
+            tapPower = projected.tapPower,
+            autoFillActive = projected.autoFillActive,
+            autoFillUntil = projected.autoFillUntil,
+            tapsRemaining = projected.tapsRemaining,
+            combo = projected.combo(ComboTunables.from(tunables)),
+        )
+        if (_play.value != nextPlay) {
+            _play.value = nextPlay
+        }
+        if (forceChrome || !sameChrome(_ui.value.state, projected)) {
+            _ui.update { it.copy(state = projected) }
+        }
+    }
+
+    private fun sameChrome(a: GameState, b: GameState): Boolean =
+        a.adsRemainingToday == b.adsRemainingToday &&
+            a.adCooldownSecondsLeft == b.adCooldownSecondsLeft &&
+            a.adRegenSecondsLeft == b.adRegenSecondsLeft &&
+            a.skipAdsRemaining == b.skipAdsRemaining &&
+            a.skipAdRegenSecondsLeft == b.skipAdRegenSecondsLeft &&
+            a.autoFillActive == b.autoFillActive &&
+            a.satsBalance == b.satsBalance &&
+            a.durationBoostActive == b.durationBoostActive &&
+            a.speedBoostActive == b.speedBoostActive &&
+            a.tapStrengthActive == b.tapStrengthActive &&
+            a.durationBoostCount == b.durationBoostCount &&
+            a.speedBoostCount == b.speedBoostCount &&
+            a.tapStrengthBoostCount == b.tapStrengthBoostCount &&
+            a.fillRate == b.fillRate &&
+            a.tapPower == b.tapPower &&
+            a.lastBoostType == b.lastBoostType
 
     /**
      * Apply an authoritative server snapshot: it always wins over any locally
@@ -483,10 +540,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             return // stale response lost a race with a newer tap/boost
         }
         if (incoming != null) lastUpdatedAt = incoming
-        val preserveLiveTaps = keepCombo && comboRecentlyTapped(_ui.value.state)
+        val preserveLiveTaps = keepCombo && comboRecentlyTapped(displayedState)
         val adopted = if (preserveLiveTaps) {
             if (discardOptimisticTaps) {
-                state.keepingComboFrom(_ui.value.state)
+                state.keepingComboFrom(displayedState)
             } else {
                 // getState: keep Stronger × combo tap units; auto stays on the local clock.
                 state.takingLiveTapUnits(confirmedState)
@@ -504,7 +561,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             anchorMs = System.currentTimeMillis()
             windowEndHandled = false
             val projected = project(adopted, anchorMs)
-            _ui.update { it.copy(state = projected) }
+            setDisplayedState(projected, forceChrome = true)
             GameReminderScheduler.sync(appContext, projected)
         } else {
             confirmedState = adopted
@@ -513,7 +570,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             }
             windowEndHandled = false
             publishOptimisticTaps()
-            GameReminderScheduler.sync(appContext, _ui.value.state)
+            GameReminderScheduler.sync(appContext, displayedState)
         }
         ensureTicker()
     }
@@ -548,7 +605,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { ui ->
             val incoming = ui.progress.takingServer(server)
             val next = incoming.syncedWith(
-                state = ui.state,
+                state = displayedState,
                 tunables = ui.tunables,
                 adsWatched = adsWatchedToday,
             )
@@ -560,22 +617,27 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 server != null -> incoming.adBank.max
                 else -> ui.progress.adBank.max
             }
-            val oldRemaining = ui.state.adsRemainingToday
+            val oldRemaining = displayedState.adsRemainingToday
             val gained = (next.adBank.max - grantAbove).coerceAtLeast(0)
-            val state = if (gained > 0 && ui.state.adsRemainingToday <= oldRemaining) {
-                grantCharges(ui.state, gained, next.adBank.max)
-            } else {
-                ui.state
-            }
-            if (gained > 0 && state !== ui.state) {
+            if (gained > 0 && displayedState.adsRemainingToday <= oldRemaining) {
+                val bumped = grantCharges(displayedState, gained, next.adBank.max)
                 serverState = grantCharges(serverState, gained, next.adBank.max)
                 confirmedState = grantCharges(confirmedState, gained, next.adBank.max)
+                setDisplayedState(bumped, forceChrome = true)
             }
-            ui.copy(
-                state = state,
-                progress = next,
-                unseenDailyGoalCount = settings.unseenCompletedGoalCount(next.displayedDailyGoals),
-            )
+            val progressChrome = ui.progress.lifetimeSatsEarned != next.lifetimeSatsEarned ||
+                ui.progress.adBank != next.adBank ||
+                ui.progress.achievements != next.achievements ||
+                ui.progress.loginStreak != next.loginStreak ||
+                ui.progress.dailyGoals.map { it.id to it.completed } != next.dailyGoals.map { it.id to it.completed }
+            if (server != null || progressChrome) {
+                ui.copy(
+                    progress = next,
+                    unseenDailyGoalCount = settings.unseenCompletedGoalCount(next.displayedDailyGoals),
+                )
+            } else {
+                ui
+            }
         }
     }
 
@@ -606,7 +668,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive && foreground && !skipAnimating) {
                 val now = System.currentTimeMillis()
                 val projected = project(serverState, now)
-                _ui.update { it.copy(state = projected) }
+                setDisplayedState(projected)
 
                 if (serverState.autoFillActive && !windowEndHandled) {
                     val untilMs = parseMs(serverState.autoFillUntil)
@@ -616,7 +678,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                val shown = _ui.value.state
+                val shown = displayedState
                 val adsMax = adsHoldMax(shown)
                 val waitingRegen = shown.adRegenSecondsLeft > 0 && shown.adsRemainingToday < adsMax
                 if (!shown.autoFillActive && shown.adCooldownSecondsLeft <= 0 && !waitingRegen) break

@@ -38,7 +38,11 @@ fun SettingsScreen(
 ) {
     val ctx = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
-    CenteredFitPage(Modifier.statusBarsPadding().navigationBarsPadding()) {
+    CenteredFitPage(
+        Modifier.statusBarsPadding().navigationBarsPadding(),
+        lifetimeSats = ui.progress.lifetimeSatsEarned,
+        tunables = ui.tunables,
+    ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

@@ -7,82 +7,39 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSettings = false
     @State private var showAchievements = false
-    @State private var barFlash = false
-    @State private var satEarnPrimed = false
 
     var body: some View {
+        let _ = session.chromeNonce
         let state = session.state
         let look = ThemeLook.named(settings.selectedLookId)
+        let stage = MinerStage.from(lifetimeSats: session.progress.lifetimeSats, tunables: session.tunables)
 
         ZStack {
             AtmosphereBackground(look: look)
 
             GeometryReader { geo in
-                let filled = VStack(spacing: 0) {
-                    headerBar
-                    earlyAccessHint
-                    GeometryReader { mid in
-                        let wheel = min(
-                            mid.size.width * 0.48,
-                            max(CGFloat(160), mid.size.height - 168)
+                let wheel = min(
+                    geo.size.width * 0.48,
+                    max(CGFloat(160), geo.size.height - 420)
+                )
+                ScrollView {
+                    VStack(spacing: 0) {
+                        headerBar
+                        SatEarnStage(
+                            look: look,
+                            stage: stage,
+                            wheelSize: wheel,
+                            onTap: { session.tap() }
                         )
-                        VStack(spacing: 0) {
-                            SatEarnStage(
-                                satsBalance: state.satsBalance,
-                                progress: state.progress,
-                                total: state.unitsPerSat,
-                                fillRate: state.fillRate,
-                                tapPower: state.effectiveTapPower,
-                                autoActive: state.autoFillActive,
-                                autoFillUntil: state.autoFillUntil,
-                                wheelFlash: barFlash,
-                                wheelSize: wheel
-                            )
-                            .padding(.top, 12)
-                            tapHint(state: state)
-                        }
-                        .frame(width: mid.size.width, height: mid.size.height, alignment: .top)
+                        .environmentObject(session.play)
+                        .padding(.top, 12)
+                        boostsColumn(state: state)
                     }
-                    boostsColumn(state: state)
+                    .frame(width: geo.size.width)
+                    .frame(minHeight: geo.size.height, alignment: .top)
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
-
-                ViewThatFits(in: .vertical) {
-                    filled
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            headerBar
-                            earlyAccessHint
-                            SatEarnStage(
-                                satsBalance: state.satsBalance,
-                                progress: state.progress,
-                                total: state.unitsPerSat,
-                                fillRate: state.fillRate,
-                                tapPower: state.effectiveTapPower,
-                                autoActive: state.autoFillActive,
-                                autoFillUntil: state.autoFillUntil,
-                                wheelFlash: barFlash,
-                                wheelSize: min(CGFloat(240), geo.size.width * 0.50)
-                            )
-                            .padding(.top, 20)
-                            tapHint(state: state)
-                            boostsColumn(state: state)
-                        }
-                        .frame(width: geo.size.width)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-        }
-        .onChange(of: session.state.satsBalance) { oldValue, newValue in
-            guard session.isReady else { return }
-            if !satEarnPrimed {
-                satEarnPrimed = true
-                return
-            }
-            let gained = newValue - oldValue
-            guard gained > 0 else { return }
-            flashWheelForSatEarn(gained: gained)
         }
         .sheet(isPresented: $showAchievements) {
             AchievementsView()
@@ -96,39 +53,17 @@ struct HomeView: View {
         }
     }
 
-    private func tapHint(state: GameState) -> some View {
-        Text(
-            state.tapsRemaining > 0
-                ? "Tap the wheel · \(state.tapsRemaining) taps left today"
-                : "0 taps left today"
-        )
-        .font(.system(size: 14, weight: .medium, design: .rounded))
-        .foregroundStyle(Color("BrandMuted"))
-        .padding(.top, 14)
-    }
-
-    private var earlyAccessHint: some View {
-        Text(
-            "Early access — Lightning payouts are real. Earn rates stay modest while we roll out; " +
-                "they can improve as more players join and ad revenue grows."
-        )
-        .font(.system(size: 12, weight: .regular, design: .rounded))
-        .foregroundStyle(Color("BrandMuted"))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 24)
-        .padding(.top, 10)
-    }
-
     private var headerBar: some View {
         let look = ThemeLook.named(settings.selectedLookId)
         let lifetimeSats = session.progress.lifetimeSats
-        let stageTitle = MinerStage.from(lifetimeSats: lifetimeSats).title
-        return HStack(alignment: .center) {
+        let stage = MinerStage.from(lifetimeSats: lifetimeSats, tunables: session.tunables)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AdPlay")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(Color("BrandInk"))
-                Text(stageTitle)
+                Text("Level \(stage.level) · \(stage.title)")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(look.accent)
             }
@@ -169,6 +104,8 @@ struct HomeView: View {
                     .overlay(Circle().stroke(Color("BrandInk").opacity(0.25), lineWidth: 1))
             }
             .accessibilityLabel("Settings")
+            }
+            MinerLevelBar(lifetimeSats: lifetimeSats, thresholds: MinerStage.thresholds(from: session.tunables), accent: look.accent)
         }
         .padding(.horizontal, 24)
         .padding(.top, 12)
@@ -306,22 +243,6 @@ struct HomeView: View {
     /// Faster / Stronger unlock once Auto Tapper is running.
     private var canWatchSecondary: Bool {
         canWatch && session.state.autoFillActive
-    }
-
-    private func flashWheelForSatEarn(gained: Int) {
-        let bursts = min(max(gained, 1), 4)
-        for i in 0..<bursts {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    barFlash = true
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    withAnimation(.easeOut(duration: 0.45)) {
-                        barFlash = false
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -463,46 +384,6 @@ func formatBtcAmount(satsBalance: Int, barProgress: Double, unitsPerSat: Int) ->
     formatBtcQuanta(btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: unitsPerSat))
 }
 
-/// Upward odometer ticks for place 10^power (carries spin lower wheels a full turn).
-private func odometerSteps(from: Int64, to: Int64, power: Int, toDigit: Int) -> Int {
-    var place: Int64 = 1
-    if power > 0 {
-        for _ in 0..<power { place *= 10 }
-    }
-    if to >= from {
-        let raw = to / place - from / place
-        return Int(min(max(raw, 0), 40))
-    }
-    let fromDigit = Int((from / place) % 10)
-    return (toDigit - fromDigit + 10) % 10
-}
-
-private struct BtcGlyph: Identifiable {
-    let id: String
-    let digit: Int?
-    let steps: Int
-    let literal: String?
-}
-
-private func btcGlyphs(from: Int64, to: Int64) -> [BtcGlyph] {
-    let text = formatBtcQuanta(to)
-    let digitCount = text.filter(\.isNumber).count
-    var power = digitCount - 1
-    return text.map { ch in
-        if ch.isWholeNumber, let d = ch.wholeNumberValue {
-            let p = power
-            power -= 1
-            return BtcGlyph(
-                id: "p\(p)",
-                digit: d,
-                steps: odometerSteps(from: from, to: to, power: p, toDigit: d),
-                literal: nil
-            )
-        }
-        return BtcGlyph(id: "lit-\(ch)", digit: nil, steps: 0, literal: String(ch))
-    }
-}
-
 // MARK: - Sat earn celebration
 
 struct SatParticle: Identifiable {
@@ -513,20 +394,17 @@ struct SatParticle: Identifiable {
 
 /// BTC balance + centered sat wheel + overlapping auto knocker.
 struct SatEarnStage: View {
-    @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var play: PlayDisplay
     @EnvironmentObject private var settings: PlayerSettings
     @EnvironmentObject private var satEarn: SatEarnFlight
 
-    let satsBalance: Int
-    let progress: Double
-    let total: Int
-    let fillRate: Double
-    let tapPower: Double
-    let autoActive: Bool
-    let autoFillUntil: String?
-    var wheelFlash: Bool = false
+    let look: ThemeLook
+    let stage: MinerStage
     var wheelSize: CGFloat = 220
+    var onTap: () -> Void
 
+    @State private var wheelFlash = false
+    @State private var satEarnPrimed = false
     @State private var anchorProgress: Double = 0
     @State private var anchorDate: Date = .now
     /// Auto-only clock for the knocker — ignores manual tap progress jumps.
@@ -534,12 +412,21 @@ struct SatEarnStage: View {
     @State private var knockerAnchorDate: Date = .now
     @State private var heldVisual: Double = 0
 
+    private var frame: PlayFrame { play.frame }
+    private var satsBalance: Int { frame.satsBalance }
+    private var progress: Double { frame.progress }
+    private var total: Int { frame.unitsPerSat }
+    private var fillRate: Double { frame.fillRate }
+    private var tapPower: Double { frame.tapPower }
+    private var autoActive: Bool { frame.autoFillActive }
+    private var autoFillUntil: String? { frame.autoFillUntil }
+
     var body: some View {
         VStack(spacing: 0) {
             TimelineView(.periodic(from: .now, by: autoActive && fillRate > 0 ? 1.0 / 60.0 : 1.0 / 12.0)) { context in
                 satEarnTimeline(at: context.date)
             }
-            .onChange(of: progress) { oldValue, newValue in
+            .onChange(of: play.frame.progress) { oldValue, newValue in
                 // Raise the tap floor. Knocker stays auto-only unless the bar wrapped.
                 anchorProgress = newValue
                 anchorDate = .now
@@ -549,7 +436,7 @@ struct SatEarnStage: View {
                     heldVisual = newValue
                 }
             }
-            .onChange(of: fillRate) { oldRate, _ in
+            .onChange(of: play.frame.fillRate) { oldRate, _ in
                 let now = Date()
                 let knockerNow = knockerAnchorProgress + oldRate * now.timeIntervalSince(knockerAnchorDate)
                 knockerAnchorProgress = knockerNow
@@ -558,24 +445,32 @@ struct SatEarnStage: View {
                 anchorProgress = contNow
                 anchorDate = now
             }
-            .onChange(of: tapPower) { _, _ in
-                // Keep current auto units so phase stays put; period changes with power.
+            .onChange(of: play.frame.tapPower) { _, _ in
                 let now = Date()
                 let knockerNow = knockerAnchorProgress + fillRate * now.timeIntervalSince(knockerAnchorDate)
                 knockerAnchorProgress = knockerNow
                 knockerAnchorDate = now
             }
-            .onChange(of: autoActive) { _, active in
+            .onChange(of: play.frame.autoFillActive) { _, active in
                 if active {
                     let currentProgress = progress
                     let now = Date.now
                     knockerAnchorProgress = currentProgress
                     knockerAnchorDate = now
-                    let visual = currentProgress
-                    heldVisual = visual
+                    heldVisual = currentProgress
                 }
             }
+            .onChange(of: play.frame.satsBalance) { oldValue, newValue in
+                if !satEarnPrimed {
+                    satEarnPrimed = true
+                    return
+                }
+                let gained = newValue - oldValue
+                guard gained > 0 else { return }
+                flashWheelForSatEarn(gained: gained)
+            }
             .onAppear {
+                WheelHaptics.arm()
                 let currentProgress = progress
                 let now = Date.now
                 anchorProgress = currentProgress
@@ -585,19 +480,54 @@ struct SatEarnStage: View {
                 heldVisual = currentProgress
             }
 
-            BarRateStatusView(
-                autoActive: autoActive,
-                fillRate: fillRate,
-                tapPower: tapPower
-            )
-            .frame(maxWidth: .infinity)
-            .padding(.top, 12)
-            .padding(.horizontal, 20)
+            tapHint
         }
     }
 
+    private var tapHint: some View {
+        Text(
+            frame.tapsRemaining > 0
+                ? "Tap the wheel · \(frame.tapsRemaining) taps left today"
+                : "0 taps left today"
+        )
+        .font(.system(size: 14, weight: .medium, design: .rounded))
+        .foregroundStyle(Color("BrandMuted"))
+        .padding(.top, 14)
+    }
+
+    private func flashWheelForSatEarn(gained: Int) {
+        let bursts = min(max(gained, 1), 4)
+        for i in 0..<bursts {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    wheelFlash = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    withAnimation(.easeOut(duration: 0.45)) {
+                        wheelFlash = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleTap() {
+        if settings.hapticsEnabled {
+            let comboT = ComboTunables.from(play.tunables)
+            let raw = play.frame.combo
+            let now = Date()
+            let live: ComboState
+            if let last = raw.lastTapAt, now.timeIntervalSince(last) < 0.2 {
+                live = raw
+            } else {
+                live = ComboEngine.at(raw, now: now, tunables: comboT)
+            }
+            WheelHaptics.impact(leveled: ComboEngine.wouldCompleteOuter(live, tunables: comboT))
+        }
+        onTap()
+    }
+
     private func satEarnTimeline(at now: Date) -> some View {
-        let look = ThemeLook.named(settings.selectedLookId)
         let continuous = displayedBarProgress(
             progress: progress,
             total: total,
@@ -622,8 +552,8 @@ struct SatEarnStage: View {
         )
         let display = holdMonotonicProgress(heldVisual, raw: rawDisplay)
         let fraction = total > 0 ? min(1.0, display / Double(total)) : 0.0
-        let comboT = ComboTunables.from(session.tunables)
-        let rawCombo = session.state.combo(tunables: comboT)
+        let comboT = ComboTunables.from(play.tunables)
+        let rawCombo = play.frame.combo
         let comboLive: ComboState
         if let last = rawCombo.lastTapAt, now.timeIntervalSince(last) < 0.2 {
             comboLive = rawCombo
@@ -632,7 +562,6 @@ struct SatEarnStage: View {
         }
         let comboMeters = ComboEngine.displayMeters(comboLive, tunables: comboT).map { ($0 * 200).rounded() / 200 }
         let comboTracks = ComboEngine.displayTracks(comboLive, tunables: comboT)
-        // Half-tap bins: every live tap moves ticks; drain does not outrun the existing meter skip.
         let comboSpins = ComboEngine.displaySpins(
             ComboState(taps: (comboLive.taps * 2).rounded() / 2, lastTapAt: comboLive.lastTapAt),
             tunables: comboT
@@ -670,21 +599,18 @@ struct SatEarnStage: View {
                         comboTracks: comboTracks,
                         comboSpins: comboSpins,
                         comboMultiplier: comboMult,
-                        look: look
+                        look: look,
+                        stage: stage
                     )
                     .equatable()
                     .frame(width: wheelSize, height: wheelSize)
-                    .contentShape(Circle())
-                    .onTapGesture {
-                        if settings.hapticsEnabled {
-                            let leveled = ComboEngine.wouldCompleteOuter(comboLive, tunables: comboT)
-                            WheelHaptics.impact(leveled: leveled)
-                        }
-                        Task { await session.tap() }
-                    }
                     .background(wheelTipReporter)
                     .overlay {
-                        AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive)
+                        InstantTapOverlay(enabled: frame.tapsRemaining > 0, onTap: handleTap)
+                            .id("sat-wheel-tap")
+                    }
+                    .overlay {
+                        AutoKnockerView(pose: pose, tapPower: tapPower, active: autoActive, stage: stage)
                             .equatable()
                             .scaleEffect(wheelSize / 220)
                             .frame(width: 400 * wheelSize / 220, height: 300 * wheelSize / 220)
@@ -707,6 +633,15 @@ struct SatEarnStage: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color("BrandInk"))
                     .monospacedDigit()
+
+                BarRateStatusView(
+                    autoActive: autoActive,
+                    fillRate: fillRate,
+                    tapPower: tapPower,
+                    comboMultiplier: comboMult,
+                    comboColor: look.combo
+                )
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
@@ -847,6 +782,7 @@ struct AutoKnockerView: View, Equatable {
     let pose: KnockerPose
     var tapPower: Double = 1
     var active: Bool = true
+    var stage: MinerStage = .level1
 
     var body: some View {
         Canvas { context, size in
@@ -855,7 +791,8 @@ struct AutoKnockerView: View, Equatable {
                 origin: CGPoint(x: size.width / 2, y: size.height / 2),
                 pose: pose,
                 tapPower: tapPower,
-                active: active
+                active: active,
+                chrome: stage.tapperChrome
             )
         }
         .frame(width: 400, height: 300)
@@ -863,19 +800,44 @@ struct AutoKnockerView: View, Equatable {
     }
 }
 
+private func tapperSteel(light: Bool, chrome: TapperChrome) -> Color {
+    let base: (Double, Double, Double) = light ? (0.86, 0.88, 0.93) : (0.42, 0.45, 0.52)
+    let gold = (0.95, 0.78, 0.28)
+    let teal = (0.20, 0.92, 0.85)
+    let g = chrome.goldTrim * 0.55
+    let t = chrome.tealMix * 0.45
+    let p = chrome.polish * 0.16
+    let remain = max(0, 1 - g - t)
+    return Color(
+        red: min(1, base.0 * remain + gold.0 * g + teal.0 * t + p),
+        green: min(1, base.1 * remain + gold.1 * g + teal.1 * t + p),
+        blue: min(1, base.2 * remain + gold.2 * g + teal.2 * t + p * 0.55)
+    )
+}
+
+private func tapperGlowColor(_ chrome: TapperChrome) -> Color {
+    if chrome.tealMix > 0.35 { return Color(red: 0.20, green: 0.92, blue: 0.85) }
+    if chrome.goldTrim > 0.25 { return Color(red: 0.95, green: 0.78, blue: 0.28) }
+    return Color("BrandAccent")
+}
+
 private func drawTapper(
     into ctx: inout GraphicsContext,
     origin: CGPoint,
     pose: KnockerPose,
     tapPower: Double,
-    active: Bool
+    active: Bool,
+    chrome: TapperChrome
 ) {
-    let ink = Color("BrandInk")
     let accent = Color("BrandAccent")
     let accentHot = Color("BrandAccentHot")
+    let glow = tapperGlowColor(chrome)
+    let steel = tapperSteel(light: false, chrome: chrome)
+    let steelDark = Color(red: 0.16, green: 0.17, blue: 0.22)
+    let steelLight = tapperSteel(light: true, chrome: chrome)
     let impact = active ? pose.impact : 0
     let hitScale = active ? knockerImpactScale(tapPower: tapPower) : 1
-    let fade = active ? 1.0 : 0.4
+    let fade: CGFloat = 1.0
 
     let angle = KnockerGeometry.angle(arm: pose.arm)
     // Contact shoves the whole mount back along the strike axis.
@@ -891,17 +853,32 @@ private func drawTapper(
     let plate = KnockerGeometry.plate.offsetBy(dx: origin.x + kick.x, dy: origin.y + kick.y)
     let platePath = Path(roundedRect: plate, cornerRadius: 8, style: .continuous)
     ctx.fill(
+        Path(roundedRect: plate.offsetBy(dx: 2.5, dy: 3.5), cornerRadius: 8, style: .continuous),
+        with: .color(.black.opacity(0.58))
+    )
+    if chrome.halo > 0.001 {
+        let pad = 6 + 10 * chrome.halo
+        ctx.fill(
+            Path(roundedRect: plate.insetBy(dx: -pad, dy: -pad), cornerRadius: 14, style: .continuous),
+            with: .color(glow.opacity(chrome.halo * 0.42))
+        )
+    }
+    ctx.fill(
+        Path(roundedRect: plate.insetBy(dx: -2.5, dy: -2.5), cornerRadius: 10, style: .continuous),
+        with: .color(.black.opacity(0.78))
+    )
+    ctx.fill(
         platePath,
         with: .linearGradient(
-            Gradient(colors: [ink.opacity(0.21 * fade), ink.opacity(0.07 * fade)]),
+            Gradient(colors: [steel, steelDark]),
             startPoint: CGPoint(x: plate.minX, y: plate.minY),
             endPoint: CGPoint(x: plate.maxX, y: plate.maxY)
         )
     )
-    ctx.stroke(platePath, with: .color(ink.opacity(0.22 * fade)), lineWidth: 1)
+    ctx.stroke(platePath, with: .color(steelLight.opacity(0.85 * fade)), lineWidth: chrome.goldTrim > 0.2 ? 2.0 : 1.4)
     ctx.stroke(
         Path(roundedRect: plate.insetBy(dx: 5, dy: 5), cornerRadius: 5, style: .continuous),
-        with: .color(ink.opacity(0.10 * fade)),
+        with: .color((chrome.goldTrim > 0.15 ? glow : steelLight).opacity(0.40 + chrome.goldTrim * 0.35)),
         lineWidth: 1
     )
 
@@ -910,8 +887,14 @@ private func drawTapper(
     let window = KnockerGeometry.gearWindow.offsetBy(dx: origin.x + kick.x, dy: origin.y + kick.y)
     ctx.fill(
         Path(roundedRect: window, cornerRadius: 13, style: .continuous),
-        with: .color(.black.opacity(0.35 * fade))
+        with: .color(.black.opacity(0.78 * fade))
     )
+    if chrome.halo > 0.2 {
+        ctx.fill(
+            Path(roundedRect: window.insetBy(dx: 4, dy: 4), cornerRadius: 10, style: .continuous),
+            with: .color(glow.opacity(0.12 + chrome.halo * 0.18))
+        )
+    }
     let turn = pose.phase * 2 * .pi
     drawGear(
         into: &ctx,
@@ -919,8 +902,8 @@ private func drawTapper(
         radius: KnockerGeometry.driveRadius,
         teeth: 9,
         rotation: turn,
-        color: ink.opacity(0.34 * fade),
-        hub: ink.opacity(0.5 * fade)
+        color: steelLight.opacity(fade),
+        hub: (chrome.goldTrim > 0.15 || chrome.tealMix > 0.2 ? glow : steel).opacity(fade)
     )
     drawGear(
         into: &ctx,
@@ -928,8 +911,8 @@ private func drawTapper(
         radius: KnockerGeometry.idlerRadius,
         teeth: 6,
         rotation: -turn * (KnockerGeometry.driveRadius / KnockerGeometry.idlerRadius) + .pi / 6,
-        color: ink.opacity(0.28 * fade),
-        hub: ink.opacity(0.44 * fade)
+        color: steel.opacity(fade),
+        hub: steelLight.opacity(0.9 * fade)
     )
 
     for bolt in [
@@ -938,11 +921,27 @@ private func drawTapper(
     ] {
         ctx.fill(
             Path(ellipseIn: CGRect(x: bolt.x - 3, y: bolt.y - 3, width: 6, height: 6)),
-            with: .color(ink.opacity(0.26 * fade))
+            with: .color((chrome.goldTrim > 0.15 ? glow : steelLight).opacity(0.85 * fade))
         )
         ctx.fill(
             Path(ellipseIn: CGRect(x: bolt.x - 1.2, y: bolt.y - 1.2, width: 2.4, height: 2.4)),
-            with: .color(ink.opacity(0.5 * fade))
+            with: .color(steelDark.opacity(fade))
+        )
+    }
+
+    if chrome.lamp > 0.001 {
+        let lamp = CGPoint(x: plate.midX, y: plate.maxY - 18)
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: lamp.x - 6, y: lamp.y - 6, width: 12, height: 12)),
+            with: .color(glow.opacity(chrome.lamp * 0.45))
+        )
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: lamp.x - 3.2, y: lamp.y - 3.2, width: 6.4, height: 6.4)),
+            with: .color(glow.opacity(0.55 + chrome.lamp * 0.45))
+        )
+        ctx.fill(
+            Path(ellipseIn: CGRect(x: lamp.x - 1.4, y: lamp.y - 1.4, width: 2.8, height: 2.8)),
+            with: .color(.white.opacity(0.75 * chrome.lamp))
         )
     }
 
@@ -952,7 +951,7 @@ private func drawTapper(
             cornerRadius: 3,
             style: .continuous
         ),
-        with: .color(ink.opacity(0.30 * fade))
+        with: .color(steel.opacity(fade))
     )
 
     // Arm and head, drawn along +x from the pivot.
@@ -968,22 +967,24 @@ private func drawTapper(
         bar.addLine(to: CGPoint(x: length - 8, y: 5.5))
         bar.addLine(to: CGPoint(x: -11, y: 9))
         bar.closeSubpath()
-        for hole in [length * 0.34, length * 0.56] {
-            bar.addEllipse(in: CGRect(x: hole - 3.2, y: -3.2, width: 6.4, height: 6.4))
-        }
         arm.fill(
             bar,
             with: .linearGradient(
-                Gradient(colors: [ink.opacity(0.58 * fade), ink.opacity(0.22 * fade)]),
+                Gradient(colors: [steelLight, steel]),
                 startPoint: CGPoint(x: 0, y: -9),
                 endPoint: CGPoint(x: 0, y: 9)
-            ),
-            style: FillStyle(eoFill: true)
+            )
         )
+        for hole in [length * 0.34, length * 0.56] {
+            arm.fill(
+                Path(ellipseIn: CGRect(x: hole - 3.2, y: -3.2, width: 6.4, height: 6.4)),
+                with: .color(steelDark)
+            )
+        }
         var edge = Path()
         edge.move(to: CGPoint(x: -8, y: -7))
         edge.addLine(to: CGPoint(x: length - 8, y: -4))
-        arm.stroke(edge, with: .color(ink.opacity(0.72 * fade)), lineWidth: 1.5)
+        arm.stroke(edge, with: .color((chrome.goldTrim > 0.2 ? glow : steelLight).opacity(fade)), lineWidth: chrome.goldTrim > 0.4 ? 2.2 : 1.5)
 
         arm.drawLayer { head in
             head.translateBy(x: length, y: 0)
@@ -992,7 +993,7 @@ private func drawTapper(
 
             head.fill(
                 Path(roundedRect: CGRect(x: -14, y: -9, width: 8, height: 18), cornerRadius: 2.5, style: .continuous),
-                with: .color(ink.opacity(0.45 * fade))
+                with: .color(steel.opacity(fade))
             )
             let box = CGRect(
                 x: -KnockerGeometry.headHalfLength,
@@ -1000,6 +1001,12 @@ private func drawTapper(
                 width: KnockerGeometry.headHalfLength * 2,
                 height: KnockerGeometry.headHalfWidth * 2
             )
+            if chrome.hammerBloom > 0.001 {
+                head.fill(
+                    Path(roundedRect: box.insetBy(dx: -5, dy: -5), cornerRadius: 8, style: .continuous),
+                    with: .color(glow.opacity(chrome.hammerBloom * 0.42))
+                )
+            }
             head.fill(
                 Path(roundedRect: box, cornerRadius: 5, style: .continuous),
                 with: .linearGradient(
@@ -1008,6 +1015,13 @@ private func drawTapper(
                     endPoint: CGPoint(x: 0, y: box.maxY)
                 )
             )
+            if chrome.goldTrim > 0.2 {
+                head.stroke(
+                    Path(roundedRect: box, cornerRadius: 5, style: .continuous),
+                    with: .color(glow.opacity(0.35 + chrome.goldTrim * 0.5)),
+                    lineWidth: 1.4
+                )
+            }
             head.fill(
                 Path(
                     roundedRect: CGRect(x: box.maxX - 6, y: box.minY + 3, width: 6, height: box.height - 6),
@@ -1028,15 +1042,15 @@ private func drawTapper(
     ctx.fill(
         Path(ellipseIn: boss),
         with: .linearGradient(
-            Gradient(colors: [ink.opacity(0.42 * fade), ink.opacity(0.18 * fade)]),
+            Gradient(colors: [steelLight.opacity(fade), steel.opacity(fade)]),
             startPoint: CGPoint(x: boss.minX, y: boss.minY),
             endPoint: CGPoint(x: boss.maxX, y: boss.maxY)
         )
     )
-    ctx.stroke(Path(ellipseIn: boss), with: .color(ink.opacity(0.3 * fade)), lineWidth: 1)
+    ctx.stroke(Path(ellipseIn: boss), with: .color((chrome.goldTrim > 0.2 ? glow : steelLight).opacity(0.85 * fade)), lineWidth: 1)
     ctx.fill(
         Path(ellipseIn: boss.insetBy(dx: 5.5, dy: 5.5)),
-        with: .color(ink.opacity(0.55 * fade))
+        with: .color(steelDark.opacity(fade))
     )
 
     guard impact > 0.01 else { return }
@@ -1046,14 +1060,15 @@ private func drawTapper(
         x: origin.x + KnockerGeometry.strikePoint.x,
         y: origin.y + KnockerGeometry.strikePoint.y
     )
+    let flashColor = chrome.tealMix > 0.35 ? glow : accent
     let ring = (10 + 24 * (1 - impact)) * hitScale
     ctx.stroke(
         Path(ellipseIn: CGRect(x: hit.x - ring, y: hit.y - ring, width: ring * 2, height: ring * 2)),
-        with: .color(accent.opacity(0.6 * Double(impact))),
+        with: .color(flashColor.opacity(0.6 * Double(impact))),
         lineWidth: 1.5 + 0.5 * hitScale
     )
     var sparks = Path()
-    let sparkCount = 4 + Int(((hitScale - 1) / 1.25) * 4) // 4…8
+    let sparkCount = 4 + chrome.extraSparks + Int(((hitScale - 1) / 1.25) * 4) // 4…8 plus level extras
     for i in 0..<sparkCount {
         let a = CGFloat((45 + Double(i) * (360.0 / Double(sparkCount))) * .pi / 180)
         let near = (10 + 8 * (1 - impact)) * hitScale
@@ -1063,7 +1078,7 @@ private func drawTapper(
     }
     ctx.stroke(
         sparks,
-        with: .color(accent.opacity(0.85 * Double(impact))),
+        with: .color(flashColor.opacity(0.85 * Double(impact))),
         style: StrokeStyle(lineWidth: 1.5 + 0.5 * hitScale, lineCap: .round)
     )
     let flash = (4 + 7 * impact) * hitScale
@@ -1235,11 +1250,13 @@ struct BtcBalanceView: View, Equatable {
 
     var body: some View {
         VStack(spacing: 8) {
-            RollingDigitsLabel(
-                quanta: btcQuanta(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: total),
-                fontSize: 42
-            )
-            .shadow(color: Color("BrandAccent").opacity(0.28), radius: 14, y: 4)
+            Text(formatBtcAmount(satsBalance: satsBalance, barProgress: barProgress, unitsPerSat: total))
+                .font(.system(size: 42, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color("BrandInk"))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .contentTransition(.identity)
             Text("BTC")
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .tracking(3)
@@ -1250,150 +1267,61 @@ struct BtcBalanceView: View, Equatable {
     }
 }
 
-/// Odometer-style label: each digit always rolls upward; punctuation stays put.
-struct RollingDigitsLabel: View {
-    let quanta: Int64
-    var fontSize: CGFloat = 42
-
-    @State private var fromQuanta: Int64?
-    @State private var lastChange: Date = .distantPast
-
-    private var digitFont: Font {
-        .system(size: fontSize, weight: .heavy, design: .rounded)
-    }
-
-    private var glyphs: [BtcGlyph] {
-        btcGlyphs(from: fromQuanta ?? quanta, to: quanta)
-    }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(glyphs) { glyph in
-                if let digit = glyph.digit {
-                    RollingDigitSlot(
-                        digit: digit,
-                        steps: glyph.steps,
-                        rollId: quanta,
-                        font: digitFont
-                    )
-                } else if let lit = glyph.literal {
-                    Text(lit)
-                        .font(digitFont)
-                        .foregroundStyle(Color("BrandInk"))
-                        .monospacedDigit()
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .minimumScaleFactor(0.4)
-        .scaledToFit()
-        .lineLimit(1)
-        .onAppear {
-            if fromQuanta == nil { fromQuanta = quanta }
-        }
-        .onChange(of: quanta) { _, newValue in
-            if (fromQuanta ?? 0) <= 0 && newValue >= 100_000 {
-                fromQuanta = newValue
-                lastChange = Date()
-                return
-            }
-            let now = Date()
-            let rapid = now.timeIntervalSince(lastChange) < 0.12
-            lastChange = now
-            // 60 fps auto-fill and stacked Stronger taps jump too many
-            // intermediate glyphs to tick on the main actor.
-            if rapid || abs(newValue - (fromQuanta ?? newValue)) > 400 {
-                fromQuanta = newValue
-                return
-            }
-            Task { @MainActor in
-                fromQuanta = newValue
-            }
-        }
-    }
-}
-
-private struct RollingDigitSlot: View {
-    let digit: Int
-    let steps: Int
-    let rollId: Int64
-    let font: Font
-
-    /// Short upward ticks only. Large Stronger jumps snap so the wheel stays live.
-    @State private var displayed: Int = 0
-    @State private var primed = false
-    @State private var rollTask: Task<Void, Never>?
-
-    var body: some View {
-        Text("\(displayed)")
-            .font(font)
-            .foregroundStyle(Color("BrandInk"))
-            .monospacedDigit()
-            .onAppear {
-                guard !primed else { return }
-                displayed = max(0, min(9, digit))
-                primed = true
-            }
-            .onChange(of: rollId) { _, _ in
-                let target = max(0, min(9, digit))
-                let n = max(0, steps)
-                rollTask?.cancel()
-                if n == 0 || n > 6 {
-                    displayed = target
-                    return
-                }
-                rollTask = Task { @MainActor in
-                    defer {
-                        if Task.isCancelled { displayed = target }
-                    }
-                    for _ in 0..<n {
-                        if Task.isCancelled { return }
-                        displayed = (displayed + 1) % 10
-                        try? await Task.sleep(nanoseconds: 35_000_000)
-                    }
-                    if !Task.isCancelled {
-                        displayed = target
-                    }
-                }
-            }
-            .onDisappear {
-                rollTask?.cancel()
-            }
-    }
-}
-
 private enum WheelHaptics {
     static let light = UIImpactFeedbackGenerator(style: .light)
     static let medium = UIImpactFeedbackGenerator(style: .medium)
 
+    static func arm() {
+        light.prepare()
+        medium.prepare()
+    }
+
     static func impact(leveled: Bool) {
         let gen = leveled ? medium : light
         gen.impactOccurred()
+        gen.prepare()
     }
 }
 
-/// Rate line under the wheel stage: taps/s · power · fill/s — colored by Speed / Power.
+/// Rate lines under the wheel: autotapper fill/s and manual combo × power /tap.
 struct BarRateStatusView: View {
     let autoActive: Bool
     let fillRate: Double
     let tapPower: Double
+    let comboMultiplier: Double
+    var comboColor: Color = Color("BrandAccent")
 
     var body: some View {
         let power = tapPower > 0 ? tapPower : 1
+        let combo = comboMultiplier > 0 ? comboMultiplier : 1
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+            GridRow {
+                rateLabel("Autotapper")
+                autoFormula(power: power)
+            }
+            GridRow {
+                rateLabel("Manual")
+                manualFormula(power: power, combo: combo)
+            }
+        }
+        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        .monospacedDigit()
+    }
+
+    private func rateLabel(_ title: String) -> some View {
+        Text(title)
+            .foregroundStyle(Color("BrandMuted"))
+            .gridColumnAlignment(.leading)
+    }
+
+    @ViewBuilder
+    private func autoFormula(power: Double) -> some View {
         Group {
             if !autoActive || fillRate <= 0 {
-                HStack(spacing: 0) {
-                    Text("Idle").foregroundStyle(Color("BrandMuted"))
-                    if power > 1.000000001 {
-                        Text(" · ").foregroundStyle(Color("BrandMuted"))
-                        Text(String(format: "%.2f power", power))
-                            .foregroundStyle(Color("BrandPower"))
-                    }
-                }
+                Text("Idle").foregroundStyle(Color("BrandMuted"))
             } else {
-                let tapsPerSec = fillRate / power
                 HStack(spacing: 0) {
-                    Text(String(format: "%.2f taps/s", tapsPerSec))
+                    Text(String(format: "%.2f taps/s", fillRate / power))
                         .foregroundStyle(Color("BrandAccent"))
                     Text(" × ").foregroundStyle(Color("BrandMuted"))
                     Text(String(format: "%.2f power", power))
@@ -1404,8 +1332,21 @@ struct BarRateStatusView: View {
                 }
             }
         }
-        .font(.system(size: 12, weight: .semibold, design: .rounded))
-        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+
+    private func manualFormula(power: Double, combo: Double) -> some View {
+        HStack(spacing: 0) {
+            Text("\(ComboEngine.formatFactor(combo)) combo")
+                .foregroundStyle(comboColor)
+            Text(" × ").foregroundStyle(Color("BrandMuted"))
+            Text(String(format: "%.2f power", power))
+                .foregroundStyle(Color("BrandPower"))
+            Text(" = ").foregroundStyle(Color("BrandMuted"))
+            Text(String(format: "%.2f/tap", combo * power))
+                .foregroundStyle(Color("BrandFill"))
+        }
         .lineLimit(1)
         .minimumScaleFactor(0.75)
     }
@@ -1669,32 +1610,85 @@ func remainingSeconds(untilIso: String?, now: Date = Date()) -> Int {
     return max(0, Int(until.timeIntervalSince(now)))
 }
 
-struct AtmosphereBackground: View {
-    var look: ThemeLook = .ember
+struct MinerLevelBar: View {
+    let lifetimeSats: Int
+    var thresholds: [Int] = MinerStage.defaultThresholds
+    var accent: Color = Color("BrandAccent")
 
     var body: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 0.071, green: 0.075, blue: 0.122),
-                Color(red: 0.055, green: 0.059, blue: 0.102),
-                Color(red: 0.039, green: 0.043, blue: 0.071),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-        .overlay {
+        let stage = MinerStage.from(lifetimeSats: lifetimeSats, thresholds: thresholds)
+        let fill = stage.progress(lifetimeSats: lifetimeSats, thresholds: thresholds)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(stage.subtitle)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color("BrandMuted"))
+                Spacer()
+                Text(stage.progressLabel(lifetimeSats: lifetimeSats, thresholds: thresholds))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color("BrandMuted"))
+                    .monospacedDigit()
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.14))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [accent, Color("BrandAccentHot")],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: fill <= 0 ? 0 : max(8, geo.size.width * fill))
+                }
+            }
+            .frame(height: 7)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Level \(stage.level) \(stage.title), \(stage.subtitle)")
+        .accessibilityValue(stage.progressLabel(lifetimeSats: lifetimeSats, thresholds: thresholds))
+    }
+}
+
+struct AtmosphereBackground: View {
+    var look: ThemeLook = .ember
+    @EnvironmentObject private var session: SessionStore
+
+    var body: some View {
+        let stage = MinerStage.from(lifetimeSats: session.progress.lifetimeSats, tunables: session.tunables)
+        ZStack {
+            GeometryReader { geo in
+                Image(stage.imageName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .id(stage)
+                    .transition(.opacity)
+            }
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.40),
+                    Color.black.opacity(0.55),
+                    Color(red: 0.039, green: 0.043, blue: 0.071).opacity(0.82),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
             Circle()
-                .fill(look.glow.opacity(0.22))
+                .fill(look.glow.opacity(0.16))
                 .frame(width: 340, height: 340)
                 .blur(radius: 80)
                 .offset(x: -120, y: -240)
             Circle()
-                .fill(look.fill.opacity(0.14))
+                .fill(look.fill.opacity(0.10))
                 .frame(width: 360, height: 360)
                 .blur(radius: 90)
                 .offset(x: 150, y: 280)
         }
         .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.55), value: stage)
     }
 }

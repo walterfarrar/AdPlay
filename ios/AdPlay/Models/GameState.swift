@@ -219,6 +219,8 @@ struct Tunables: Codable, Equatable {
     var comboIdleGraceSeconds: Double?
     var comboDrainPerSecondActive: Double?
     var comboDrainPerSecondIdle: Double?
+    /// Lifetime sats to unlock miner levels 1–10. Invalid values use shipped defaults.
+    var minerStageThresholds: [Int]?
 }
 
 enum BoostType: String, Codable {

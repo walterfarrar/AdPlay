@@ -1,6 +1,5 @@
 package com.adplay.app.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -17,13 +16,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
+import com.adplay.app.data.Tunables
 
 @Composable
 fun CenteredFitPage(
     modifier: Modifier = Modifier,
+    lifetimeSats: Int = 0,
+    tunables: Tunables? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scroll = rememberScrollState()
@@ -33,10 +34,10 @@ fun CenteredFitPage(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Brush.linearGradient(listOf(BrandBgTop, BrandBgMid, BrandBgBottom)))
             .then(modifier),
         contentAlignment = Alignment.TopCenter,
     ) {
+        StageBackdrop(lifetimeSats, tunables)
         Column(
             Modifier
                 .widthIn(max = 560.dp)

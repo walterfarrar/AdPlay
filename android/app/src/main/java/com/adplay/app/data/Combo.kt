@@ -110,13 +110,47 @@ object ComboEngine {
 
     fun formatMultiplier(m: Double): String {
         if (m <= 1.001) return ""
-        val tenths = Math.round(m * 10.0) / 10.0
-        if (kotlin.math.abs(m - tenths) < 5e-4) return String.format("×%.1f", tenths)
-        val hundredths = Math.round(m * 100.0) / 100.0
-        if (kotlin.math.abs(m - hundredths) < 5e-5) return String.format("×%.2f", hundredths)
-        val thousandths = Math.round(m * 1000.0) / 1000.0
-        if (kotlin.math.abs(m - thousandths) < 5e-6) return String.format("×%.3f", thousandths)
-        return String.format("×%.4f", Math.round(m * 10000.0) / 10000.0)
+        return "×" + formatFactor(m)
+    }
+
+    /** 0 at 1×, 1 at the absolute cap (default 3×). */
+    fun heat(m: Double, absMax: Double = 3.0): Double {
+        val cap = if (absMax > 1.001) absMax else 3.0
+        val t = (m - 1.0) / (cap - 1.0)
+        if (!t.isFinite() || t <= 0.0) return 0.0
+        return if (t >= 1.0) 1.0 else t
+    }
+
+    /** Ring 0 / 1 / 2 for combo heat color. */
+    fun heatRing(heat: Double): Int = when {
+        heat < 0.34 -> 0
+        heat < 0.67 -> 1
+        else -> 2
+    }
+
+    /** 0 below 2×, 1 at 3×. Hub badge shake amount. */
+    fun shake(m: Double): Double {
+        if (m < 2.0) return 0.0
+        val t = m - 2.0
+        return if (t >= 1.0) 1.0 else t
+    }
+
+    /** Inclusive pixel radius: 1 at 2×, 3 at 3×. */
+    fun shakeAmplitude(shake: Double): Int {
+        if (shake <= 0.001) return 0
+        return round(1.0 + 2.0 * shake).toInt()
+    }
+
+    /** Combo factor for rate lines — always numeric, including 1.0. */
+    fun formatFactor(m: Double): String {
+        val v = if (m > 0) m else 1.0
+        val tenths = Math.round(v * 10.0) / 10.0
+        if (kotlin.math.abs(v - tenths) < 5e-4) return String.format("%.1f", tenths)
+        val hundredths = Math.round(v * 100.0) / 100.0
+        if (kotlin.math.abs(v - hundredths) < 5e-5) return String.format("%.2f", hundredths)
+        val thousandths = Math.round(v * 1000.0) / 1000.0
+        if (kotlin.math.abs(v - thousandths) < 5e-6) return String.format("%.3f", thousandths)
+        return String.format("%.4f", Math.round(v * 10000.0) / 10000.0)
     }
 
     fun clampTaps(taps: Double, t: ComboTunables): Double {
@@ -313,18 +347,132 @@ object ComboEngine {
     }
 }
 
-enum class MinerStage(val title: String) {
-    Garage("Spark"),
-    Bench("Satoshi Scout"),
-    Farm("Farm Hand"),
-    Rig("Rig Boss");
+enum class MinerStage(
+    val level: Int,
+    val title: String,
+    val subtitle: String,
+    val thresholdSats: Int,
+) {
+    Level1(1, "Spark", "Garage", 0),
+    Level2(2, "Satoshi Scout", "Workbench", 5),
+    Level3(3, "Farm Hand", "Small farm", 50),
+    Level4(4, "Rig Boss", "Mining farm", 500),
+    Level5(5, "Floor Captain", "Warehouse", 5_000),
+    Level6(6, "Plant Lead", "Industrial hall", 50_000),
+    Level7(7, "Hash Warden", "Data hall", 500_000),
+    Level8(8, "Mega Operator", "Mega farm", 5_000_000),
+    Level9(9, "Campus Baron", "Hash campus", 50_000_000),
+    Level10(10, "Genesis Foundry", "Foundry", 500_000_000);
+
+    val next: MinerStage?
+        get() = entries.getOrNull(ordinal + 1)
+
+        fun progress(lifetimeSats: Int, thresholds: IntArray = DEFAULT_THRESHOLDS): Float {
+        val nxt = next ?: return 1f
+        val t = sanitizeThresholds(thresholds)
+        val span = (nxt.threshold(t) - threshold(t)).toFloat()
+        if (span <= 0f) return 1f
+        return ((lifetimeSats.coerceAtLeast(0) - threshold(t)) / span).coerceIn(0f, 1f)
+    }
+
+    fun progressLabel(lifetimeSats: Int, thresholds: IntArray = DEFAULT_THRESHOLDS): String {
+        val nxt = next ?: return "Max level"
+        val t = sanitizeThresholds(thresholds)
+        return "${lifetimeSats.coerceAtLeast(0)} / ${nxt.threshold(t)} Lifetime Sats"
+    }
+
+    fun threshold(thresholds: IntArray = DEFAULT_THRESHOLDS): Int {
+        val t = sanitizeThresholds(thresholds)
+        return t.getOrNull(ordinal) ?: thresholdSats
+    }
 
     companion object {
-        fun from(lifetimeSats: Int): MinerStage = when {
-            lifetimeSats >= 500 -> Rig
-            lifetimeSats >= 50 -> Farm
-            lifetimeSats >= 1 -> Bench
-            else -> Garage
+        val DEFAULT_THRESHOLDS = intArrayOf(
+            0, 5, 50, 500, 5_000, 50_000, 500_000, 5_000_000, 50_000_000, 500_000_000,
+        )
+
+        fun sanitizeThresholds(raw: IntArray?): IntArray {
+            val defaults = DEFAULT_THRESHOLDS
+            if (raw == null || raw.size != defaults.size) return defaults
+            if (raw[0] < 0) return defaults
+            for (i in 1 until raw.size) {
+                if (raw[i] <= raw[i - 1]) return defaults
+            }
+            return raw
         }
+
+        fun thresholdsFrom(tunables: Tunables?): IntArray {
+            val raw = tunables?.minerStageThresholds ?: return DEFAULT_THRESHOLDS
+            if (raw.size != DEFAULT_THRESHOLDS.size) return DEFAULT_THRESHOLDS
+            return sanitizeThresholds(raw.toIntArray())
+        }
+
+        fun from(lifetimeSats: Int, thresholds: IntArray = DEFAULT_THRESHOLDS): MinerStage {
+            val sats = lifetimeSats.coerceAtLeast(0)
+            val t = sanitizeThresholds(thresholds)
+            return entries.last { sats >= it.threshold(t) }
+        }
+
+        fun from(lifetimeSats: Int, tunables: Tunables?): MinerStage =
+            from(lifetimeSats, thresholdsFrom(tunables))
     }
+
+    val wheelChrome: WheelChrome
+        get() = when (this) {
+            Level1 -> WheelChrome(0.92f, 0.97f, 0.28f, 0.28f, 0.48f, 0.78f, 0.42f, 0.28f, 0.40f, 0.95f, 0.62f, 0f, 0.18f, 0, 0.28f, 0f, 0f, 0f)
+            Level2 -> WheelChrome(0.93f, 0.97f, 0.32f, 0.32f, 0.52f, 0.82f, 0.48f, 0.32f, 0.46f, 0.96f, 0.68f, 0.10f, 0.26f, 0, 0.34f, 0.12f, 0f, 0f)
+            Level3 -> WheelChrome(0.94f, 0.98f, 0.36f, 0.36f, 0.56f, 0.86f, 0.52f, 0.36f, 0.52f, 0.97f, 0.72f, 0.16f, 0.32f, 8, 0.40f, 0.18f, 0f, 0f)
+            Level4 -> WheelChrome(0.94f, 0.98f, 0.40f, 0.38f, 0.60f, 0.88f, 0.56f, 0.40f, 0.56f, 0.97f, 0.76f, 0.22f, 0.38f, 12, 0.46f, 0.24f, 0f, 0.12f)
+            Level5 -> WheelChrome(0.95f, 0.98f, 0.44f, 0.42f, 0.64f, 0.90f, 0.60f, 0.44f, 0.60f, 0.98f, 0.80f, 0.28f, 0.44f, 16, 0.52f, 0.30f, 0f, 0.20f)
+            Level6 -> WheelChrome(0.95f, 0.98f, 0.48f, 0.46f, 0.68f, 0.92f, 0.64f, 0.48f, 0.64f, 0.98f, 0.84f, 0.34f, 0.50f, 16, 0.58f, 0.36f, 0.08f, 0.28f)
+            Level7 -> WheelChrome(0.95f, 0.98f, 0.50f, 0.48f, 0.70f, 0.93f, 0.66f, 0.50f, 0.68f, 0.98f, 0.86f, 0.38f, 0.54f, 18, 0.64f, 0.42f, 0.55f, 0.18f)
+            Level8 -> WheelChrome(0.96f, 0.99f, 0.54f, 0.52f, 0.74f, 0.94f, 0.70f, 0.54f, 0.72f, 0.99f, 0.90f, 0.46f, 0.60f, 20, 0.70f, 0.50f, 0.18f, 0.40f)
+            Level9 -> WheelChrome(0.96f, 0.99f, 0.58f, 0.56f, 0.78f, 0.96f, 0.74f, 0.58f, 0.76f, 0.99f, 0.92f, 0.54f, 0.66f, 22, 0.78f, 0.58f, 0.10f, 0.70f)
+            Level10 -> WheelChrome(0.97f, 1.00f, 0.62f, 0.60f, 0.82f, 0.98f, 0.80f, 0.64f, 0.82f, 1.00f, 0.95f, 0.66f, 0.74f, 24, 0.90f, 0.70f, 0.12f, 0.92f)
+        }
+
+    val tapperChrome: TapperChrome
+        get() = when (this) {
+            Level1 -> TapperChrome(0f, 0f, 0f, 0f, 0f, 0f, 0)
+            Level2 -> TapperChrome(0.12f, 0.14f, 0f, 0f, 0.10f, 0f, 0)
+            Level3 -> TapperChrome(0.20f, 0.20f, 0f, 0f, 0.16f, 0.55f, 1)
+            Level4 -> TapperChrome(0.28f, 0.26f, 0.18f, 0f, 0.22f, 0.65f, 1)
+            Level5 -> TapperChrome(0.36f, 0.34f, 0.28f, 0f, 0.32f, 0.75f, 2)
+            Level6 -> TapperChrome(0.42f, 0.40f, 0.34f, 0.08f, 0.40f, 0.82f, 2)
+            Level7 -> TapperChrome(0.46f, 0.48f, 0.18f, 0.55f, 0.48f, 0.90f, 3)
+            Level8 -> TapperChrome(0.54f, 0.56f, 0.48f, 0.18f, 0.56f, 0.92f, 3)
+            Level9 -> TapperChrome(0.62f, 0.64f, 0.72f, 0.10f, 0.66f, 0.96f, 4)
+            Level10 -> TapperChrome(0.72f, 0.76f, 0.92f, 0.12f, 0.82f, 1f, 5)
+        }
 }
+
+data class WheelChrome(
+    val discCenter: Float,
+    val discEdge: Float,
+    val track: Float,
+    val tickMinor: Float,
+    val tickMajor: Float,
+    val tickCardinal: Float,
+    val hubTop: Float,
+    val hubBottom: Float,
+    val hubStroke: Float,
+    val pointer: Float,
+    val plate: Float,
+    val halo: Float,
+    val bevel: Float,
+    val gearTeeth: Int,
+    val coreGlow: Float,
+    val fillBloom: Float,
+    val tealMix: Float,
+    val goldRim: Float,
+)
+
+data class TapperChrome(
+    val polish: Float,
+    val halo: Float,
+    val goldTrim: Float,
+    val tealMix: Float,
+    val hammerBloom: Float,
+    val lamp: Float,
+    val extraSparks: Int,
+)
